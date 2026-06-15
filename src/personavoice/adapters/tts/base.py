@@ -20,6 +20,7 @@ class TTSAdapter:
     name: str = "base"
     stage: str = "tts"
     supports_cloning: bool = False
+    implemented: bool = False  # real backends set this True (drops the "stub" warning)
 
     def __init__(self, *, model: str | None = None, options: dict[str, Any] | None = None) -> None:
         self.model = model
@@ -38,7 +39,7 @@ class TTSAdapter:
         raise NotImplementedError(f"{self.name} does not support voice cloning")
 
     def check(self) -> CheckResult:
-        warnings = ["stub adapter — inference implemented in a later milestone"]
+        warnings = [] if self.implemented else ["stub adapter — implemented in a later milestone"]
         if not self.supports_cloning:
             warnings.append("no voice cloning (zero-shot) support")
         return CheckResult(

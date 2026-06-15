@@ -30,6 +30,8 @@ mac = [
     "kokoro>=0.7",          # fast Mac TTS for dev iterations (no cloning)
     "soundfile>=0.12",
     "numpy>=1.26",
+    "httpx>=0.27",          # talks to the local Ollama server
+    "sounddevice>=0.4",     # optional mic capture for `personavoice-demo --record`
 ]
 # --- CUDA (RTX 4080) production backend -----------------------------------------------
 cuda = [
@@ -37,6 +39,7 @@ cuda = [
     "faster-whisper>=1.0",
     "soundfile>=0.12",
     "numpy>=1.26",
+    "httpx>=0.27",          # OpenAI-compatible HTTP for the vLLM server (M2)
     # vLLM and CUDA TTS (Orpheus/Chatterbox) are installed in the server image; left out
     # of the wheel deps because they require a CUDA toolchain. See docker-compose.yml.
 ]
@@ -57,6 +60,7 @@ dev = [
 
 [project.scripts]
 personavoice = "personavoice.server.__main__:main"
+personavoice-demo = "personavoice.orchestrator.demo:main"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/personavoice"]

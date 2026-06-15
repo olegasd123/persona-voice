@@ -9,15 +9,24 @@ stt:
     language: en
 
 llm:
-  adapter: ollama
-  model: qwen2.5:7b-instruct
+  # LM Studio's OpenAI-compatible server. `model` must match a model available in LM Studio
+  # (see `curl $LMSTUDIO_BASE_URL/models`). gpt-oss-20b at reasoning_effort=low is snappy for
+  # the dev voice loop; Qwen3 reasoning models work too but spend tokens/latency on thinking.
+  # Alternative: adapter: ollama, model: qwen2.5:7b-instruct, base_url: http://localhost:11434
+  adapter: lmstudio
+  model: openai/gpt-oss-20b
   options:
-    base_url: ${OLLAMA_BASE_URL:-http://localhost:11434}
+    base_url: ${LMSTUDIO_BASE_URL:-http://localhost:1234/v1}
+    extra_body:
+      # Reasoning models only: keep the thinking trace short so spoken replies start fast.
+      reasoning_effort: low
 
 tts:
   # Kokoro = fast dev TTS, no cloning. Swap to f5_mlx for zero-shot voices (M5).
   adapter: kokoro
   model: hexgrad/Kokoro-82M
   options:
-    voice: af_heart
+    voice: af_heart        # default preset; persona clone refs (voices/...) fall back to this
+    lang_code: a           # a=American English, b=British, ... (Kokoro convention)
     sample_rate: 24000
+    speed: 1.0

@@ -11,6 +11,7 @@ from dataclasses import dataclass
 
 from ..models import BackendConfig, StageConfig
 from .llm.base import LLMAdapter
+from .llm.lmstudio import LMStudioLLM
 from .llm.mlx_lm import MLXLMAdapter
 from .llm.ollama import OllamaLLM
 from .llm.vllm import VLLMAdapter
@@ -28,7 +29,7 @@ STT_ADAPTERS: dict[str, type[STTAdapter]] = {
     cls.name: cls for cls in (WhisperMLXSTT, FasterWhisperSTT, ParakeetSTT)
 }
 LLM_ADAPTERS: dict[str, type[LLMAdapter]] = {
-    cls.name: cls for cls in (OllamaLLM, VLLMAdapter, MLXLMAdapter)
+    cls.name: cls for cls in (LMStudioLLM, OllamaLLM, VLLMAdapter, MLXLMAdapter)
 }
 TTS_ADAPTERS: dict[str, type[TTSAdapter]] = {
     cls.name: cls for cls in (KokoroTTS, F5MLXTTS, OrpheusTTS, ChatterboxTTS)

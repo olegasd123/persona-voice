@@ -54,7 +54,7 @@ developable on a **Mac M4 Max** via swappable Mac-native backends.
 | Stage      | RTX 4080 (prod)                    | M4 Max (dev)                          | VRAM/RAM (4080) |
 |------------|------------------------------------|---------------------------------------|-----------------|
 | **STT**    | `faster-whisper` / NVIDIA Parakeet | `mlx-whisper` / `whisper.cpp`         | ~2 GB           |
-| **LLM**    | Qwen2.5-7B / Llama-3.1-8B via vLLM | same model via **Ollama** / `mlx-lm`  | ~5–6 GB         |
+| **LLM**    | Qwen2.5-7B / Llama-3.1-8B via vLLM | **LM Studio** / Ollama / `mlx-lm`     | ~5–6 GB         |
 | **TTS**    | Orpheus / Chatterbox               | `f5-tts-mlx` / Chatterbox-MPS / Kokoro| ~3–4 GB         |
 | **Glue**   | LiveKit Agents                     | LiveKit Agents (identical)            | —               |
 | **Train**  | Unsloth / LLaMA-Factory (QLoRA)    | `mlx-lm` LoRA (light)                 | —               |
@@ -162,12 +162,27 @@ Mark a milestone as `[Done]` when it's completed.
 - [x] **Verify latest model versions + licenses** and pin them. Findings: Qwen2.5-7B, Kokoro = Apache-2.0; Whisper = MIT; Chatterbox = MIT. Caveats: Orpheus-3b weights derive from Llama-3.2 (Llama 3.2 license also applies); F5-TTS weights are CC-BY-NC (non-commercial) — code is MIT. See README "Models & licenses".
 - **Acceptance:** `python -m personavoice.server --check` validates config and loads stub adapters on both Mac and 4080. ✅ Passes on Mac (cuda config validated; run on the 4080 to confirm there). 17 tests green, ruff + mypy clean.
 
-### M1 — Walking skeleton (offline voice loop) *(≈ 1 week)*
+### M1 — Walking skeleton (offline voice loop) *(≈ 1 week)* `[Done]`
 **Goal:** prove the cascade end-to-end, file-based, turn-based, on the Mac.
-- [ ] Implement Mac adapters: `mlx-whisper` (STT), `Ollama` (LLM), `Kokoro` (TTS, no clone yet).
-- [ ] `pipeline.py`: wav in → transcript → LLM reply → wav out (no streaming yet).
-- [ ] CLI demo: speak into a wav, hear a reply.
-- **Acceptance:** a recorded question to a generic assistant returns coherent spoken audio on the M4 Max.
+- [x] Implement Mac adapters: `mlx-whisper` (STT), `LM Studio` (LLM, OpenAI-compatible; `Ollama`
+      also available), `Kokoro` (TTS, no clone yet). Heavy ML libs are lazy-imported so
+      `--check`/tests still run without the `mac` extra.
+- [x] Shared `audio.py` (wav decode/encode/resample) — audio flows between stages as wav bytes.
+- [x] `pipeline.py`: wav in → transcript → LLM reply → wav out (turn-based, with per-stage timings).
+- [x] CLI demo (`personavoice-demo`): speak into a wav (or `--record` from the mic), hear a reply.
+- **Acceptance:** ✅ a recorded question returns coherent spoken audio on the M4 Max. Verified the
+  full STT→LLM→TTS loop: spoken question → Whisper transcript → in-character persona reply (companion
+  & language_teacher) → Kokoro audio played back. Warm steady-state timings: **STT 1.2 s · LLM 0.8 s
+  · TTS 3.8 s · total ~5.8 s** (turn-based; M3 streaming will cut perceived latency). 36 unit tests
+  green; ruff + mypy clean.
+- **Setup notes (M4 Max):**
+  - The `mac` extra (kokoro → spaCy → blis) has **no wheels for Python 3.13/3.14**; use **Python 3.12**.
+    Provisioned via `uv venv --python 3.12 .venv312 && uv pip install -e '.[mac]'`.
+  - LLM: load a model in **LM Studio** and start its server (default config: `openai/gpt-oss-20b`).
+  - First run downloads Whisper + Kokoro + the spaCy English model (one-time; cold start is slow).
+  - *LLM note:* local reasoning models (Qwen3 / gpt-oss) stream a hidden `reasoning_content` trace the
+    adapter never speaks; keep it short via `extra_body: {reasoning_effort: low}` (set in `mac.yaml`)
+    so spoken content starts fast and `max_tokens` isn't spent on thinking.
 
 ### M2 — Backend parity (Mac ↔ CUDA) *(≈ 4–6 days)*
 **Goal:** same pipeline runs on the 4080.
@@ -267,7 +282,7 @@ M5 ─▶ M7 ─▶ M8 ─▶ M9 ─▶ M10  (training + production track)
 
 - **Orchestration:** LiveKit Agents (WebRTC, VAD, turn detection, iOS SDK). Pipecat as fallback.
 - **STT:** faster-whisper / Parakeet (CUDA) · mlx-whisper / whisper.cpp (Mac).
-- **LLM:** Qwen2.5-7B-Instruct or Llama-3.1-8B-Instruct · vLLM (CUDA) · Ollama / mlx-lm (Mac).
+- **LLM:** Qwen2.5-7B-Instruct or Llama-3.1-8B-Instruct · vLLM (CUDA) · LM Studio / Ollama / mlx-lm (Mac).
 - **TTS:** Orpheus / Chatterbox (CUDA) · f5-tts-mlx / Chatterbox-MPS / Kokoro (Mac).
 - **Training:** Unsloth / LLaMA-Factory (QLoRA, CUDA) · mlx-lm LoRA (Mac).
 - **Client:** SwiftUI + LiveKit iOS SDK.

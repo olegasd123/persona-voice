@@ -43,6 +43,7 @@ def test_factory_rejects_unknown_adapter() -> None:
 
 
 async def test_stub_stream_raises_not_implemented() -> None:
-    be = build_backend(_backend_config("mac"))
+    # CUDA adapters are still stubs until M2; their methods must fail loudly.
+    be = build_backend(_backend_config("cuda"))
     with pytest.raises(NotImplementedError):
         await be.stt.transcribe(b"")

@@ -12,8 +12,11 @@ See [IMPLEMENTATION_PLAN.md](IMPLEMENTATION_PLAN.md) for the full design and mil
 
 ## Status
 
-Current milestone: **M0 — Foundations** (repo skeleton, config, adapter interfaces,
-backend factory, model manifest). Adapters are stubs until M1/M2 implement real inference.
+Current milestone: **M1 — Walking skeleton (offline voice loop) ✅ done**. The Mac backend
+runs end-to-end: `whisper_mlx` (STT), `lmstudio` (LLM, OpenAI-compatible; `ollama` also
+available), `kokoro` (TTS), wired through a turn-based `pipeline` and a `personavoice-demo`
+CLI (speak into a wav → hear a reply). Verified on an M4 Max at ~5.8 s/turn warm (STT 1.2 s ·
+LLM 0.8 s · TTS 3.8 s). CUDA adapters remain stubs until M2.
 
 ## Quickstart
 
@@ -40,9 +43,42 @@ pytest
 To install backend model libraries (heavier, platform-specific):
 
 ```bash
-pip install -e '.[mac]'     # M4 Max: mlx-whisper, mlx-lm, kokoro, ...
+pip install -e '.[mac]'     # M4 Max: mlx-whisper, mlx-lm, kokoro, httpx, ...
 pip install -e '.[cuda]'    # RTX 4080: faster-whisper, ...
 ```
+
+## Offline voice loop (M1)
+
+Run a single turn through the cascade on the Mac: a spoken `.wav` question in, a synthesized
+spoken reply out. Requires the `mac` extra and a local LLM server.
+
+> **Python 3.12 for the `mac` extra.** Kokoro pulls spaCy/`blis`, which has no wheels for
+> Python 3.13/3.14 (it fails to compile). Use Python 3.12, e.g. with [uv](https://docs.astral.sh/uv/):
+> ```bash
+> uv venv --python 3.12 .venv312 && source .venv312/bin/activate
+> uv pip install -e '.[mac]'
+> ```
+
+```bash
+# LLM: start LM Studio's local server and load a model (default config expects
+# openai/gpt-oss-20b). Confirm it's up:  curl http://localhost:1234/v1/models
+# (Prefer Ollama? set adapter: ollama in config/backends/mac.yaml, then `ollama serve`.)
+
+# Speak into a prerecorded wav and hear the reply:
+personavoice-demo --wav question.wav --persona companion --play
+
+# ...or record from the mic (needs sounddevice + a mic):
+personavoice-demo --record 5 --persona language_teacher --play
+```
+
+It prints the transcript, the persona's reply, and per-stage timings, and writes the spoken
+reply to `reply.wav` (override with `--out`). Streaming, barge-in, and the live LiveKit
+server arrive in M3.
+
+> **Reasoning models:** local models like Qwen3 / gpt-oss emit a hidden thinking trace
+> (`reasoning_content`) that the adapter never speaks. Keep it short with
+> `extra_body: {reasoning_effort: low}` (already set in `mac.yaml`) so replies start fast and
+> don't exhaust `max_tokens` before producing any spoken content.
 
 ## Layout
 
@@ -65,7 +101,7 @@ tests/
 | Stage | Mac (dev) | CUDA (prod) |
 |-------|-----------|-------------|
 | STT   | `whisper_mlx` | `faster_whisper` / `parakeet` |
-| LLM   | `ollama` / `mlx_lm` | `vllm` |
+| LLM   | `lmstudio` / `ollama` / `mlx_lm` | `vllm` |
 | TTS   | `kokoro` (fast, no clone) / `f5_mlx` (clone) | `orpheus` / `chatterbox` |
 
 Select with `BACKEND=mac|cuda`. Each backend's `config/backends/<backend>.yaml` names the
@@ -79,7 +115,7 @@ supported).
 | Stage | Mac | CUDA | License |
 |-------|-----|------|---------|
 | STT   | `mlx-community/whisper-large-v3-turbo` | `Systran/faster-whisper-large-v3` | MIT |
-| LLM   | `qwen2.5:7b-instruct` (Ollama) | `Qwen/Qwen2.5-7B-Instruct` (vLLM) | Apache-2.0 |
+| LLM   | LM Studio / Ollama (any loaded model) | `Qwen/Qwen2.5-7B-Instruct` (vLLM) | model-dependent |
 | TTS   | `hexgrad/Kokoro-82M` | `canopylabs/orpheus-3b-0.1-ft` | Apache-2.0 (see caveats) |
 
 Licenses verified against each model card (2026-06). Two caveats that affect

@@ -19,6 +19,7 @@ class STTAdapter:
 
     name: str = "base"
     stage: str = "stt"
+    implemented: bool = False  # real backends set this True (drops the "stub" warning)
 
     def __init__(self, *, model: str | None = None, options: dict[str, Any] | None = None) -> None:
         self.model = model
@@ -35,10 +36,11 @@ class STTAdapter:
 
     def check(self) -> CheckResult:
         """Lightweight validation that does NOT load model weights."""
+        warnings = [] if self.implemented else ["stub adapter — implemented in a later milestone"]
         return CheckResult(
             stage=self.stage,
             adapter=self.name,
             ok=True,
             detail=f"loaded (model={self.model!r})",
-            warnings=["stub adapter — inference implemented in a later milestone"],
+            warnings=warnings,
         )
