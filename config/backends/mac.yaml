@@ -1,0 +1,23 @@
+# M4 Max (dev) backend. Adapters are implemented across M1 (whisper_mlx, ollama, kokoro)
+# and M5 (f5_mlx cloning). For M0 they construct as stubs so `server --check` passes.
+backend: mac
+
+stt:
+  adapter: whisper_mlx
+  model: mlx-community/whisper-large-v3-turbo
+  options:
+    language: en
+
+llm:
+  adapter: ollama
+  model: qwen2.5:7b-instruct
+  options:
+    base_url: ${OLLAMA_BASE_URL:-http://localhost:11434}
+
+tts:
+  # Kokoro = fast dev TTS, no cloning. Swap to f5_mlx for zero-shot voices (M5).
+  adapter: kokoro
+  model: hexgrad/Kokoro-82M
+  options:
+    voice: af_heart
+    sample_rate: 24000

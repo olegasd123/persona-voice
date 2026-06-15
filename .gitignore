@@ -1,3 +1,37 @@
 .vscode/*
 
+# macOS
 .DS_Store
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+build/
+dist/
+.venv/
+venv/
+env/
+
+# Tooling caches
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.coverage
+htmlcov/
+
+# Local env / secrets
+.env
+.env.local
+
+# Model + voice artifacts (downloaded, not committed)
+models/
+voices/*.wav
+voices/*.npz
+*.gguf
+*.safetensors
+
+# Logs / scratch
+*.log
+scratch/

@@ -153,14 +153,14 @@ Effort estimates assume **one developer**, part-time. Each milestone is independ
 demoable. Treat M0–M5 as the MVP path; M6+ are productionization and the training stack.
 Mark a milestone as `[Done]` when it's completed.
 
-### M0 — Foundations *(≈ 3–5 days)*
+### M0 — Foundations *(≈ 3–5 days)* `[Done]`
 **Goal:** repo skeleton, config, adapter interfaces, model download, both environments boot.
-- [ ] Init repo, `pyproject.toml`, linting, pre-commit, `.env.example`.
-- [ ] Define `STT/LLM/TTS` adapter base classes + `Persona`/`VoiceRef` data models.
-- [ ] `config/backends/{mac,cuda}.yaml` and a backend factory keyed on `BACKEND`.
-- [ ] `scripts/download_models.py` (Qwen2.5-7B, Whisper, one TTS) for both backends.
-- [ ] **Verify latest model versions + licenses** (Qwen, Whisper/Parakeet, Orpheus/Chatterbox/F5, LiveKit) and pin them.
-- **Acceptance:** `python -m personavoice.server --check` validates config and loads stub adapters on both Mac and 4080.
+- [x] Init repo, `pyproject.toml`, linting (ruff), pre-commit, `.env.example`.
+- [x] Define `STT/LLM/TTS` adapter base classes + `Persona`/`VoiceRef` data models.
+- [x] `config/backends/{mac,cuda}.yaml` and a backend factory keyed on `BACKEND`.
+- [x] `scripts/download_models.py` (Qwen2.5-7B, Whisper, one TTS) for both backends.
+- [x] **Verify latest model versions + licenses** and pin them. Findings: Qwen2.5-7B, Kokoro = Apache-2.0; Whisper = MIT; Chatterbox = MIT. Caveats: Orpheus-3b weights derive from Llama-3.2 (Llama 3.2 license also applies); F5-TTS weights are CC-BY-NC (non-commercial) — code is MIT. See README "Models & licenses".
+- **Acceptance:** `python -m personavoice.server --check` validates config and loads stub adapters on both Mac and 4080. ✅ Passes on Mac (cuda config validated; run on the 4080 to confirm there). 17 tests green, ruff + mypy clean.
 
 ### M1 — Walking skeleton (offline voice loop) *(≈ 1 week)*
 **Goal:** prove the cascade end-to-end, file-based, turn-based, on the Mac.
@@ -282,7 +282,7 @@ already isolates models so they can be exposed as HTTP/gRPC workers — but that
 
 ## 8. Open decisions (revisit as we build)
 
-- Final TTS pick for prod: **Orpheus** (expressive, emotion tags) vs **Chatterbox** (emotion exaggeration control) — decide in M2/M5 after a quality+latency bake-off.
+- Final TTS pick for prod: **Orpheus** (expressive, emotion tags; but weights inherit the Llama-3.2 license) vs **Chatterbox** (emotion exaggeration control; clean MIT) — decide in M2/M5 after a quality+latency bake-off. License leans Chatterbox if redistribution/commercial matters. Mac cloning via F5-TTS is CC-BY-NC (non-commercial) — fine for dev, not for shipping.
 - LLM base: **Qwen2.5-7B** vs **Llama-3.1-8B** — decide in M4 on persona quality.
 - Memory store: lightweight (SQLite + FAISS) vs managed vector DB — decide in M8.
 - Endpointing strategy: pure VAD vs semantic turn detection — tune in M3/M10.

@@ -1,0 +1,27 @@
+# RTX 4080 (prod) backend. Adapters land in M2 (faster_whisper, vllm, orpheus) and
+# M5 (orpheus cloning). For M0 they construct as stubs so `server --check` passes.
+# Target footprint: STT ~2 GB + LLM ~5-6 GB (4-bit) + TTS ~3-4 GB, within 16 GB VRAM.
+backend: cuda
+
+stt:
+  adapter: faster_whisper
+  model: large-v3-turbo
+  options:
+    device: cuda
+    compute_type: float16
+    language: en
+
+llm:
+  adapter: vllm
+  model: Qwen/Qwen2.5-7B-Instruct
+  options:
+    base_url: ${VLLM_BASE_URL:-http://localhost:8000/v1}
+    quantization: awq          # 4-bit to fit alongside STT + TTS
+    max_model_len: 8192
+
+tts:
+  # Orpheus = expressive, emotion tags, zero-shot cloning. Chatterbox is the alternative.
+  adapter: orpheus
+  model: canopylabs/orpheus-3b-0.1-ft
+  options:
+    sample_rate: 24000
