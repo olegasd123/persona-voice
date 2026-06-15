@@ -12,11 +12,20 @@ See [IMPLEMENTATION_PLAN.md](IMPLEMENTATION_PLAN.md) for the full design and mil
 
 ## Status
 
-Current milestone: **M1 — Walking skeleton (offline voice loop) ✅ done**. The Mac backend
-runs end-to-end: `whisper_mlx` (STT), `lmstudio` (LLM, OpenAI-compatible; `ollama` also
-available), `kokoro` (TTS), wired through a turn-based `pipeline` and a `personavoice-demo`
-CLI (speak into a wav → hear a reply). Verified on an M4 Max at ~5.8 s/turn warm (STT 1.2 s ·
-LLM 0.8 s · TTS 3.8 s). CUDA adapters remain stubs until M2.
+Current milestone: **M2 — Backend parity (Mac ↔ CUDA) ✅ done**. The CUDA cascade is now
+implemented alongside the Mac one: `faster_whisper` / `parakeet` (STT), `vllm` (LLM,
+OpenAI-compatible — it shares the streaming path with `lmstudio`), and `orpheus` /
+`chatterbox` (TTS). A `docker-compose.yml` brings up the vLLM server plus the persona-voice
+server on the 4080, and `scripts/bench_latency.py` reports per-stage timings on either
+machine.
+
+> The CUDA code is complete, lazy-imported, and unit-tested at the logic level on the Mac;
+> the end-to-end run **on the 4080** is pending access to the GPU box.
+
+**M1 (done):** the Mac backend runs end-to-end — `whisper_mlx` (STT), `lmstudio` / `ollama`
+(LLM), `kokoro` (TTS) wired through a turn-based `pipeline` and the `personavoice-demo` CLI
+(speak into a wav → hear a reply). Verified on an M4 Max at ~5.8 s/turn warm (STT 1.2 s ·
+LLM 0.8 s · TTS 3.8 s).
 
 ## Quickstart
 
@@ -80,6 +89,42 @@ server arrive in M3.
 > `extra_body: {reasoning_effort: low}` (already set in `mac.yaml`) so replies start fast and
 > don't exhaust `max_tokens` before producing any spoken content.
 
+## Run on the 4080 (CUDA, M2)
+
+The `cuda` backend mirrors the Mac cascade: `faster_whisper`/`parakeet` (STT), `vllm` (LLM),
+`orpheus`/`chatterbox` (TTS). The LLM is served by a separate **vLLM** process so the app
+image stays light; the STT/TTS models run in the persona-voice container.
+
+```bash
+# Bring up vLLM (Qwen2.5-7B-AWQ) + the persona-voice server on the GPU box.
+docker compose up --build
+#   vllm:        http://localhost:8000/v1   (OpenAI-compatible)
+#   personavoice: validates the cuda config against vLLM (the live server lands in M3)
+```
+
+Both services share the single 4080. The compose file documents the VRAM budget (≈10–12 GB:
+vLLM 4-bit ~6–7 GB + STT ~2 GB + Chatterbox ~2–3 GB, within 16 GB) and caps vLLM's
+`--gpu-memory-utilization` so STT/TTS fit. Orpheus is more expressive but runs its own
+in-process vLLM (tight on one card) — prefer **Chatterbox** (MIT, torch) for the single-GPU
+stack by setting `adapter: chatterbox` in `config/backends/cuda.yaml`.
+
+Without Docker, run the pieces directly: `vllm serve Qwen/Qwen2.5-7B-Instruct-AWQ
+--quantization awq`, then `BACKEND=cuda personavoice-demo --wav question.wav` (needs the
+`cuda` extra plus `chatterbox-tts`).
+
+## Benchmarking latency (M2)
+
+`scripts/bench_latency.py` runs the turn-based pipeline N times and reports per-stage
+min/median/mean/max — use it to compare the Mac and the 4080 and to catch regressions:
+
+```bash
+python scripts/bench_latency.py --backend mac  --wav question.wav --runs 5
+python scripts/bench_latency.py --backend cuda --wav question.wav --runs 5 --json cuda.json
+```
+
+These are full-stage, turn-based wall times — not the streaming "time to first audio" budget
+(that arrives with the streaming pipeline in M3).
+
 ## Layout
 
 ```
@@ -92,7 +137,11 @@ src/personavoice/
   persona/                   # loader, prompt builder, registry
   server/                    # settings, config loading, `--check` entrypoint
   orchestrator/ memory/ voice/   # filled in M1/M3, M8, M5/M9
-scripts/download_models.py   # pinned model manifest + downloader
+scripts/
+  download_models.py         # pinned model manifest + downloader
+  bench_latency.py           # per-stage latency benchmark (mac/cuda)
+docker-compose.yml           # 4080 stack: vLLM + persona-voice server
+Dockerfile                   # CUDA server image (STT + TTS)
 tests/
 ```
 

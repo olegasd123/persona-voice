@@ -1,0 +1,18 @@
+# Keep the build context small and reproducible.
+.git
+.github
+.venv
+.venv*
+.mypy_cache
+.ruff_cache
+.pytest_cache
+**/__pycache__
+*.pyc
+models
+reply.wav
+*.wav
+ios
+.env
+.DS_Store
+.vscode
+.idea

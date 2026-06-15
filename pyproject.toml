@@ -40,8 +40,9 @@ cuda = [
     "soundfile>=0.12",
     "numpy>=1.26",
     "httpx>=0.27",          # OpenAI-compatible HTTP for the vLLM server (M2)
-    # vLLM and CUDA TTS (Orpheus/Chatterbox) are installed in the server image; left out
-    # of the wheel deps because they require a CUDA toolchain. See docker-compose.yml.
+    # vLLM (LLM), CUDA TTS (chatterbox-tts / orpheus-speech), and Parakeet STT
+    # (nemo_toolkit[asr]) are installed in the server image, not here: they need a CUDA
+    # toolchain / are heavy. faster-whisper (above) is the default CUDA STT. See Dockerfile.
 ]
 # --- Real-time orchestration (added in M3) --------------------------------------------
 livekit = [

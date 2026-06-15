@@ -9,7 +9,7 @@ from personavoice.adapters.factory import (
     build_backend,
 )
 from personavoice.adapters.protocols import LLMProtocol, STTProtocol, TTSProtocol
-from personavoice.models import BackendConfig, StageConfig
+from personavoice.models import BackendConfig, StageConfig, VoiceRef
 
 
 def _backend_config(backend: str) -> BackendConfig:
@@ -42,8 +42,20 @@ def test_factory_rejects_unknown_adapter() -> None:
         build_backend(cfg)
 
 
-async def test_stub_stream_raises_not_implemented() -> None:
-    # CUDA adapters are still stubs until M2; their methods must fail loudly.
-    be = build_backend(_backend_config("cuda"))
+@pytest.mark.parametrize("backend", ["mac", "cuda"])
+def test_streaming_not_implemented_until_m3(backend: str) -> None:
+    # Turn-based transcribe/synthesize land in M1/M2; live streaming arrives in M3, so the
+    # base streaming methods must still fail loudly on every backend.
+    be = build_backend(_backend_config(backend))
     with pytest.raises(NotImplementedError):
-        await be.stt.transcribe(b"")
+        be.stt.stream(iter(()))  # type: ignore[arg-type]
+    with pytest.raises(NotImplementedError):
+        be.tts.stream_tts(iter(()), VoiceRef(id="x"))  # type: ignore[arg-type]
+
+
+def test_cuda_adapters_are_implemented() -> None:
+    # After M2 the CUDA cascade is real, not stubs: no "stub adapter" warning.
+    be = build_backend(_backend_config("cuda"))
+    for adapter in (be.stt, be.llm, be.tts):
+        assert adapter.implemented is True
+        assert not any("stub adapter" in w for w in adapter.check().warnings)

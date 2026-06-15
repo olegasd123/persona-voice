@@ -7,10 +7,10 @@ from pathlib import Path
 
 import pytest
 
-from personavoice.adapters.llm.lmstudio import (
-    _build_payload,
-    _chat_url,
-    _token_from_sse_line,
+from personavoice.adapters.llm._openai_compat import (
+    build_payload,
+    chat_url,
+    token_from_sse_line,
 )
 from personavoice.models import Msg, Role
 from personavoice.persona import load_persona
@@ -25,14 +25,14 @@ def _sse(obj: dict) -> str:
 
 
 def test_chat_url_appends_endpoint() -> None:
-    assert _chat_url("http://localhost:1234/v1") == "http://localhost:1234/v1/chat/completions"
-    assert _chat_url("http://host/v1/") == "http://host/v1/chat/completions"
+    assert chat_url("http://localhost:1234/v1") == "http://localhost:1234/v1/chat/completions"
+    assert chat_url("http://host/v1/") == "http://host/v1/chat/completions"
 
 
 def test_build_payload_maps_persona_and_merges_extra_body(config_dir: Path) -> None:
     persona = _companion(config_dir)
     messages = [Msg(role=Role.system, content="sys"), Msg(role=Role.user, content="hi")]
-    payload = _build_payload(
+    payload = build_payload(
         "openai/gpt-oss-20b",
         messages,
         persona,
@@ -50,17 +50,17 @@ def test_build_payload_maps_persona_and_merges_extra_body(config_dir: Path) -> N
 
 
 def test_token_from_sse_line_returns_content_only() -> None:
-    assert _token_from_sse_line(_sse({"choices": [{"delta": {"content": "Hi"}}]})) == "Hi"
+    assert token_from_sse_line(_sse({"choices": [{"delta": {"content": "Hi"}}]})) == "Hi"
     # reasoning trace must NOT be spoken
     assert (
-        _token_from_sse_line(_sse({"choices": [{"delta": {"reasoning_content": "think"}}]})) is None
+        token_from_sse_line(_sse({"choices": [{"delta": {"reasoning_content": "think"}}]})) is None
     )
     # role-only / empty / done / non-data lines
-    assert _token_from_sse_line(_sse({"choices": [{"delta": {"role": "assistant"}}]})) is None
-    assert _token_from_sse_line(_sse({"choices": [{"delta": {"content": ""}}]})) is None
-    assert _token_from_sse_line("data: [DONE]") is None
-    assert _token_from_sse_line("") is None
-    assert _token_from_sse_line(": keep-alive comment") is None
+    assert token_from_sse_line(_sse({"choices": [{"delta": {"role": "assistant"}}]})) is None
+    assert token_from_sse_line(_sse({"choices": [{"delta": {"content": ""}}]})) is None
+    assert token_from_sse_line("data: [DONE]") is None
+    assert token_from_sse_line("") is None
+    assert token_from_sse_line(": keep-alive comment") is None
 
 
 async def test_stream_chat_yields_content_skips_reasoning(

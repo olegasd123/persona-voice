@@ -1,9 +1,10 @@
-# RTX 4080 (prod) backend. Adapters land in M2 (faster_whisper, vllm, orpheus) and
-# M5 (orpheus cloning). For M0 they construct as stubs so `server --check` passes.
-# Target footprint: STT ~2 GB + LLM ~5-6 GB (4-bit) + TTS ~3-4 GB, within 16 GB VRAM.
+# RTX 4080 (prod) backend. Adapters implemented in M2 (faster_whisper/parakeet, vllm,
+# orpheus/chatterbox); zero-shot cloning lands in M5.
+# Target footprint: STT ~2 GB + LLM ~6-7 GB (4-bit) + TTS ~2-3 GB, within 16 GB VRAM.
 backend: cuda
 
 stt:
+  # Alternative: adapter: parakeet, model: nvidia/parakeet-tdt-0.6b-v2 (NeMo).
   adapter: faster_whisper
   model: large-v3-turbo
   options:
@@ -12,15 +13,19 @@ stt:
     language: en
 
 llm:
+  # vLLM serves an OpenAI-compatible API. `model` must match the id the server loads (see
+  # docker-compose.yml), incl. the -AWQ suffix for the 4-bit variant. Quantization /
+  # max-model-len are vLLM *server* flags (set in docker-compose.yml), not request params.
   adapter: vllm
-  model: Qwen/Qwen2.5-7B-Instruct
+  model: Qwen/Qwen2.5-7B-Instruct-AWQ
   options:
     base_url: ${VLLM_BASE_URL:-http://localhost:8000/v1}
-    quantization: awq          # 4-bit to fit alongside STT + TTS
-    max_model_len: 8192
 
 tts:
-  # Orpheus = expressive, emotion tags, zero-shot cloning. Chatterbox is the alternative.
+  # Orpheus = expressive, emotion tags, zero-shot cloning, but runs its own in-process vLLM
+  # (tight on a single 4080) and inherits the Llama-3.2 license. Chatterbox (MIT, torch) is
+  # the clean-license, VRAM-friendly alternative — swap `adapter: chatterbox` for the dock-
+  # erized single-GPU stack (see docker-compose.yml).
   adapter: orpheus
   model: canopylabs/orpheus-3b-0.1-ft
   options:

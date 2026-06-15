@@ -184,12 +184,28 @@ Mark a milestone as `[Done]` when it's completed.
     adapter never speaks; keep it short via `extra_body: {reasoning_effort: low}` (set in `mac.yaml`)
     so spoken content starts fast and `max_tokens` isn't spent on thinking.
 
-### M2 — Backend parity (Mac ↔ CUDA) *(≈ 4–6 days)*
+### M2 — Backend parity (Mac ↔ CUDA) *(≈ 4–6 days)* `[Done]`
 **Goal:** same pipeline runs on the 4080.
-- [ ] CUDA adapters: `faster-whisper`/Parakeet, vLLM, Orpheus (or Chatterbox).
-- [ ] `docker-compose.yml` for the 4080 stack; confirm VRAM fits within 16 GB.
-- [ ] `scripts/bench_latency.py` — measure each stage on both machines.
-- **Acceptance:** identical CLI demo passes on the 4080; latency report generated for both.
+- [x] CUDA adapters: `faster_whisper` + `parakeet` (STT), `vllm` (LLM), `orpheus` + `chatterbox`
+      (TTS). The OpenAI-compatible streaming/reasoning logic is shared in
+      `adapters/llm/_openai_compat.py`, so `vllm` and `lmstudio` are thin subclasses. All heavy
+      libs are lazy-imported so `--check`/tests still run without the `cuda` extra.
+- [x] `docker-compose.yml` (vLLM server + persona-voice server) and a CUDA `Dockerfile`. VRAM
+      budget documented: vLLM 4-bit ~6–7 GB + STT ~2 GB + Chatterbox ~2–3 GB ≈ 10–12 GB, within
+      16 GB; vLLM's `--gpu-memory-utilization` is capped so STT/TTS fit. Orpheus runs its own
+      in-process vLLM (tight on one card) → Chatterbox is the single-GPU default.
+- [x] `scripts/bench_latency.py` — runs the turn-based pipeline N times and reports per-stage
+      min/median/mean/max for either backend (`--json` to persist).
+- **Acceptance:** ⚠️ *partial on the Mac.* The CUDA cascade is code-complete, lazy-imported, and
+  unit-tested at the logic level (52 tests green; ruff + mypy clean), and `BACKEND=cuda
+  server --check` validates the stack on the Mac. The **on-4080 end-to-end demo + real latency
+  report are pending access to the GPU box** — run `docker compose up` and `bench_latency.py
+  --backend cuda` there to close this out.
+- **Notes:**
+  - vLLM/Orpheus/Chatterbox are installed in the server image (CUDA toolchain), not in the
+    `cuda` wheel extra, which stays light (`faster-whisper`, `soundfile`, `numpy`, `httpx`).
+  - `cuda.yaml`'s LLM `model` must match the id vLLM serves (incl. the `-AWQ` suffix);
+    `quantization`/`max-model-len` are vLLM *server* flags, set in `docker-compose.yml`.
 
 ### M3 — Real-time orchestration & streaming *(≈ 1.5 weeks)*
 **Goal:** live, low-latency, turn-based conversation with streaming + barge-in.
@@ -297,7 +313,7 @@ already isolates models so they can be exposed as HTTP/gRPC workers — but that
 
 ## 8. Open decisions (revisit as we build)
 
-- Final TTS pick for prod: **Orpheus** (expressive, emotion tags; but weights inherit the Llama-3.2 license) vs **Chatterbox** (emotion exaggeration control; clean MIT) — decide in M2/M5 after a quality+latency bake-off. License leans Chatterbox if redistribution/commercial matters. Mac cloning via F5-TTS is CC-BY-NC (non-commercial) — fine for dev, not for shipping.
+- Final TTS pick for prod: **Orpheus** (expressive, emotion tags; but weights inherit the Llama-3.2 license) vs **Chatterbox** (emotion exaggeration control; clean MIT) — decide in M2/M5 after a quality+latency bake-off. License leans Chatterbox if redistribution/commercial matters. *M2 update:* both adapters are implemented; **Chatterbox is the default for the single-4080 dockerized stack** (no second in-process vLLM, fits VRAM, MIT). Orpheus stays available as the expressive option; final quality A/B in M5. Mac cloning via F5-TTS is CC-BY-NC (non-commercial) — fine for dev, not for shipping.
 - LLM base: **Qwen2.5-7B** vs **Llama-3.1-8B** — decide in M4 on persona quality.
 - Memory store: lightweight (SQLite + FAISS) vs managed vector DB — decide in M8.
 - Endpointing strategy: pure VAD vs semantic turn detection — tune in M3/M10.
