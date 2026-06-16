@@ -134,6 +134,96 @@ async def test_empty_utterance_is_ignored(config_dir: Path) -> None:
     assert ag._pipeline.history == []
 
 
+# --- assistant transcript publishing --------------------------------------------------
+
+
+async def test_speak_publishes_growing_then_final_transcript(config_dir: Path) -> None:
+    pytest.importorskip("numpy")
+    pytest.importorskip("soundfile")
+
+    backend = make_backend(stt_text="hi", llm_reply="Hello there. How are you?")
+    published: list[tuple[str, str, bool]] = []
+
+    async def publish(seg_id: str, text: str, is_final: bool) -> None:
+        published.append((seg_id, text, is_final))
+
+    ag = agent.PersonaAgent(
+        backend, _companion(config_dir), FakeSource(), publish_transcript=publish
+    )
+
+    async def sink(_wav: bytes) -> None:
+        pass
+
+    ag._turn = TurnController(sink)
+    await ag.on_user_utterance(b"\x00\x00" * 1600, 16000)
+    await ag._turn.join()
+    # The fire-and-forget final publish is scheduled in `finally`; let it run.
+    await asyncio.gather(*list(ag._pending))
+
+    texts = [(text, is_final) for _id, text, is_final in published]
+    # One segment grows sentence-by-sentence (interim, not final), then a final marker.
+    assert texts == [
+        ("Hello there.", False),
+        ("Hello there. How are you?", False),
+        ("Hello there. How are you?", True),
+    ]
+    # All updates share one segment id so the client updates a single bubble in place.
+    assert len({seg_id for seg_id, _t, _f in published}) == 1
+
+
+async def test_no_publisher_means_no_transcript_but_audio_flows(config_dir: Path) -> None:
+    pytest.importorskip("numpy")
+    pytest.importorskip("soundfile")
+
+    backend = make_backend(stt_text="hi", llm_reply="A. B.")
+    ag = agent.PersonaAgent(backend, _companion(config_dir), FakeSource())  # no publisher
+
+    spoken: list[bytes] = []
+
+    async def sink(wav: bytes) -> None:
+        spoken.append(wav)
+
+    ag._turn = TurnController(sink)
+    await ag.on_user_utterance(b"\x00\x00" * 1600, 16000)
+    await ag._turn.join()
+
+    assert spoken == [b"RIFF" + b"A.", b"RIFF" + b"B."]
+    assert ag._pending == set()  # nothing scheduled when there's no publisher
+
+
+def test_make_transcript_publisher_is_noop_without_track_sid() -> None:
+    # Returned unconditionally (so the agent always has a callable); a missing sid → no-op.
+    pub = agent.make_transcript_publisher(SimpleNamespace(identity="agent"), None)
+    assert asyncio.run(pub("seg", "hi", True)) is None
+
+
+def test_make_transcript_publisher_builds_and_publishes(monkeypatch: pytest.MonkeyPatch) -> None:
+    sent: list[object] = []
+
+    class FakeLP:
+        identity = "assistant-1"
+
+        async def publish_transcription(self, transcription: object) -> None:
+            sent.append(transcription)
+
+    # Fake the lazy livekit import so we can assert the rtc.Transcription is shaped right.
+    fake_rtc = SimpleNamespace(
+        TranscriptionSegment=lambda **kw: SimpleNamespace(**kw),
+        Transcription=lambda **kw: SimpleNamespace(**kw),
+    )
+    monkeypatch.setattr(agent, "_require_livekit", lambda: (None, fake_rtc, None))
+
+    pub = agent.make_transcript_publisher(FakeLP(), "TR_track123")
+    asyncio.run(pub("seg-1", "Hello there.", True))
+
+    assert len(sent) == 1
+    transcription = sent[0]
+    assert transcription.participant_identity == "assistant-1"
+    assert transcription.track_sid == "TR_track123"
+    seg = transcription.segments[0]
+    assert (seg.id, seg.text, seg.final, seg.language) == ("seg-1", "Hello there.", True, "en")
+
+
 # --- persona selection (switch via API) -----------------------------------------------
 
 

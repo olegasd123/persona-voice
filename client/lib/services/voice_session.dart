@@ -5,7 +5,25 @@ import 'package:livekit_client/livekit_client.dart';
 
 import 'token_client.dart';
 
-enum SessionStatus { idle, connecting, connected, disconnected, error }
+enum SessionStatus { idle, connecting, connected, reconnecting, disconnected, error }
+
+/// How the mic is driven during a call.
+///
+/// [openMic] keeps the mic live so the server's VAD decides turns (hands-free); the user can
+/// still mute. [pushToTalk] keeps the mic muted and only un-mutes while the talk button is
+/// held — useful in noisy rooms or to avoid the server hearing background speech.
+enum MicMode { openMic, pushToTalk }
+
+/// Human-readable status text. Pure (no [VoiceSession] needed) so it's unit-tested directly.
+String sessionStatusLabel(SessionStatus status, {required bool agentSpeaking}) =>
+    switch (status) {
+      SessionStatus.connecting => 'Connecting…',
+      SessionStatus.reconnecting => 'Reconnecting…',
+      SessionStatus.connected => agentSpeaking ? 'Speaking…' : 'Listening',
+      SessionStatus.disconnected => 'Disconnected',
+      SessionStatus.error => 'Error',
+      SessionStatus.idle => 'Idle',
+    };
 
 /// One line of conversation transcript, keyed by the LiveKit segment id so streamed
 /// (interim → final) updates replace in place rather than appending duplicates.
@@ -36,6 +54,8 @@ class VoiceSession extends ChangeNotifier {
   bool micEnabled = false;
   bool agentSpeaking = false;
   String persona = '';
+  MicMode micMode = MicMode.openMic;
+  bool talking = false; // push-to-talk: true while the talk button is held
 
   final List<TranscriptLine> _transcript = [];
   final Map<String, TranscriptLine> _byId = {};
@@ -49,10 +69,19 @@ class VoiceSession extends ChangeNotifier {
     persona = grant.persona;
     try {
       final room = Room(
-        roomOptions: const RoomOptions(adaptiveStream: true, dynacast: true),
+        roomOptions: const RoomOptions(
+          adaptiveStream: true,
+          dynacast: true,
+          // It's a voice call: route audio to the loudspeaker by default (a wired or
+          // Bluetooth headset still overrides this at the OS level).
+          defaultAudioOutputOptions: AudioOutputOptions(speakerOn: true),
+        ),
       );
       final listener = room.createListener()
         ..on<RoomConnectedEvent>((_) => _setStatus(SessionStatus.connected))
+        ..on<RoomReconnectingEvent>((_) => _setStatus(SessionStatus.reconnecting))
+        ..on<RoomResumingEvent>((_) => _setStatus(SessionStatus.reconnecting))
+        ..on<RoomReconnectedEvent>((_) => _setStatus(SessionStatus.connected))
         ..on<RoomDisconnectedEvent>((_) => _setStatus(SessionStatus.disconnected))
         ..on<TranscriptionEvent>(_onTranscription)
         ..on<ActiveSpeakersChangedEvent>(_onActiveSpeakers);
@@ -61,8 +90,9 @@ class VoiceSession extends ChangeNotifier {
       _listener = listener;
 
       await room.connect(grant.url, grant.token);
-      await room.localParticipant?.setMicrophoneEnabled(true);
-      micEnabled = true;
+      // Open-mic starts live; push-to-talk starts muted until the user holds to talk.
+      micEnabled = micMode == MicMode.openMic;
+      await room.localParticipant?.setMicrophoneEnabled(micEnabled);
       // The agent selects its persona from a data message on connect.
       await _sendPersona(grant.persona);
       _setStatus(SessionStatus.connected);
@@ -73,14 +103,33 @@ class VoiceSession extends ChangeNotifier {
     }
   }
 
-  /// Toggle the mic (push-to-talk / mute). Returns the new enabled state.
+  /// Toggle the mic (mute / unmute) in open-mic mode. Returns the new enabled state.
   Future<bool> toggleMic() async {
-    final lp = _room?.localParticipant;
-    if (lp == null) return micEnabled;
-    micEnabled = !micEnabled;
-    await lp.setMicrophoneEnabled(micEnabled);
-    notifyListeners();
+    await _setMicEnabled(!micEnabled);
     return micEnabled;
+  }
+
+  /// Switch between open-mic (VAD) and push-to-talk. Open-mic goes live immediately;
+  /// push-to-talk mutes until the user holds the talk button ([setTalking]).
+  Future<void> setMicMode(MicMode mode) async {
+    if (mode == micMode) return;
+    micMode = mode;
+    talking = false;
+    await _setMicEnabled(mode == MicMode.openMic);
+  }
+
+  /// Push-to-talk: enable the mic while the talk button is held, mute on release.
+  /// A no-op in open-mic mode.
+  Future<void> setTalking(bool held) async {
+    if (micMode != MicMode.pushToTalk || held == talking) return;
+    talking = held;
+    await _setMicEnabled(held);
+  }
+
+  Future<void> _setMicEnabled(bool enabled) async {
+    micEnabled = enabled;
+    notifyListeners();
+    await _room?.localParticipant?.setMicrophoneEnabled(enabled);
   }
 
   /// Switch persona without dropping the call (keeps conversation history server-side).
@@ -146,6 +195,7 @@ class VoiceSession extends ChangeNotifier {
       _room = null;
       micEnabled = false;
       agentSpeaking = false;
+      talking = false;
     }
   }
 

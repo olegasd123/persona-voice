@@ -66,6 +66,34 @@ async def test_explicit_history_does_not_mutate_internal(config_dir: Path) -> No
     assert pipe.history == []
 
 
+async def test_on_sentence_taps_each_sentence_in_order(config_dir: Path) -> None:
+    backend = make_backend(llm_reply="One. Two. Three.")
+    pipe = StreamingPipeline(backend, _companion(config_dir))
+
+    seen: list[str] = []
+
+    async def on_sentence(sentence: str) -> None:
+        seen.append(sentence)
+
+    audio = [c async for c in pipe.stream_response("hi", on_sentence=on_sentence)]
+
+    # The tap sees each sentence, in order, and audio still flows for every one.
+    assert seen == ["One.", "Two.", "Three."]
+    assert len(audio) == 3
+
+
+async def test_on_sentence_callback_error_does_not_break_audio(config_dir: Path) -> None:
+    backend = make_backend(llm_reply="Hello there. How are you?")
+    pipe = StreamingPipeline(backend, _companion(config_dir))
+
+    async def boom(_sentence: str) -> None:
+        raise RuntimeError("transcript publish failed")
+
+    # A throwing callback must not stop synthesis — every sentence is still voiced.
+    audio = [c async for c in pipe.stream_response("hi", on_sentence=boom)]
+    assert audio == [b"RIFF" + s.encode() for s in backend.tts.chunks]  # type: ignore[attr-defined]
+
+
 async def test_builds_persona_system_prompt(config_dir: Path) -> None:
     persona = _companion(config_dir)
     backend = make_backend(llm_reply="hi")

@@ -48,13 +48,8 @@ class _CallScreenState extends State<CallScreen> {
     super.dispose();
   }
 
-  String get _statusLabel => switch (_session.status) {
-        SessionStatus.connecting => 'Connecting…',
-        SessionStatus.connected => _session.agentSpeaking ? 'Speaking…' : 'Listening',
-        SessionStatus.disconnected => 'Disconnected',
-        SessionStatus.error => 'Error',
-        SessionStatus.idle => 'Idle',
-      };
+  String get _statusLabel =>
+      sessionStatusLabel(_session.status, agentSpeaking: _session.agentSpeaking);
 
   @override
   Widget build(BuildContext context) {
@@ -93,9 +88,13 @@ class _CallScreenState extends State<CallScreen> {
                   ),
           ),
           _Controls(
+            micMode: _session.micMode,
             micEnabled: _session.micEnabled,
+            talking: _session.talking,
             connected: _session.isConnected,
             onToggleMic: _session.toggleMic,
+            onSetMode: _session.setMicMode,
+            onTalking: _session.setTalking,
             onHangUp: _hangUp,
           ),
         ],
@@ -158,15 +157,23 @@ class _TranscriptBubble extends StatelessWidget {
 
 class _Controls extends StatelessWidget {
   const _Controls({
+    required this.micMode,
     required this.micEnabled,
+    required this.talking,
     required this.connected,
     required this.onToggleMic,
+    required this.onSetMode,
+    required this.onTalking,
     required this.onHangUp,
   });
 
+  final MicMode micMode;
   final bool micEnabled;
+  final bool talking;
   final bool connected;
   final Future<bool> Function() onToggleMic;
+  final Future<void> Function(MicMode) onSetMode;
+  final Future<void> Function(bool) onTalking;
   final Future<void> Function() onHangUp;
 
   @override
@@ -174,20 +181,100 @@ class _Controls extends StatelessWidget {
     return SafeArea(
       child: Padding(
         padding: const EdgeInsets.all(16),
-        child: Row(
-          mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
           children: [
-            FloatingActionButton(
-              heroTag: 'mic',
-              onPressed: connected ? () => onToggleMic() : null,
-              backgroundColor: micEnabled ? null : Colors.grey,
-              child: Icon(micEnabled ? Icons.mic : Icons.mic_off),
+            SegmentedButton<MicMode>(
+              segments: const [
+                ButtonSegment(
+                  value: MicMode.openMic,
+                  label: Text('Open mic'),
+                  icon: Icon(Icons.hearing),
+                ),
+                ButtonSegment(
+                  value: MicMode.pushToTalk,
+                  label: Text('Push to talk'),
+                  icon: Icon(Icons.touch_app),
+                ),
+              ],
+              selected: {micMode},
+              onSelectionChanged:
+                  connected ? (s) => onSetMode(s.first) : null,
             ),
-            FloatingActionButton(
-              heroTag: 'hangup',
-              backgroundColor: Theme.of(context).colorScheme.error,
-              onPressed: () => onHangUp(),
-              child: const Icon(Icons.call_end),
+            const SizedBox(height: 16),
+            Row(
+              mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+              children: [
+                if (micMode == MicMode.pushToTalk)
+                  _PushToTalkButton(
+                    talking: talking,
+                    enabled: connected,
+                    onTalking: onTalking,
+                  )
+                else
+                  FloatingActionButton(
+                    heroTag: 'mic',
+                    onPressed: connected ? () => onToggleMic() : null,
+                    backgroundColor: micEnabled ? null : Colors.grey,
+                    child: Icon(micEnabled ? Icons.mic : Icons.mic_off),
+                  ),
+                FloatingActionButton(
+                  heroTag: 'hangup',
+                  backgroundColor: Theme.of(context).colorScheme.error,
+                  onPressed: () => onHangUp(),
+                  child: const Icon(Icons.call_end),
+                ),
+              ],
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+/// Hold-to-talk button: un-mutes the mic while pressed, mutes on release.
+class _PushToTalkButton extends StatelessWidget {
+  const _PushToTalkButton({
+    required this.talking,
+    required this.enabled,
+    required this.onTalking,
+  });
+
+  final bool talking;
+  final bool enabled;
+  final Future<void> Function(bool) onTalking;
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    return GestureDetector(
+      onTapDown: enabled ? (_) => onTalking(true) : null,
+      onTapUp: enabled ? (_) => onTalking(false) : null,
+      onTapCancel: enabled ? () => onTalking(false) : null,
+      child: AnimatedContainer(
+        duration: const Duration(milliseconds: 120),
+        padding: const EdgeInsets.symmetric(horizontal: 28, vertical: 16),
+        decoration: BoxDecoration(
+          color: !enabled
+              ? Colors.grey
+              : (talking ? scheme.primary : scheme.primaryContainer),
+          borderRadius: BorderRadius.circular(32),
+        ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(
+              talking ? Icons.mic : Icons.mic_none,
+              color: talking ? scheme.onPrimary : scheme.onPrimaryContainer,
+            ),
+            const SizedBox(width: 8),
+            Text(
+              talking ? 'Release to send' : 'Hold to talk',
+              style: TextStyle(
+                color: talking ? scheme.onPrimary : scheme.onPrimaryContainer,
+                fontWeight: FontWeight.w600,
+              ),
             ),
           ],
         ),

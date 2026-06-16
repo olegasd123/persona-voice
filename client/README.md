@@ -48,6 +48,10 @@ flutter run                # pick an attached device / simulator
 In the app: set the **token server URL** (use the machine's LAN IP from a real phone, not
 `localhost`), tap **Load personas**, pick one, then **Connect & talk**.
 
+In a call you can switch between **Open mic** (the server's VAD decides turns; tap the mic to
+mute) and **Push to talk** (hold the button to speak, release to send). The assistant's words
+stream into the transcript as it speaks, and the status line shows reconnects.
+
 ## Layout
 
 ```
@@ -66,14 +70,20 @@ lib/
 
 ## Status & remaining work
 
-- ✅ Connect via the token server, publish mic, persona picker + mid-call switch, mute,
-  transcript view (renders LiveKit `TranscriptionEvent`s), hang up.
+- ✅ Connect via the token server, publish mic, persona picker + mid-call switch, hang up.
+- ✅ **Mic modes**: open-mic (server VAD) and push-to-talk (hold to talk). Mute in open-mic.
+- ✅ **Live transcript both ways**: renders LiveKit `TranscriptionEvent`s; the agent now
+  publishes its spoken reply as a growing transcript (`orchestrator/agent.py`
+  `make_transcript_publisher`), so the assistant's words appear, not just the user's.
+- ✅ **Audio routing & reconnection**: audio defaults to the loudspeaker
+  (`AudioOutputOptions(speakerOn: true)`); the status line surfaces LiveKit reconnect/resume.
 - ✅ Mic permission (iOS `NSMicrophoneUsageDescription`, Android `RECORD_AUDIO`), background
   audio modes, cleartext for local dev, `minSdk 23` / iOS 13 for `flutter_webrtc`.
-- `flutter analyze` clean; `flutter test` green (token client + models, via a mock HTTP
-  client). The **live device run** needs a running LiveKit server + the agent, the analog of
-  the server's other "live LiveKit" steps.
-- Remaining (the deep part of M6): CallKit (iOS) / ConnectionService (Android), audio-session
-  interruption + route/Bluetooth handling, reconnection, and surfacing the assistant
-  transcript (the custom agent logs transcripts today; publishing them over LiveKit lights up
-  the transcript view fully).
+- `flutter analyze` clean; `flutter test` green (14 tests: token client, models, status-label
+  + mic-mode logic via a mock HTTP client and a room-less `VoiceSession`). The **live device
+  run** needs a running LiveKit server + the agent, the analog of the server's other "live
+  LiveKit" steps.
+- Remaining (the deep, device-only part of M6): native **CallKit** (iOS) / **Connection
+  service** (Android) telephony integration and audio-session **interruption** (incoming call)
+  + route/**Bluetooth** change handling beyond what the LiveKit/WebRTC stack does by default.
+  These need a thin platform-channel layer and physical devices to verify.

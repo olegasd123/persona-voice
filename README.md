@@ -191,9 +191,14 @@ LIVEKIT_URL=ws://localhost:7880 LIVEKIT_API_KEY=devkey \
 (`ws://192.168.x.y:7880`) and open UDP 7882. Use TLS (`wss://`) + a real key/secret in prod.
 
 **Flutter client.** `client/` is the cross-platform (iOS + Android) app: it fetches the
-persona list, requests a token, connects, publishes the mic, shows a transcript, and switches
-persona mid-call. `flutter analyze` is clean and `flutter test` is green; the live on-device
-run rides the same open LiveKit-server step. See [`client/README.md`](client/README.md).
+persona list, requests a token, connects, publishes the mic, shows a live transcript, and
+switches persona mid-call. The mic runs **open-mic (server VAD)** or **push-to-talk** (hold to
+talk); audio defaults to the loudspeaker; connection state surfaces LiveKit reconnects
+("Reconnecting…"). The agent **publishes its spoken reply as a transcript** (one segment that
+grows sentence-by-sentence, in step with the audio), so the assistant's words appear in the
+client's transcript view. `flutter analyze` is clean and `flutter test` is green (14 tests);
+the live on-device run rides the same open LiveKit-server step. See
+[`client/README.md`](client/README.md).
 
 ## Personas & voices (M4)
 

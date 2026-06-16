@@ -302,18 +302,27 @@ Mark a milestone as `[Done]` when it's completed.
 - [x] Persona picker, connection settings (token-server URL / api token / identity, persisted),
       basic transcript view (renders LiveKit `TranscriptionEvent`s). Mid-call persona switch
       rides the M4 data-message path; selection on connect sends `{"persona": <id>}`.
-- [ ] Per-platform audio plumbing behind the SDK: audio session + interruption handling,
-      background audio, route/Bluetooth changes; CallKit (iOS) / ConnectionService (Android);
-      reconnection. (Done so far: mic permissions, iOS background-audio modes, `minSdk 23` /
-      iOS 13 for `flutter_webrtc`.) A thin platform-channel layer covers the remaining edge cases.
-- **Acceptance:** ⚠️ *partial.* The token server is verified (190 server tests green; ruff +
-      mypy clean; live-smoked: `/healthz`, `/personas`, `POST /token` mint a valid JWT). The
-      Flutter client is **code-complete and statically verified** — `flutter analyze` clean,
-      `flutter test` green (token client + models via a mock HTTP client). **Pending:** the full
-      spoken conversation from a real **iPhone + Android device** to the server — the on-device
-      run rides the same open LiveKit-server step as M3/M4/M5, plus the audio-session/telephony
-      plumbing above. Push-to-talk + VAD modes and assistant-transcript publishing are the next
-      client increments.
+- [x] **Mic modes + assistant transcript + audio routing.** Client: open-mic (server VAD) /
+      push-to-talk (hold to talk) toggle, loudspeaker by default
+      (`AudioOutputOptions(speakerOn: true)`), and reconnect/resume surfaced in the status line
+      (`RoomReconnecting/Resuming/Reconnected` → "Reconnecting…"). Server: the agent now
+      **publishes its spoken reply as a live transcript** — `StreamingPipeline.stream_response`
+      gained an `on_sentence` tap, and `agent.make_transcript_publisher` pushes one growing
+      `rtc.Transcription` segment in step with the audio (best-effort; flips to final on
+      completion *and* on barge-in), so the assistant's words now appear in the client view.
+- [ ] Native telephony / deep audio-session plumbing: CallKit (iOS) / ConnectionService
+      (Android), interruption (incoming call) + route/Bluetooth-change handling beyond the
+      LiveKit/WebRTC defaults. (Done: mic permissions, iOS background-audio modes, `minSdk 23` /
+      iOS 13, speakerphone routing, reconnection state.) This needs a thin platform-channel
+      layer **and physical devices** to verify — deferred with the on-device run below.
+- **Acceptance:** ⚠️ *partial.* Token server verified (live-smoked: `/healthz`, `/personas`,
+      `POST /token` mint a valid JWT). Server now **188 tests green** (+ the streaming
+      `on_sentence` tap and the transcript-publisher); ruff + mypy clean. Flutter client
+      **statically verified** — `flutter analyze` clean, `flutter test` green (**14 tests**:
+      token client + models, the pure `sessionStatusLabel`, and mic-mode/PTT transitions on a
+      room-less `VoiceSession`). **Pending (device-only):** the full spoken conversation from a
+      real **iPhone + Android device** to the server — rides the same open LiveKit-server step
+      as M3/M4/M5 — plus the native CallKit/ConnectionService + interruption/route plumbing above.
 
 ### M7 — Persona fine-tuning (LoRA) *(≈ 1.5 weeks)*
 **Goal:** train per-persona brains beyond prompting.

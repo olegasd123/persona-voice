@@ -20,11 +20,14 @@ README "Live streaming server (M3)"), the analog of M2's on-4080 step.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 import logging
 import os
 import re
 import sys
+import uuid
+from collections.abc import Callable, Coroutine
 from typing import Any
 
 from ..adapters.factory import Backend, build_backend
@@ -49,6 +52,11 @@ _FRAME_MS = 20  # frame size pushed to the AudioSource (WebRTC-typical)
 # A bare persona id is an identifier (matches our persona file stems); anything else
 # (JSON arrays, stray punctuation) is rejected so it can't be mistaken for an id.
 _PERSONA_ID_RE = re.compile(r"[A-Za-z0-9_-]+")
+
+# Publishes one assistant-transcript update: (segment_id, full_text, is_final). Injected into
+# `PersonaAgent` so the LiveKit-specific construction (`make_transcript_publisher`) stays out
+# of the testable turn logic; `None` (no transport, e.g. unit tests) skips publishing.
+TranscriptPublisher = Callable[[str, str, bool], Coroutine[Any, Any, None]]
 
 
 def _require_livekit() -> tuple[Any, Any, Any]:
@@ -87,6 +95,8 @@ class PersonaAgent:
         persona: Persona,
         source: Any,
         voices: VoiceRegistry | None = None,
+        *,
+        publish_transcript: TranscriptPublisher | None = None,
     ) -> None:
         self._backend = backend
         self._persona = persona
@@ -94,6 +104,11 @@ class PersonaAgent:
         self._pipeline = StreamingPipeline(backend, persona, voices)
         self._turn = TurnController(self._capture_wav)
         self._frame_samples = max(1, _OUT_SAMPLE_RATE * _FRAME_MS // 1000)
+        # Publishes the assistant's spoken words back as a live transcript (the client renders
+        # LiveKit `TranscriptionEvent`s). `None` (no transport, e.g. unit tests) skips it.
+        self._publish_transcript = publish_transcript
+        # Strong refs to in-flight best-effort "final transcript" publishes (see `_speak`).
+        self._pending: set[asyncio.Task[None]] = set()
 
     @property
     def persona(self) -> Persona:
@@ -146,11 +161,46 @@ class PersonaAgent:
         if not text:
             return
         logger.info("user: %s", text)
-        self._turn.begin(self._pipeline.stream_response(text))
+        self._turn.begin(self._speak(text))
+
+    async def _speak(self, user_text: str) -> Any:
+        """Stream the reply audio while publishing the assistant transcript in step with it.
+
+        Each chunked sentence grows a single transcription segment (keyed by `seg_id`) so the
+        client updates one bubble in place rather than appending fragments. The final marker
+        is published fire-and-forget from the `finally` so a barge-in cancellation — which
+        tears this generator down mid-flight — still flips the (partial) line to final.
+        """
+        seg_id = uuid.uuid4().hex
+        parts: list[str] = []
+        publish = self._publish_transcript
+
+        async def _on_sentence(sentence: str) -> None:
+            if publish is None:
+                return
+            cleaned = sentence.strip()
+            if cleaned:
+                parts.append(cleaned)
+                await publish(seg_id, " ".join(parts), False)
+
+        try:
+            async for audio in self._pipeline.stream_response(user_text, on_sentence=_on_sentence):
+                yield audio
+        finally:
+            if publish is not None and parts:
+                # Fire-and-forget: on barge-in this generator is being cancelled, so awaiting
+                # here would just re-raise — schedule the final marker as its own task.
+                task = asyncio.create_task(publish(seg_id, " ".join(parts), True))
+                self._pending.add(task)
+                task.add_done_callback(self._pending.discard)
 
     async def aclose(self) -> None:
         self._turn.interrupt()
         await self._turn.join()
+        for task in list(self._pending):
+            task.cancel()
+            with contextlib.suppress(asyncio.CancelledError, Exception):
+                await task
 
 
 async def _consume_track(agent: PersonaAgent, track: Any, silero: Any) -> None:
@@ -178,6 +228,45 @@ async def _consume_track(agent: PersonaAgent, track: Any, silero: Any) -> None:
     finally:
         pump.cancel()
         await vad_stream.aclose()
+
+
+def make_transcript_publisher(local_participant: Any, track_sid: str | None) -> TranscriptPublisher:
+    """Build the `TranscriptPublisher` that pushes assistant transcripts over WebRTC.
+
+    Lives here (not in `PersonaAgent`) so the LiveKit-specific `rtc.Transcription` construction
+    stays out of the testable turn logic. Each call publishes one segment (growing `text`,
+    flipped to `final` at the end); failures are swallowed so a transcript hiccup never breaks
+    the turn. If the track sid is unknown, returns a no-op.
+    """
+
+    async def _noop(_seg_id: str, _text: str, _is_final: bool) -> None:
+        return None
+
+    if local_participant is None or not track_sid:
+        return _noop
+
+    async def _publish(seg_id: str, text: str, is_final: bool) -> None:
+        _, rtc, _ = _require_livekit()
+        try:
+            segment = rtc.TranscriptionSegment(
+                id=seg_id,
+                text=text,
+                start_time=0,
+                end_time=0,
+                final=is_final,
+                language="en",
+            )
+            await local_participant.publish_transcription(
+                rtc.Transcription(
+                    participant_identity=local_participant.identity,
+                    track_sid=track_sid,
+                    segments=[segment],
+                )
+            )
+        except Exception:  # transcript publishing must never break the turn
+            logger.debug("failed to publish assistant transcript", exc_info=True)
+
+    return _publish
 
 
 def _data_text(data: Any) -> str | None:
@@ -264,11 +353,14 @@ async def entrypoint(ctx: Any, *, persona_id: str | None = None) -> None:
 
     source = rtc.AudioSource(_OUT_SAMPLE_RATE, 1)
     track = rtc.LocalAudioTrack.create_audio_track("assistant-voice", source)
-    await ctx.room.local_participant.publish_track(
+    publication = await ctx.room.local_participant.publish_track(
         track, rtc.TrackPublishOptions(source=rtc.TrackSource.SOURCE_MICROPHONE)
     )
 
-    agent = PersonaAgent(backend, persona, source, voices)
+    publisher = make_transcript_publisher(
+        ctx.room.local_participant, getattr(publication, "sid", None)
+    )
+    agent = PersonaAgent(backend, persona, source, voices, publish_transcript=publisher)
     consumers: set[asyncio.Task[None]] = set()  # keep strong refs so tasks aren't GC'd
 
     @ctx.room.on("track_subscribed")

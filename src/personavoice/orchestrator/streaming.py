@@ -15,8 +15,9 @@ test fakes. STT-in is handled upstream (by LiveKit VAD in `agent.py`, or by a on
 
 from __future__ import annotations
 
+import contextlib
 import time
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Awaitable, Callable
 from dataclasses import dataclass
 
 from ..adapters.factory import Backend
@@ -59,11 +60,18 @@ class StreamingPipeline:
         *,
         history: list[Msg] | None = None,
         metrics: StreamMetrics | None = None,
+        on_sentence: Callable[[str], Awaitable[None]] | None = None,
     ) -> AsyncIterator[bytes]:
         """Yield WAV audio chunks for the persona's reply to `user_text`.
 
         Records latency landmarks into `metrics` (if given) and appends the user turn and
         full reply to `self.history` when using the internal history.
+
+        `on_sentence`, if given, is awaited with each chunked sentence as it's pulled into
+        TTS (i.e. just before that sentence is voiced). The live agent uses this to publish
+        a growing assistant transcript over WebRTC in step with the spoken audio; it's a
+        no-op for the offline demo/tests. Exceptions from the callback are swallowed so a
+        transcript-publish hiccup never stops the audio.
         """
         use_internal = history is None
         history = self.history if use_internal else history
@@ -80,7 +88,15 @@ class StreamingPipeline:
                 collected.append(tok)
                 yield tok
 
-        sentences = stream_sentences(_tokens())
+        async def _tap(it: AsyncIterator[str]) -> AsyncIterator[str]:
+            async for sentence in it:
+                if on_sentence is not None:
+                    # A transcript-publish hiccup must not mute the audio.
+                    with contextlib.suppress(Exception):
+                        await on_sentence(sentence)
+                yield sentence
+
+        sentences = _tap(stream_sentences(_tokens()))
         try:
             async for audio in self.backend.tts.stream_tts(sentences, voice):
                 if metrics is not None and metrics.first_audio is None:
