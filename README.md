@@ -5,8 +5,8 @@ A real-time, open-source **speech-to-speech persona system** built as a modular 
 practice, an English conversation teacher, or a casual companion.
 
 It runs as a server on an **RTX 4080 (16 GB)** in production and is fully developable on a
-**Mac M4 Max** via swappable Mac-native backends. The iPhone client is thin — it only
-captures and plays audio.
+**Mac M4 Max** via swappable Mac-native backends. The client is thin — it only captures and
+plays audio; a single **Flutter** app (one codebase) will target both iOS and Android (M6).
 
 See [IMPLEMENTATION_PLAN.md](IMPLEMENTATION_PLAN.md) for the full design and milestones.
 
@@ -154,7 +154,7 @@ The agent (`orchestrator/agent.py`) uses Silero VAD to endpoint each utterance, 
 it, and streams the persona's reply onto the published audio track; when VAD detects the
 user starting to speak, `TurnController` cancels the in-flight LLM+TTS and flushes the queue
 (**barge-in**). Connect any LiveKit client (the [Agents Playground](https://agents-playground.livekit.io/)
-or the iOS app in M6) to converse. This live run is the open M3 acceptance step.
+or the Flutter app in M6) to converse. This live run is the open M3 acceptance step.
 
 ## Personas & voices (M4)
 

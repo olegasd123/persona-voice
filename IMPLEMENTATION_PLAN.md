@@ -7,7 +7,7 @@ A real-time, open-source **speech-to-speech persona system** built as a **modula
 - **Language teacher** — conversational practice (English first)
 - **Companion (BF/GF)** — casual / romantic conversation
 
-It runs as a **server on an RTX 4080 (16 GB)** with a **thin iPhone client**, and is fully
+It runs as a **server on an RTX 4080 (16 GB)** with a **thin cross-platform client (iOS + Android)**, and is fully
 developable on a **Mac M4 Max** via swappable Mac-native backends.
 
 ---
@@ -18,10 +18,10 @@ developable on a **Mac M4 Max** via swappable Mac-native backends.
    fine-tuning, and a clear training path — none of which open end-to-end S2S models do well.
 2. **Backend abstraction first.** Every stage (STT / LLM / TTS) sits behind an interface with
    a `BACKEND=mac|cuda` switch. Same repo runs on the M4 Max (MLX / llama.cpp / whisper.cpp)
-   and the 4080 (vLLM / CUDA). Persona logic, orchestration, and the iPhone client never change.
+   and the 4080 (vLLM / CUDA). Persona logic, orchestration, and the client never change.
 3. **Stream everything.** Stream STT while the user talks; pipe LLM tokens into TTS
    sentence-by-sentence. This is what keeps perceived latency low.
-4. **Thin client, fat server.** iPhone only captures/plays audio over WebRTC. All models run
+4. **Thin client, fat server.** The client only captures/plays audio over WebRTC. All models run
    server-side (4080 in prod, Mac in dev).
 5. **Personas are config + adapters.** A persona = system prompt + (optional) LoRA adapter +
    voice + behavior knobs, defined in YAML and hot-swappable.
@@ -32,7 +32,7 @@ developable on a **Mac M4 Max** via swappable Mac-native backends.
 
 ```
 ┌─────────────┐   WebRTC (Opus)   ┌──────────────────────────────────────────────┐
-│  iPhone app │  ───────────────▶ │            Server (4080 / M4 Max)            │
+│ Flutter app │  ───────────────▶ │            Server (4080 / M4 Max)            │
 │  mic + spkr │  ◀─────────────── │                                              │
 └─────────────┘   audio stream    │  LiveKit Agent (transport, VAD, turn-taking) │
                                    │      │                                       │
@@ -103,7 +103,7 @@ persona-voice/
 ├── training/
 │   ├── persona_lora/{datasets/,configs/,train.py,merge.py}
 │   └── voice/{clone_zeroshot.py,finetune.py}
-├── ios/PersonaVoice/              # SwiftUI + LiveKit iOS SDK
+├── client/                         # Flutter app (iOS + Android) — LiveKit Flutter SDK
 ├── scripts/{dev_server.sh,bench_latency.py,download_models.py}
 └── tests/
 ```
@@ -288,12 +288,17 @@ Mark a milestone as `[Done]` when it's completed.
       rides on the same open M3 LiveKit-server step.
 - **→ MVP complete: a working, persona-driven, voice-cloning S2S server.**
 
-### M6 — iPhone client *(≈ 1.5–2 weeks)*
-**Goal:** native app that talks to the server.
-- [ ] SwiftUI app + **LiveKit iOS SDK** (mic capture, audio playback, push-to-talk + VAD modes).
-- [ ] Persona picker, connection settings (server URL/token), basic transcript view.
-- [ ] Background-audio/interruption handling, reconnection.
-- **Acceptance:** full spoken conversation from the iPhone to the 4080 server over the network.
+### M6 — Cross-platform client (iOS + Android) *(≈ 2–3 weeks)*
+**Goal:** one Flutter app, from a single codebase, that talks to the server on both iOS and Android.
+- [ ] Flutter app + **LiveKit Flutter SDK** (`livekit_client`): mic capture, audio playback,
+      push-to-talk + VAD modes — one shared UI for both platforms.
+- [ ] Persona picker, connection settings (server URL/token), basic transcript view. Persona
+      selection rides the M4 room-metadata / mid-call data-message path.
+- [ ] Per-platform audio plumbing behind the SDK: audio session + interruption handling,
+      background audio, route/Bluetooth changes; CallKit (iOS) / ConnectionService (Android);
+      mic permissions; reconnection. A thin platform-channel layer covers the edge cases.
+- **Acceptance:** full spoken conversation from **both an iPhone and an Android device** to the
+  4080 server over the network, from the same codebase.
 
 ### M7 — Persona fine-tuning (LoRA) *(≈ 1.5 weeks)*
 **Goal:** train per-persona brains beyond prompting.
@@ -329,11 +334,11 @@ Mark a milestone as `[Done]` when it's completed.
 
 ```
 M0 ─▶ M1 ─▶ M2 ─▶ M3 ─▶ M4 ─▶ M5  ══▶  MVP
-                              └─▶ M6 (iPhone, can start after M3)
+                              └─▶ M6 (client, can start after M3)
 M5 ─▶ M7 ─▶ M8 ─▶ M9 ─▶ M10  (training + production track)
 ```
 
-- **M6 (iPhone)** can begin in parallel once **M3** exposes a stable LiveKit endpoint.
+- **M6 (client)** can begin in parallel once **M3** exposes a stable LiveKit endpoint.
 - **M7–M9 (training)** require the 4080 and only need the MVP (through M5) as a baseline.
 - Recommended first deliverable to *use*: **M0→M5 + M6** = a usable companion/interview app.
 
@@ -355,17 +360,17 @@ M5 ─▶ M7 ─▶ M8 ─▶ M9 ─▶ M10  (training + production track)
 
 ## 7. Tech stack summary
 
-- **Orchestration:** LiveKit Agents (WebRTC, VAD, turn detection, iOS SDK). Pipecat as fallback.
+- **Orchestration:** LiveKit Agents (WebRTC, VAD, turn detection, Flutter + native client SDKs). Pipecat as fallback.
 - **STT:** faster-whisper / Parakeet (CUDA) · mlx-whisper / whisper.cpp (Mac).
 - **LLM:** Qwen2.5-7B-Instruct or Llama-3.1-8B-Instruct · vLLM (CUDA) · LM Studio / Ollama / mlx-lm (Mac).
 - **TTS:** Orpheus / Chatterbox (CUDA) · f5-tts-mlx / Chatterbox-MPS / Kokoro (Mac).
 - **Training:** Unsloth / LLaMA-Factory (QLoRA, CUDA) · mlx-lm LoRA (Mac).
-- **Client:** SwiftUI + LiveKit iOS SDK.
+- **Client:** Flutter (Dart) + LiveKit Flutter SDK — one codebase for iOS + Android.
 - **Infra:** Docker Compose (server), Python 3.11+, uv/poetry.
 
 **Language decision:** Python throughout for server + ML + training (single language, all reference
 models work out of the box, fine-tuning is native, LiveKit Agents Python SDK ties it together).
-The iOS client is Swift/SwiftUI. If a polyglot orchestrator is ever wanted, the adapter layer
+The client is a single Flutter (Dart) codebase shared across iOS and Android. If a polyglot orchestrator is ever wanted, the adapter layer
 already isolates models so they can be exposed as HTTP/gRPC workers — but that's not the plan.
 
 ---
@@ -376,4 +381,12 @@ already isolates models so they can be exposed as HTTP/gRPC workers — but that
 - LLM base: **Qwen2.5-7B** vs **Llama-3.1-8B** — decide in M4 on persona quality.
 - Memory store: lightweight (SQLite + FAISS) vs managed vector DB — decide in M8.
 - Endpointing strategy: pure VAD vs semantic turn detection — tune in M3/M10.
+- **Client framework: Flutter (decided).** One Flutter/Dart codebase ships the thin client to
+  both iOS and Android via the official LiveKit Flutter SDK (`livekit_client`). Chosen over
+  native ×2 (the UI surface is tiny — connect, persona picker, talk button, transcript, so
+  two codebases aren't worth it) and over React Native / web-PWA (Flutter's media/audio
+  support and LiveKit SDK fit a real-time voice app best). This is purely client-side — the
+  server speaks WebRTC/LiveKit, so any LiveKit client connects unchanged. Remaining
+  platform-specific work is the audio/telephony plumbing (audio session, background audio,
+  CallKit/ConnectionService), which the LiveKit SDK wraps over the native WebRTC stacks.
 ```
