@@ -22,7 +22,7 @@ from ..audio import read_wav_file, write_wav_file
 from ..models import Persona
 from ..persona.loader import load_persona
 from ..persona.registry import PersonaRegistry
-from ..server.config import ConfigError, Settings, load_backend_config
+from ..server.config import ConfigError, Settings, load_backend_config, load_voice_registry
 from .pipeline import Pipeline, TurnResult
 
 
@@ -76,7 +76,8 @@ def _print_result(result: TurnResult, persona: Persona) -> None:
 
 async def _run(settings: Settings, persona: Persona, audio_in: bytes) -> TurnResult:
     backend = build_backend(load_backend_config(settings))
-    pipeline = Pipeline(backend, persona)
+    voices = load_voice_registry(settings)
+    pipeline = Pipeline(backend, persona, voices)
     return await pipeline.run_turn(audio_in)
 
 

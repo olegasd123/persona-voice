@@ -22,6 +22,7 @@ from dataclasses import dataclass
 from ..adapters.factory import Backend
 from ..models import Msg, Persona, Role
 from ..persona.prompt import build_messages
+from ..voice.registry import VoiceRegistry
 from .chunker import stream_sentences
 from .pipeline import voice_ref_for
 
@@ -44,9 +45,12 @@ class StreamingPipeline:
     (see `TurnController`) tears down the in-flight LLM and TTS streams for barge-in.
     """
 
-    def __init__(self, backend: Backend, persona: Persona) -> None:
+    def __init__(
+        self, backend: Backend, persona: Persona, voices: VoiceRegistry | None = None
+    ) -> None:
         self.backend = backend
         self.persona = persona
+        self.voices = voices
         self.history: list[Msg] = []
 
     async def stream_response(
@@ -65,7 +69,7 @@ class StreamingPipeline:
         history = self.history if use_internal else history
 
         messages = build_messages(self.persona, history=history, user_input=user_text)
-        voice = voice_ref_for(self.persona, self.backend)
+        voice = voice_ref_for(self.persona, self.backend, self.voices)
         collected: list[str] = []
         t0 = time.perf_counter()
 

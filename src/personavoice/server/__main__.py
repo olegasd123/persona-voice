@@ -44,6 +44,10 @@ def _print_report(report: CheckReport, settings: Settings, *, use_color: bool) -
         print(f"Personas ({len(report.personas)}): {', '.join(report.personas)}")
         print()
 
+    if report.voices:
+        print(f"Voices ({len(report.voices)}): {', '.join(report.voices)}")
+        print()
+
     if report.warnings:
         print("Warnings:")
         for w in report.warnings:

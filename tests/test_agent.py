@@ -23,6 +23,10 @@ def _companion(config_dir: Path):
     return load_persona(config_dir / "personas" / "companion.yaml")
 
 
+def _hr(config_dir: Path):
+    return load_persona(config_dir / "personas" / "hr_interviewer.yaml")
+
+
 class FakeSource:
     """Stand-in for `rtc.AudioSource` — records barge-in queue flushes and frames."""
 
@@ -106,3 +110,91 @@ async def test_empty_utterance_is_ignored(config_dir: Path) -> None:
     await ag._turn.join()
     assert spoken == []  # blank transcript → no reply, nothing spoken
     assert ag._pipeline.history == []
+
+
+# --- persona selection (switch via API) -----------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("meta", "expected"),
+    [
+        ('{"persona": "hr_interviewer"}', "hr_interviewer"),  # JSON object
+        ("hr_interviewer", "hr_interviewer"),  # bare id
+        ('  {"persona":"pm_interviewer"}  ', "pm_interviewer"),  # whitespace tolerated
+        ("", None),  # blank
+        ("   ", None),
+        (None, None),
+        ("{not json}", None),  # unparsable JSON → None, not a crash
+        ('{"other": "x"}', None),  # JSON without a persona key
+        ('["companion"]', None),  # JSON non-object
+        ('{"persona": ""}', None),  # empty persona value
+    ],
+)
+def test_persona_id_from_metadata(meta: str | None, expected: str | None) -> None:
+    assert agent.persona_id_from_metadata(meta) == expected
+
+
+def test_resolve_persona_id_priority_and_default() -> None:
+    # First non-empty source wins; later ones are ignored.
+    assert (
+        agent.resolve_persona_id([None, "", "hr_interviewer", "companion"], "x")
+        == "hr_interviewer"
+    )
+    # All empty → default.
+    assert agent.resolve_persona_id([None, ""], "companion") == "companion"
+
+
+@pytest.mark.parametrize(
+    ("data", "expected"),
+    [
+        (b'{"persona": "hr_interviewer"}', "hr_interviewer"),  # raw bytes (older SDK)
+        ("companion", "companion"),  # str
+        (123, None),  # unexpected type → None
+    ],
+)
+def test_data_text(data: object, expected: str | None) -> None:
+    assert agent.persona_id_from_metadata(agent._data_text(data)) == expected
+
+
+def test_data_text_unwraps_datapacket() -> None:
+    class FakePacket:  # newer LiveKit passes a DataPacket with a `.data` attribute
+        data = b'{"persona": "pm_interviewer"}'
+
+    assert agent._data_text(FakePacket()) == '{"persona": "pm_interviewer"}'
+
+
+# --- mid-session hot-swap (switch without restart) ------------------------------------
+
+
+def test_set_persona_swaps_pipeline_and_keeps_history(config_dir: Path) -> None:
+    ag = agent.PersonaAgent(make_backend(), _companion(config_dir), FakeSource())
+    ag._pipeline.history.append(object())  # type: ignore[arg-type]  # a prior turn
+
+    ag.set_persona(_hr(config_dir))
+
+    assert ag.persona.id == "hr_interviewer"
+    assert ag._pipeline.persona.id == "hr_interviewer"
+    assert len(ag._pipeline.history) == 1  # conversation continues, not reset
+
+
+async def test_set_persona_interrupts_in_flight_reply(config_dir: Path) -> None:
+    ag = agent.PersonaAgent(make_backend(), _companion(config_dir), FakeSource())
+
+    async def slow():
+        await asyncio.sleep(10)
+        yield b"x"
+
+    ag._turn.begin(slow())
+    await asyncio.sleep(0)
+    assert ag._turn.speaking is True
+
+    ag.set_persona(_hr(config_dir))
+    await ag._turn.join()  # let the cancellation land
+    assert ag._turn.speaking is False  # barge-out: old persona stopped talking
+
+
+def test_set_same_persona_is_a_noop(config_dir: Path) -> None:
+    companion = _companion(config_dir)
+    ag = agent.PersonaAgent(make_backend(), companion, FakeSource())
+    ag.set_persona(_companion(config_dir))  # same id, different instance
+    assert ag.persona is companion  # unchanged

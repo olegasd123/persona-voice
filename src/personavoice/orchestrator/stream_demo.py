@@ -26,7 +26,7 @@ from ..audio import read_wav_file, write_wav_file
 from ..models import Persona
 from ..persona.loader import load_persona
 from ..persona.registry import PersonaRegistry
-from ..server.config import ConfigError, Settings, load_backend_config
+from ..server.config import ConfigError, Settings, load_backend_config, load_voice_registry
 from .streaming import StreamingPipeline, StreamMetrics
 
 
@@ -71,7 +71,7 @@ async def _run(
     print(f"\nyou said : {transcript.text!r}")
     print(f"{persona.id} : ", end="", flush=True)
 
-    pipe = StreamingPipeline(backend, persona)
+    pipe = StreamingPipeline(backend, persona, load_voice_registry(settings))
     metrics = StreamMetrics()
 
     idx = 0

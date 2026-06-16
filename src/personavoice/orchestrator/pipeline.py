@@ -15,6 +15,7 @@ from dataclasses import dataclass, field
 from ..adapters.factory import Backend
 from ..models import Msg, Persona, Role, Transcript, VoiceRef
 from ..persona.prompt import build_messages
+from ..voice.registry import VoiceRegistry
 
 
 @dataclass
@@ -27,8 +28,19 @@ class TurnResult:
     timings: dict[str, float] = field(default_factory=dict)
 
 
-def voice_ref_for(persona: Persona, backend: Backend) -> VoiceRef:
-    """Build the VoiceRef a persona should speak with on the active backend."""
+def voice_ref_for(
+    persona: Persona, backend: Backend, voices: VoiceRegistry | None = None
+) -> VoiceRef:
+    """Build the VoiceRef a persona should speak with on the active backend.
+
+    With a `voices` registry, the persona's logical voice ref resolves to a backend-native
+    preset so personas sound distinct; without one, the raw ref is passed through (adapters
+    then fall back to their default voice).
+    """
+    if voices is not None:
+        return voices.resolve(
+            persona.voice.ref, backend.tts.name, default_emotion=persona.voice.emotion
+        )
     return VoiceRef(
         id=persona.voice.ref,
         emotion=persona.voice.emotion,
@@ -43,9 +55,12 @@ class Pipeline:
     context. Pass `history=...` to `run_turn` to override it for a one-off turn.
     """
 
-    def __init__(self, backend: Backend, persona: Persona) -> None:
+    def __init__(
+        self, backend: Backend, persona: Persona, voices: VoiceRegistry | None = None
+    ) -> None:
         self.backend = backend
         self.persona = persona
+        self.voices = voices
         self.history: list[Msg] = []
 
     async def run_turn(self, audio_in: bytes, history: list[Msg] | None = None) -> TurnResult:
@@ -65,7 +80,7 @@ class Pipeline:
         t_llm = time.perf_counter()
         timings["llm"] = t_llm - t_stt
 
-        voice = voice_ref_for(self.persona, self.backend)
+        voice = voice_ref_for(self.persona, self.backend, self.voices)
         audio_out = await self.backend.tts.synthesize(reply, voice)
         t_tts = time.perf_counter()
         timings["tts"] = t_tts - t_llm

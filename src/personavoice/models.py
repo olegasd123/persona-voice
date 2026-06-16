@@ -56,6 +56,25 @@ class VoiceRef(BaseModel):
     backend: str | None = None
 
 
+class VoiceDef(BaseModel):
+    """One entry in the voice registry (config/voices.yaml).
+
+    A *logical* voice (e.g. `companion_soft`) that personas reference, mapped to a
+    backend-native preset per TTS adapter so the personas sound distinct on each backend.
+    `sample` is a clone source used by cloning-capable backends (Chatterbox/F5) in M5; until
+    then a backend with no `presets` entry falls back to its own default voice.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    description: str = ""
+    emotion: str | None = None
+    # tts adapter name ("kokoro" | "orpheus" | ...) -> that backend's preset id.
+    presets: dict[str, str] = Field(default_factory=dict)
+    # Path to a ~10 s clone sample (M5), resolved by cloning backends.
+    sample: str | None = None
+
+
 # --------------------------------------------------------------------------------------
 # Persona config (loaded from config/personas/*.yaml)
 # --------------------------------------------------------------------------------------

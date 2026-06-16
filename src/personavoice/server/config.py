@@ -17,6 +17,7 @@ from pydantic import ValidationError
 from .._env import expand_env_vars
 from ..models import BackendConfig, Persona
 from ..persona.loader import load_personas
+from ..voice.registry import VoiceRegistry
 
 VALID_BACKENDS = ("mac", "cuda")
 
@@ -46,6 +47,10 @@ class Settings:
     @property
     def personas_dir(self) -> Path:
         return self.config_dir / "personas"
+
+    @property
+    def voices_path(self) -> Path:
+        return self.config_dir / "voices.yaml"
 
     @classmethod
     def load(cls, *, backend: str | None = None, env_file: str | Path | None = ".env") -> Settings:
@@ -85,3 +90,8 @@ def load_backend_config(settings: Settings) -> BackendConfig:
 
 def load_all_personas(settings: Settings) -> dict[str, Persona]:
     return load_personas(settings.personas_dir)
+
+
+def load_voice_registry(settings: Settings) -> VoiceRegistry:
+    """Load the voice registry (tolerates a missing `voices.yaml`)."""
+    return VoiceRegistry.load(settings.voices_path)

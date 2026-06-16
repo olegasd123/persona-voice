@@ -235,12 +235,29 @@ Mark a milestone as `[Done]` when it's completed.
   LiveKit server (and the 4080 for the latency budget) — `personavoice --serve` against a
   LiveKit instance closes this out, the analog of M2's on-4080 step.
 
-### M4 — Persona system *(≈ 1 week)*
+### M4 — Persona system *(≈ 1 week)* `[Done]`
 **Goal:** the four personas, selectable at runtime.
-- [ ] Persona loader + prompt builder + registry; hot-swap without restart.
-- [ ] Author system prompts + behavior knobs for PM, HR, Teacher, Companion.
-- [ ] Per-persona voice + temperature/turn-style wiring.
-- **Acceptance:** switch persona via config/API; each behaves and sounds distinctly in live conversation.
+- [x] Persona loader + prompt builder + registry; hot-swap without restart. The
+      `PersonaRegistry.reload()` re-reads files from disk; the live agent reloads then calls
+      `PersonaAgent.set_persona()` on a data message, swapping persona (and voice) mid-call
+      while keeping conversation history.
+- [x] Author system prompts + behavior knobs for PM, HR, Teacher, Companion (in
+      `config/personas/*.yaml`).
+- [x] Per-persona voice + temperature/turn-style wiring. `temperature`/`top_p`/`max_tokens`
+      flow into the OpenAI-compatible payload; `turn_style` becomes a prompt directive
+      (`persona/prompt.py`). A **voice registry** (`config/voices.yaml`, `voice/registry.py`)
+      maps each persona's logical `voice.ref` to a backend-native preset, so the four
+      personas sound distinct (Kokoro `af_heart`/`af_sarah`/`af_nicole`/`am_michael` on Mac,
+      Orpheus presets on CUDA). Clone-only backends fall back to default until M5.
+- [x] Runtime selection via API: the LiveKit agent picks the persona from job/room metadata
+      (`{"persona": "..."}`) or `PERSONAVOICE_PERSONA` (pure, unit-tested resolver); mid-call
+      switch via a data message.
+- **Acceptance:** ✅ switch persona via config (`--persona`) / API (agent metadata + data
+      message); each behaves and **sounds distinctly** — verified on the M4 Max: the four
+      personas synthesize as four distinct Kokoro voices (4/4 unique audio, incl. a male
+      voice for PM). 112 unit tests green (5 numpy/soundfile tests skip in the light env);
+      ruff + mypy clean. The live LiveKit metadata-select / mid-call-swap path rides on the
+      same open M3 step (needs a running LiveKit server).
 
 ### M5 — Voice cloning (zero-shot) *(≈ 4–6 days)*
 **Goal:** clone a voice from a short sample and use it per persona.

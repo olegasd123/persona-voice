@@ -10,11 +10,13 @@ from dataclasses import dataclass, field
 
 from ..adapters.factory import Backend, build_backend
 from ..models import CheckResult, Persona
+from ..voice.registry import VoiceRegistry
 from .config import (
     ConfigError,
     Settings,
     load_all_personas,
     load_backend_config,
+    load_voice_registry,
 )
 
 
@@ -23,6 +25,7 @@ class CheckReport:
     backend_name: str = ""
     adapter_results: list[CheckResult] = field(default_factory=list)
     personas: list[str] = field(default_factory=list)
+    voices: list[str] = field(default_factory=list)
     errors: list[str] = field(default_factory=list)
     warnings: list[str] = field(default_factory=list)
 
@@ -31,17 +34,24 @@ class CheckReport:
         return not self.errors and all(r.ok for r in self.adapter_results)
 
 
-def _validate_personas(personas: dict[str, Persona], backend: Backend) -> list[str]:
-    """Cross-check personas against the active backend (warnings, not hard errors)."""
+def _validate_personas(
+    personas: dict[str, Persona], backend: Backend, voices: VoiceRegistry
+) -> list[str]:
+    """Cross-check personas' voices against the active backend (warnings, not errors)."""
     warnings: list[str] = []
+    tts = backend.tts.name
     cloning = getattr(backend.tts, "supports_cloning", False)
     for persona in personas.values():
         ref = persona.voice.ref
-        # A clone-style ref (sample under voices/) needs a cloning-capable TTS backend.
-        if ref.startswith("voices/") and not cloning:
+        # A concrete preset for this backend → the persona will sound distinct.
+        if voices.has_preset(ref, tts):
+            continue
+        # No preset: a cloning backend can still use the sample (M5); otherwise it falls
+        # back to the default voice, so distinct personas won't sound distinct yet.
+        if not cloning:
             warnings.append(
-                f"persona {persona.id!r} uses cloned voice {ref!r} but backend TTS "
-                f"{backend.tts.name!r} has no cloning support (ok until M5)"
+                f"persona {persona.id!r} voice {ref!r} has no {tts!r} preset and {tts!r} "
+                f"can't clone — it will use the default voice (won't sound distinct)"
             )
     return warnings
 
@@ -83,6 +93,15 @@ def run_check(settings: Settings) -> CheckReport:
     report.personas = sorted(personas)
     if not personas:
         report.warnings.append(f"no personas found in {settings.personas_dir}")
-    report.warnings.extend(_validate_personas(personas, backend))
+
+    # 3. Voice registry (distinct per-persona voices).
+    try:
+        voices = load_voice_registry(settings)
+    except ValueError as exc:
+        report.errors.append(str(exc))
+        return report
+
+    report.voices = voices.ids()
+    report.warnings.extend(_validate_personas(personas, backend, voices))
 
     return report

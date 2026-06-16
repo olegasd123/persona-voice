@@ -12,13 +12,23 @@ See [IMPLEMENTATION_PLAN.md](IMPLEMENTATION_PLAN.md) for the full design and mil
 
 ## Status
 
-Current milestone: **M3 — Real-time orchestration & streaming (partial)**. The reply now
-**streams**: LLM tokens are chunked into sentences (`orchestrator/chunker.py`) and spoken as
-they're generated, so the persona starts talking before the full reply exists. A
-`TurnController` (`orchestrator/turn.py`) makes **barge-in** one cancellable task, and the
-**LiveKit agent** (`orchestrator/agent.py`, lazy-imported behind the `livekit` extra) wires
-WebRTC transport + Silero VAD endpointing + barge-in. `personavoice-stream-demo` runs the
-streaming loop on the Mac without LiveKit.
+Current milestone: **M4 — Persona system (done)**. The four personas (PM/HR interviewer,
+language teacher, companion) are selectable at runtime and each behaves *and sounds*
+distinct. A **voice registry** (`config/voices.yaml`, `voice/registry.py`) maps each
+persona's logical voice to a backend-native preset, so on the Mac they speak as
+`af_heart` / `af_sarah` / `af_nicole` / `am_michael` (verified: four distinct Kokoro voices),
+and on the 4080 as Orpheus presets. The LiveKit agent **selects the persona** from job/room
+metadata (`{"persona": "hr_interviewer"}`) or `PERSONAVOICE_PERSONA`, and a client can
+**hot-swap** the persona mid-call via a data message — the registry hot-reloads so edited
+persona files take effect without a restart. `temperature` / `turn_style` are wired through
+to the LLM and prompt.
+
+**M3 (partial):** the reply **streams** — LLM tokens are chunked into sentences
+(`orchestrator/chunker.py`) and spoken as they're generated, so the persona starts talking
+before the full reply exists. A `TurnController` (`orchestrator/turn.py`) makes **barge-in**
+one cancellable task, and the **LiveKit agent** (`orchestrator/agent.py`, lazy-imported
+behind the `livekit` extra) wires WebRTC transport + Silero VAD endpointing + barge-in.
+`personavoice-stream-demo` runs the streaming loop on the Mac without LiveKit.
 
 > Streaming is verified e2e on the M4 Max — a spoken question streamed back as 11 sentence
 > wavs, warm **first_token 0.76 s · first_audio 5.44 s · total 8.95 s** (speech starts at
@@ -131,6 +141,39 @@ user starting to speak, `TurnController` cancels the in-flight LLM+TTS and flush
 (**barge-in**). Connect any LiveKit client (the [Agents Playground](https://agents-playground.livekit.io/)
 or the iOS app in M6) to converse. This live run is the open M3 acceptance step.
 
+## Personas & voices (M4)
+
+A persona is a YAML file (`config/personas/*.yaml`): a system prompt plus knobs for the LLM
+(`temperature`, `max_tokens`), behavior (`turn_style`, `follow_up_probability`), and a
+logical `voice.ref`. Four ship today — `pm_interviewer`, `hr_interviewer`,
+`language_teacher`, `companion` — and any demo or the live agent takes `--persona <id>`.
+
+Each persona references a **logical voice** (`voices/companion_soft`); the **voice registry**
+(`config/voices.yaml`) maps that to a concrete preset per TTS backend, so the personas sound
+distinct on whichever backend is active:
+
+```yaml
+# config/voices.yaml
+companion_soft:
+  emotion: warm
+  presets: { kokoro: af_heart, orpheus: tara }   # Mac / 4080
+pm_calm:
+  presets: { kokoro: am_michael, orpheus: leo }
+```
+
+A clone-only backend (Chatterbox/F5) has no preset and falls back to its default voice until
+M5 wires zero-shot cloning (which will use a `sample:` per voice). `python -m
+personavoice.server --check` lists the loaded personas and voices and warns if a persona
+won't sound distinct on the active backend.
+
+**Selecting a persona on the live agent.** The LiveKit agent picks the persona from, in
+priority order: the dispatch's job metadata, the room metadata
+(`{"persona": "hr_interviewer"}`), then the `PERSONAVOICE_PERSONA` env var (else the first
+registered persona). A connected client can also **switch persona mid-call** by publishing a
+data message — a bare id (`hr_interviewer`) or `{"persona": "hr_interviewer"}`. The swap
+keeps the conversation history, and the persona registry reloads from disk first, so editing
+a persona file takes effect without restarting the worker.
+
 ## Run on the 4080 (CUDA, M2)
 
 The `cuda` backend mirrors the Mac cascade: `faster_whisper`/`parakeet` (STT), `vllm` (LLM),
@@ -173,13 +216,15 @@ These are full-stage, turn-based wall times. For the streaming "time to first au
 config/
   backends/{mac,cuda}.yaml   # which adapter + model per stage; BACKEND switch
   personas/*.yaml            # the four personas (prompt + voice + behavior)
+  voices.yaml                # voice registry: logical voice -> per-backend preset (M4)
 src/personavoice/
-  models.py                  # Persona, VoiceRef, Transcript, Msg, configs
+  models.py                  # Persona, VoiceRef, VoiceDef, Transcript, Msg, configs
   adapters/                  # stt/ llm/ tts/ — base classes + per-backend impls + factory
   persona/                   # loader, prompt builder, registry
+  voice/                     # voice registry (M4); zero-shot cloning in M5
   server/                    # settings, config loading, `--check` / `--serve` entrypoint
   orchestrator/              # pipeline (M1) + chunker/streaming/turn/agent (M3 streaming)
-  memory/ voice/             # filled in M8, M5/M9
+  memory/                    # filled in M8
 scripts/
   download_models.py         # pinned model manifest + downloader
   bench_latency.py           # per-stage latency benchmark (mac/cuda)
