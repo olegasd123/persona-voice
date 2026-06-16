@@ -310,19 +310,33 @@ Mark a milestone as `[Done]` when it's completed.
       gained an `on_sentence` tap, and `agent.make_transcript_publisher` pushes one growing
       `rtc.Transcription` segment in step with the audio (best-effort; flips to final on
       completion *and* on barge-in), so the assistant's words now appear in the client view.
-- [ ] Native telephony / deep audio-session plumbing: CallKit (iOS) / ConnectionService
-      (Android), interruption (incoming call) + route/Bluetooth-change handling beyond the
-      LiveKit/WebRTC defaults. (Done: mic permissions, iOS background-audio modes, `minSdk 23` /
-      iOS 13, speakerphone routing, reconnection state.) This needs a thin platform-channel
+- [x] **Audio-session interruption + route/Bluetooth-change plumbing** (the platform-channel
+      layer). A native `EventChannel` (`persona_voice/audio_session`) surfaces OS audio events to
+      Dart: iOS `AudioSessionMonitor.swift` (`AVAudioSession` interruption + route-change
+      notifications, registered in `AppDelegate`) and Android `AudioSessionMonitor.kt`
+      (`OnAudioFocusChangeListener` + `AudioDeviceCallback`, registered in `MainActivity`).
+      `services/audio_session.dart` decodes them into typed events; `VoiceSession` mutes the mic
+      on an incoming-call/Siri interruption and **auto-resumes** a previously-live mic (open-mic)
+      when it clears, and tracks the active route for the UI. The handler + parser are pure and
+      unit-tested room-less; the native monitors only *observe* (LiveKit/WebRTC still owns the
+      session). *Native Swift/Kotlin compile is build/device-pending* (no Android SDK/device in
+      dev). (Already done: mic permissions, iOS background-audio modes, `minSdk 23` / iOS 13,
+      speakerphone routing, reconnection state.)
+- [ ] Native telephony **CallKit (iOS) / ConnectionService (Android)** — presenting *our*
+      conversation *as* a system call (lock-screen UI, OS call list, ringtone handoff). Distinct
+      from the interruption handling above (being interrupted *by* a call). Needs a platform
       layer **and physical devices** to verify — deferred with the on-device run below.
 - **Acceptance:** ⚠️ *partial.* Token server verified (live-smoked: `/healthz`, `/personas`,
       `POST /token` mint a valid JWT). Server now **188 tests green** (+ the streaming
       `on_sentence` tap and the transcript-publisher); ruff + mypy clean. Flutter client
-      **statically verified** — `flutter analyze` clean, `flutter test` green (**14 tests**:
-      token client + models, the pure `sessionStatusLabel`, and mic-mode/PTT transitions on a
-      room-less `VoiceSession`). **Pending (device-only):** the full spoken conversation from a
-      real **iPhone + Android device** to the server — rides the same open LiveKit-server step
-      as M3/M4/M5 — plus the native CallKit/ConnectionService + interruption/route plumbing above.
+      **statically verified** — `flutter analyze` clean, `flutter test` green (**27 tests**:
+      token client + models, the pure `sessionStatusLabel`, mic-mode/PTT transitions on a
+      room-less `VoiceSession`, the audio-event parser, and the interruption/route handler). The
+      interruption/route platform-channel layer (iOS + Android native monitors → Dart) is written
+      but its native compile/behavior is **build/device-pending** (no Android SDK/device in dev).
+      **Pending (device-only):** the full spoken conversation from a real **iPhone + Android
+      device** to the server — rides the same open LiveKit-server step as M3/M4/M5 — plus native
+      **CallKit/ConnectionService** (presenting the session as a system call).
 
 ### M7 — Persona fine-tuning (LoRA) *(≈ 1.5 weeks)*
 **Goal:** train per-persona brains beyond prompting.

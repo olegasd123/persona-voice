@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import '../models/persona.dart';
+import '../services/audio_session.dart';
 import '../services/token_client.dart';
 import '../services/voice_session.dart';
 
@@ -48,8 +49,11 @@ class _CallScreenState extends State<CallScreen> {
     super.dispose();
   }
 
-  String get _statusLabel =>
-      sessionStatusLabel(_session.status, agentSpeaking: _session.agentSpeaking);
+  String get _statusLabel => sessionStatusLabel(
+        _session.status,
+        agentSpeaking: _session.agentSpeaking,
+        interrupted: _session.interrupted,
+      );
 
   @override
   Widget build(BuildContext context) {
@@ -71,7 +75,11 @@ class _CallScreenState extends State<CallScreen> {
       ),
       body: Column(
         children: [
-          _StatusBar(label: _statusLabel, speaking: _session.agentSpeaking),
+          _StatusBar(
+            label: _statusLabel,
+            speaking: _session.agentSpeaking,
+            route: _session.route,
+          ),
           if (_session.errorMessage != null)
             Padding(
               padding: const EdgeInsets.all(12),
@@ -104,9 +112,10 @@ class _CallScreenState extends State<CallScreen> {
 }
 
 class _StatusBar extends StatelessWidget {
-  const _StatusBar({required this.label, required this.speaking});
+  const _StatusBar({required this.label, required this.speaking, required this.route});
   final String label;
   final bool speaking;
+  final AudioRoute route;
 
   @override
   Widget build(BuildContext context) {
@@ -120,10 +129,21 @@ class _StatusBar extends StatelessWidget {
           Icon(speaking ? Icons.graphic_eq : Icons.hearing, size: 18),
           const SizedBox(width: 8),
           Text(label),
+          const Spacer(),
+          // Only call out a non-default route — loudspeaker is the assumed default.
+          if (_routeIcon(route) case final icon?) Icon(icon, size: 16),
         ],
       ),
     );
   }
+
+  static IconData? _routeIcon(AudioRoute route) => switch (route) {
+        AudioRoute.headphones => Icons.headset,
+        AudioRoute.bluetooth => Icons.bluetooth_audio,
+        AudioRoute.carAudio => Icons.directions_car,
+        AudioRoute.receiver => Icons.phone_in_talk,
+        AudioRoute.speaker || AudioRoute.unknown => null,
+      };
 }
 
 class _TranscriptBubble extends StatelessWidget {

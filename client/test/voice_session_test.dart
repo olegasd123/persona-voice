@@ -1,4 +1,5 @@
 import 'package:flutter_test/flutter_test.dart';
+import 'package:personavoice_client/services/audio_session.dart';
 import 'package:personavoice_client/services/voice_session.dart';
 
 void main() {
@@ -17,6 +18,92 @@ void main() {
     test('connected reflects who is speaking', () {
       expect(sessionStatusLabel(SessionStatus.connected, agentSpeaking: false), 'Listening');
       expect(sessionStatusLabel(SessionStatus.connected, agentSpeaking: true), 'Speaking…');
+    });
+
+    test('interruption overrides the connected label', () {
+      expect(
+        sessionStatusLabel(SessionStatus.connected, agentSpeaking: true, interrupted: true),
+        'Paused (interrupted)',
+      );
+      // Only while connected — a non-connected status keeps its own label.
+      expect(
+        sessionStatusLabel(SessionStatus.connecting, agentSpeaking: false, interrupted: true),
+        'Connecting…',
+      );
+    });
+  });
+
+  group('VoiceSession audio interruptions (no room)', () {
+    test('open-mic: interruption mutes, then auto-resumes on a resumable end', () async {
+      final s = VoiceSession();
+      await s.toggleMic(); // mic live in open-mic
+      expect(s.micEnabled, true);
+
+      await s.onAudioEvent(const InterruptionBegan());
+      expect(s.interrupted, true);
+      expect(s.micEnabled, false);
+
+      await s.onAudioEvent(const InterruptionEnded(shouldResume: true));
+      expect(s.interrupted, false);
+      expect(s.micEnabled, true);
+    });
+
+    test('does not resume when the OS says not to', () async {
+      final s = VoiceSession();
+      await s.toggleMic();
+
+      await s.onAudioEvent(const InterruptionBegan());
+      await s.onAudioEvent(const InterruptionEnded(shouldResume: false));
+      expect(s.interrupted, false);
+      expect(s.micEnabled, false);
+    });
+
+    test('does not resume a mic the user had already muted', () async {
+      final s = VoiceSession();
+      // mic starts disabled in a room-less session; leave it muted.
+      expect(s.micEnabled, false);
+
+      await s.onAudioEvent(const InterruptionBegan());
+      await s.onAudioEvent(const InterruptionEnded(shouldResume: true));
+      expect(s.micEnabled, false);
+    });
+
+    test('push-to-talk stays muted after an interruption ends', () async {
+      final s = VoiceSession();
+      await s.setMicMode(MicMode.pushToTalk);
+      await s.setTalking(true);
+      expect(s.micEnabled, true);
+
+      await s.onAudioEvent(const InterruptionBegan());
+      expect(s.talking, false);
+      expect(s.micEnabled, false);
+
+      await s.onAudioEvent(const InterruptionEnded(shouldResume: true));
+      expect(s.micEnabled, false); // user must hold again
+    });
+
+    test('a duplicate interruptionBegan is ignored', () async {
+      final s = VoiceSession();
+      await s.toggleMic();
+      await s.onAudioEvent(const InterruptionBegan());
+      var notifications = 0;
+      s.addListener(() => notifications++);
+      await s.onAudioEvent(const InterruptionBegan());
+      expect(notifications, 0);
+    });
+
+    test('route changes are recorded and de-duplicated', () async {
+      final s = VoiceSession();
+      expect(s.route, AudioRoute.speaker);
+
+      var notifications = 0;
+      s.addListener(() => notifications++);
+      await s.onAudioEvent(const RouteChanged(AudioRoute.bluetooth));
+      expect(s.route, AudioRoute.bluetooth);
+      expect(notifications, 1);
+
+      await s.onAudioEvent(const RouteChanged(AudioRoute.bluetooth));
+      expect(notifications, 1); // same route → no extra notify
     });
   });
 

@@ -1,8 +1,10 @@
+import 'dart:async';
 import 'dart:convert';
 
 import 'package:flutter/foundation.dart';
 import 'package:livekit_client/livekit_client.dart';
 
+import 'audio_session.dart';
 import 'token_client.dart';
 
 enum SessionStatus { idle, connecting, connected, reconnecting, disconnected, error }
@@ -15,15 +17,23 @@ enum SessionStatus { idle, connecting, connected, reconnecting, disconnected, er
 enum MicMode { openMic, pushToTalk }
 
 /// Human-readable status text. Pure (no [VoiceSession] needed) so it's unit-tested directly.
-String sessionStatusLabel(SessionStatus status, {required bool agentSpeaking}) =>
-    switch (status) {
-      SessionStatus.connecting => 'Connecting…',
-      SessionStatus.reconnecting => 'Reconnecting…',
-      SessionStatus.connected => agentSpeaking ? 'Speaking…' : 'Listening',
-      SessionStatus.disconnected => 'Disconnected',
-      SessionStatus.error => 'Error',
-      SessionStatus.idle => 'Idle',
-    };
+/// When [interrupted] (an incoming call / Siri grabbed the audio session), that takes
+/// precedence over the normal connected labels since the mic is muted until it clears.
+String sessionStatusLabel(
+  SessionStatus status, {
+  required bool agentSpeaking,
+  bool interrupted = false,
+}) {
+  if (interrupted && status == SessionStatus.connected) return 'Paused (interrupted)';
+  return switch (status) {
+    SessionStatus.connecting => 'Connecting…',
+    SessionStatus.reconnecting => 'Reconnecting…',
+    SessionStatus.connected => agentSpeaking ? 'Speaking…' : 'Listening',
+    SessionStatus.disconnected => 'Disconnected',
+    SessionStatus.error => 'Error',
+    SessionStatus.idle => 'Idle',
+  };
+}
 
 /// One line of conversation transcript, keyed by the LiveKit segment id so streamed
 /// (interim → final) updates replace in place rather than appending duplicates.
@@ -46,6 +56,13 @@ class TranscriptLine {
 /// message (the server agent's `on("data_received")` handler swaps to it — see
 /// `orchestrator/agent.py`). Exposed as a [ChangeNotifier] so the UI rebuilds on changes.
 class VoiceSession extends ChangeNotifier {
+  /// [audioEvents] lets tests feed synthetic interruption/route events; in the app it
+  /// defaults to the native monitor ([AudioInterruptions.instance]).
+  VoiceSession({Stream<AudioEvent>? audioEvents}) : _audioEvents = audioEvents;
+
+  final Stream<AudioEvent>? _audioEvents;
+  StreamSubscription<AudioEvent>? _audioSub;
+
   Room? _room;
   EventsListener<RoomEvent>? _listener;
 
@@ -56,6 +73,17 @@ class VoiceSession extends ChangeNotifier {
   String persona = '';
   MicMode micMode = MicMode.openMic;
   bool talking = false; // push-to-talk: true while the talk button is held
+
+  /// An OS audio interruption (incoming call, Siri, alarm) is in effect; the mic is muted
+  /// until it clears. Surfaced in the status line.
+  bool interrupted = false;
+  // Whether the mic was live just before the interruption, so we only auto-resume a mic the
+  // user actually had on (not one they'd muted).
+  bool _micBeforeInterruption = false;
+
+  /// Where the OS is currently routing audio (loudspeaker, headset, Bluetooth…). Observed,
+  /// not controlled — useful for the UI and diagnostics.
+  AudioRoute route = AudioRoute.speaker;
 
   final List<TranscriptLine> _transcript = [];
   final Map<String, TranscriptLine> _byId = {};
@@ -88,6 +116,10 @@ class VoiceSession extends ChangeNotifier {
 
       _room = room;
       _listener = listener;
+      // Start watching for OS audio interruptions (incoming calls) + route changes for the
+      // life of the call. Lazily listened, so a never-connected session never touches the
+      // platform channel.
+      _audioSub ??= (_audioEvents ?? AudioInterruptions.instance.events).listen(onAudioEvent);
 
       await room.connect(grant.url, grant.token);
       // Open-mic starts live; push-to-talk starts muted until the user holds to talk.
@@ -130,6 +162,37 @@ class VoiceSession extends ChangeNotifier {
     micEnabled = enabled;
     notifyListeners();
     await _room?.localParticipant?.setMicrophoneEnabled(enabled);
+  }
+
+  /// React to a native audio-session event. Public for unit testing (the subscription in
+  /// [connect] funnels here):
+  ///  - [InterruptionBegan] mutes the mic (remembering whether it was live) and marks the
+  ///    call paused;
+  ///  - [InterruptionEnded] auto-resumes only a mic that was live, in open-mic mode, when the
+  ///    OS says it's appropriate — push-to-talk stays muted so the user re-engages by holding;
+  ///  - [RouteChanged] just records the new output route.
+  @visibleForTesting
+  Future<void> onAudioEvent(AudioEvent event) async {
+    switch (event) {
+      case InterruptionBegan():
+        if (interrupted) return;
+        interrupted = true;
+        _micBeforeInterruption = micEnabled;
+        talking = false;
+        await _setMicEnabled(false);
+      case InterruptionEnded(:final shouldResume):
+        if (!interrupted) return;
+        interrupted = false;
+        if (shouldResume && _micBeforeInterruption && micMode == MicMode.openMic) {
+          await _setMicEnabled(true);
+        } else {
+          notifyListeners();
+        }
+      case RouteChanged(:final route):
+        if (route == this.route) return;
+        this.route = route;
+        notifyListeners();
+    }
   }
 
   /// Switch persona without dropping the call (keeps conversation history server-side).
@@ -185,17 +248,20 @@ class VoiceSession extends ChangeNotifier {
 
   Future<void> _teardown() async {
     try {
+      await _audioSub?.cancel();
       await _listener?.dispose();
       await _room?.disconnect();
       await _room?.dispose();
     } catch (e) {
       debugPrint('voice session teardown error: $e');
     } finally {
+      _audioSub = null;
       _listener = null;
       _room = null;
       micEnabled = false;
       agentSpeaking = false;
       talking = false;
+      interrupted = false;
     }
   }
 
