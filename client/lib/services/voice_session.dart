@@ -5,6 +5,7 @@ import 'package:flutter/foundation.dart';
 import 'package:livekit_client/livekit_client.dart';
 
 import 'audio_session.dart';
+import 'telephony.dart';
 import 'token_client.dart';
 
 enum SessionStatus { idle, connecting, connected, reconnecting, disconnected, error }
@@ -57,11 +58,21 @@ class TranscriptLine {
 /// `orchestrator/agent.py`). Exposed as a [ChangeNotifier] so the UI rebuilds on changes.
 class VoiceSession extends ChangeNotifier {
   /// [audioEvents] lets tests feed synthetic interruption/route events; in the app it
-  /// defaults to the native monitor ([AudioInterruptions.instance]).
-  VoiceSession({Stream<AudioEvent>? audioEvents}) : _audioEvents = audioEvents;
+  /// defaults to the native monitor ([AudioInterruptions.instance]). [systemCall] drives the
+  /// native system-call (CallKit / ConnectionService) presentation; injected in tests, else
+  /// lazily defaults to [PlatformSystemCallController.instance] on first connect.
+  VoiceSession({Stream<AudioEvent>? audioEvents, SystemCallController? systemCall})
+      : _audioEvents = audioEvents,
+        _systemCall = systemCall;
 
   final Stream<AudioEvent>? _audioEvents;
   StreamSubscription<AudioEvent>? _audioSub;
+
+  SystemCallController? _systemCall;
+  StreamSubscription<CallControlEvent>? _callSub;
+  String? _callId;
+  // Set when the system call UI ended the call, so teardown doesn't redundantly re-report it.
+  bool _systemEndedCall = false;
 
   Room? _room;
   EventsListener<RoomEvent>? _listener;
@@ -121,12 +132,27 @@ class VoiceSession extends ChangeNotifier {
       // platform channel.
       _audioSub ??= (_audioEvents ?? AudioInterruptions.instance.events).listen(onAudioEvent);
 
+      // Present this conversation as a native system call (CallKit / ConnectionService): it
+      // appears in the OS call UI and its end/mute buttons drive the session via
+      // [onCallControlEvent]. Best-effort — a host without the native layer no-ops.
+      final systemCall = _systemCall ??= PlatformSystemCallController.instance;
+      _callSub ??= systemCall.events.listen(onCallControlEvent);
+      _systemEndedCall = false;
+      final callId = _callId = generateCallId();
+      final callName = grant.persona.isEmpty ? 'Persona Voice' : grant.persona;
+      await systemCall.startCall(
+        callId: callId,
+        displayName: callName,
+        handle: grant.persona.isEmpty ? 'persona' : grant.persona,
+      );
+
       await room.connect(grant.url, grant.token);
       // Open-mic starts live; push-to-talk starts muted until the user holds to talk.
       micEnabled = micMode == MicMode.openMic;
       await room.localParticipant?.setMicrophoneEnabled(micEnabled);
       // The agent selects its persona from a data message on connect.
       await _sendPersona(grant.persona);
+      await systemCall.reportConnected(callId);
       _setStatus(SessionStatus.connected);
     } catch (e) {
       errorMessage = e.toString();
@@ -158,10 +184,36 @@ class VoiceSession extends ChangeNotifier {
     await _setMicEnabled(held);
   }
 
-  Future<void> _setMicEnabled(bool enabled) async {
+  Future<void> _setMicEnabled(bool enabled, {bool pushToSystem = true}) async {
     micEnabled = enabled;
     notifyListeners();
     await _room?.localParticipant?.setMicrophoneEnabled(enabled);
+    // Keep the system call UI's mute button in sync with the actual mic. Skipped when the
+    // change *originated* from that UI ([onCallControlEvent]) so the two can't ping-pong.
+    if (pushToSystem) {
+      await _systemCall?.setMuted(_callId ?? '', !enabled);
+    }
+  }
+
+  /// React to a user action on the native system call UI. Public for unit testing (the
+  /// [connect] subscription funnels here):
+  ///  - [EndCallRequested] (system end button / lock screen) hangs up the whole session;
+  ///  - [MuteRequested] mirrors the mute onto the mic — un-muting re-engages the mic only in
+  ///    open-mic mode; in push-to-talk the user re-engages by holding the talk button.
+  @visibleForTesting
+  Future<void> onCallControlEvent(CallControlEvent event) async {
+    switch (event) {
+      case EndCallRequested():
+        _systemEndedCall = true;
+        await disconnect();
+      case MuteRequested(:final muted):
+        if (muted) {
+          talking = false;
+          await _setMicEnabled(false, pushToSystem: false);
+        } else if (micMode == MicMode.openMic) {
+          await _setMicEnabled(true, pushToSystem: false);
+        }
+    }
   }
 
   /// React to a native audio-session event. Public for unit testing (the subscription in
@@ -248,6 +300,11 @@ class VoiceSession extends ChangeNotifier {
 
   Future<void> _teardown() async {
     try {
+      // End the system call — unless its own UI already ended it (no redundant report).
+      if (_callId != null && !_systemEndedCall) {
+        await _systemCall?.endCall(_callId!);
+      }
+      await _callSub?.cancel();
       await _audioSub?.cancel();
       await _listener?.dispose();
       await _room?.disconnect();
@@ -255,6 +312,9 @@ class VoiceSession extends ChangeNotifier {
     } catch (e) {
       debugPrint('voice session teardown error: $e');
     } finally {
+      _callSub = null;
+      _callId = null;
+      _systemEndedCall = false;
       _audioSub = null;
       _listener = null;
       _room = null;

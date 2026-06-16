@@ -1,6 +1,36 @@
 import 'package:flutter_test/flutter_test.dart';
 import 'package:personavoice_client/services/audio_session.dart';
+import 'package:personavoice_client/services/telephony.dart';
 import 'package:personavoice_client/services/voice_session.dart';
+
+/// Records the system-call commands a [VoiceSession] issues, and lets a test inject OS-originated
+/// control events — the telephony analog of feeding synthetic audio events.
+class FakeSystemCallController implements SystemCallController {
+  final List<bool> muteCalls = [];
+  int startCalls = 0;
+  int reportConnectedCalls = 0;
+  int endCalls = 0;
+
+  @override
+  Stream<CallControlEvent> get events => const Stream.empty();
+
+  @override
+  Future<void> startCall({
+    required String callId,
+    required String displayName,
+    required String handle,
+  }) async =>
+      startCalls++;
+
+  @override
+  Future<void> reportConnected(String callId) async => reportConnectedCalls++;
+
+  @override
+  Future<void> endCall(String callId) async => endCalls++;
+
+  @override
+  Future<void> setMuted(String callId, bool muted) async => muteCalls.add(muted);
+}
 
 void main() {
   group('sessionStatusLabel', () {
@@ -158,6 +188,64 @@ void main() {
       expect(s.micEnabled, true);
       expect(await s.toggleMic(), false);
       expect(s.micEnabled, false);
+    });
+  });
+
+  group('VoiceSession system call (no room)', () {
+    test('system end-call hangs up the session', () async {
+      final fake = FakeSystemCallController();
+      final s = VoiceSession(systemCall: fake);
+
+      await s.onCallControlEvent(const EndCallRequested());
+      expect(s.status, SessionStatus.disconnected);
+    });
+
+    test('system mute mutes the mic; un-mute re-engages in open-mic', () async {
+      final fake = FakeSystemCallController();
+      final s = VoiceSession(systemCall: fake);
+      await s.toggleMic(); // mic live in open-mic
+      expect(s.micEnabled, true);
+
+      await s.onCallControlEvent(const MuteRequested(muted: true));
+      expect(s.micEnabled, false);
+
+      await s.onCallControlEvent(const MuteRequested(muted: false));
+      expect(s.micEnabled, true);
+    });
+
+    test('push-to-talk stays muted after a system un-mute', () async {
+      final fake = FakeSystemCallController();
+      final s = VoiceSession(systemCall: fake);
+      await s.setMicMode(MicMode.pushToTalk);
+      await s.setTalking(true);
+      expect(s.micEnabled, true);
+
+      await s.onCallControlEvent(const MuteRequested(muted: true));
+      expect(s.talking, false);
+      expect(s.micEnabled, false);
+
+      await s.onCallControlEvent(const MuteRequested(muted: false));
+      expect(s.micEnabled, false); // user must hold to talk again
+    });
+
+    test('app-side mic changes are pushed to the system mute button', () async {
+      final fake = FakeSystemCallController();
+      final s = VoiceSession(systemCall: fake);
+
+      await s.toggleMic(); // enable → muted:false
+      await s.toggleMic(); // disable → muted:true
+      expect(fake.muteCalls, [false, true]);
+    });
+
+    test('a system-originated mute is not echoed back to the system (no loop)', () async {
+      final fake = FakeSystemCallController();
+      final s = VoiceSession(systemCall: fake);
+      await s.toggleMic(); // muted:false
+      fake.muteCalls.clear();
+
+      await s.onCallControlEvent(const MuteRequested(muted: true));
+      expect(s.micEnabled, false);
+      expect(fake.muteCalls, isEmpty); // did not push setMuted back
     });
   });
 }

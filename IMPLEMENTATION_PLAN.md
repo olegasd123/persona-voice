@@ -322,21 +322,33 @@ Mark a milestone as `[Done]` when it's completed.
       session). *Native Swift/Kotlin compile is build/device-pending* (no Android SDK/device in
       dev). (Already done: mic permissions, iOS background-audio modes, `minSdk 23` / iOS 13,
       speakerphone routing, reconnection state.)
-- [ ] Native telephony **CallKit (iOS) / ConnectionService (Android)** — presenting *our*
-      conversation *as* a system call (lock-screen UI, OS call list, ringtone handoff). Distinct
-      from the interruption handling above (being interrupted *by* a call). Needs a platform
-      layer **and physical devices** to verify — deferred with the on-device run below.
+- [x] Native telephony **CallKit (iOS) / ConnectionService (Android)** — presenting *our*
+      conversation *as* a system call (lock-screen UI, OS call list). The platform layer is
+      written: a `MethodChannel` (`persona_voice/telephony`, app→OS: `startCall`/
+      `reportConnected`/`endCall`/`setMuted`) + `EventChannel` (`persona_voice/telephony_events`,
+      OS→app: `endCall`/`setMuted`), bridged in `services/telephony.dart` (pure
+      `parseCallControlEvent` + UUID call-id + a `SystemCallController` interface). iOS
+      `CallKitController.swift` models it as an outgoing `CXStartCallAction` and forwards
+      `CXEndCallAction`/`CXSetMutedCallAction` from the `CXProviderDelegate`; Android
+      `PersonaConnectionService.kt` is a **self-managed** `ConnectionService` (API 26+; no-op on
+      23–25) placed via `TelecomManager.placeCall`, relaying `onDisconnect`/
+      `onCallAudioStateChanged` through a bridge singleton. `VoiceSession` starts/ends the call
+      across connect/teardown, hangs up on a system end, mirrors a system mute onto the mic, and
+      pushes app mutes back (with an echo guard). Distinct from the interruption handling above
+      (being interrupted *by* a call). *Native Swift/Kotlin compile + behavior is device-verify
+      pending* (no Android SDK / device in dev); the Dart layer is analyzed + unit-tested.
 - **Acceptance:** ⚠️ *partial.* Token server verified (live-smoked: `/healthz`, `/personas`,
-      `POST /token` mint a valid JWT). Server now **188 tests green** (+ the streaming
-      `on_sentence` tap and the transcript-publisher); ruff + mypy clean. Flutter client
-      **statically verified** — `flutter analyze` clean, `flutter test` green (**27 tests**:
-      token client + models, the pure `sessionStatusLabel`, mic-mode/PTT transitions on a
-      room-less `VoiceSession`, the audio-event parser, and the interruption/route handler). The
-      interruption/route platform-channel layer (iOS + Android native monitors → Dart) is written
-      but its native compile/behavior is **build/device-pending** (no Android SDK/device in dev).
-      **Pending (device-only):** the full spoken conversation from a real **iPhone + Android
-      device** to the server — rides the same open LiveKit-server step as M3/M4/M5 — plus native
-      **CallKit/ConnectionService** (presenting the session as a system call).
+      `POST /token` mint a valid JWT). Server **188 tests green** (the streaming `on_sentence` tap
+      and the transcript-publisher); ruff + mypy clean. Flutter client **statically verified** —
+      `flutter analyze` clean, `flutter test` green (**37 tests**: token client + models, the pure
+      `sessionStatusLabel`, mic-mode/PTT transitions on a room-less `VoiceSession`, the audio-event
+      + call-control parsers, the interruption/route handler, and the system-call behavior with a
+      fake controller). Both platform-channel layers — interruption/route (audio session) and
+      telephony (CallKit/ConnectionService) — are written, with **native compile/behavior
+      build/device-pending** (no Android SDK/device in dev); the Dart sides are fully analyzed +
+      tested. **Pending (device-only):** the full spoken conversation from a real **iPhone +
+      Android device** to the server, which also exercises/tunes the native audio-session +
+      CallKit/ConnectionService monitors — rides the same open LiveKit-server step as M3/M4/M5.
 
 ### M7 — Persona fine-tuning (LoRA) *(≈ 1.5 weeks)*
 **Goal:** train per-persona brains beyond prompting.
