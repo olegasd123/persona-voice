@@ -23,9 +23,11 @@ llm:
       reasoning_effort: low
 
 tts:
-  # Kokoro = fast dev TTS, no cloning. Swap to f5_mlx for zero-shot voices (M5):
+  # Kokoro = fast dev TTS, no cloning. Swap to f5_mlx for zero-shot cloned voices (M5):
   #   adapter: f5_mlx
   #   model: lucasnewman/f5-tts-mlx   (needs `pip install -e '.[clone-mac]'`)
+  # A clone assigned to a persona (e.g. female01 -> companion) speaks only on f5_mlx; on
+  # kokoro the persona falls back to its registry preset.
   adapter: kokoro
   model: hexgrad/Kokoro-82M
   options:

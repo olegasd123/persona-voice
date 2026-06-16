@@ -164,7 +164,30 @@ def test_f5_kwargs_with_and_without_sample() -> None:
         "hi", VoiceRef(id="v", sample_path="/s/v.wav", ref_text="ref"), model="m"
     )
     assert cloned["ref_audio_path"] == "/s/v.wav"
-    assert cloned["ref_text"] == "ref"
+    assert cloned["ref_audio_text"] == "ref"  # f5_tts_mlx names it ref_audio_text
+
+
+def test_f5_ref_at_24k_resamples_when_needed(tmp_path: Path) -> None:
+    np = pytest.importorskip("numpy")
+    pytest.importorskip("soundfile")
+    from personavoice.adapters.tts.f5_mlx import _F5_REF_RATE, F5MLXTTS
+    from personavoice.audio import decode_wav, encode_wav
+
+    adapter = F5MLXTTS()
+    # 44.1 kHz reference → resampled to a 24 kHz temp file f5 will accept.
+    ref = tmp_path / "ref.wav"
+    ref.write_bytes(encode_wav(np.zeros(44100, dtype=np.float32), 44100))
+    out, tmp = adapter._ref_at_24k(str(ref))
+    assert tmp is not None and out == tmp
+    _, sr = decode_wav(Path(out).read_bytes())
+    assert sr == _F5_REF_RATE
+
+    # Already 24 kHz → passed through unchanged (no temp file to clean up).
+    ref24 = tmp_path / "ref24.wav"
+    ref24.write_bytes(encode_wav(np.zeros(24000, dtype=np.float32), 24000))
+    assert adapter._ref_at_24k(str(ref24)) == (str(ref24), None)
+    # No sample → nothing to do.
+    assert adapter._ref_at_24k(None) == (None, None)
 
 
 # --------------------------------------------------------------------------------------

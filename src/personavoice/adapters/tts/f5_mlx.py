@@ -24,6 +24,8 @@ from .base import TTSAdapter
 
 _DEFAULT_MODEL = "lucasnewman/f5-tts-mlx"
 _DEFAULT_SAMPLE_RATE = 24000
+# f5_tts_mlx requires the reference clip at exactly 24 kHz; we resample any sample to match.
+_F5_REF_RATE = 24000
 
 
 def _f5_kwargs(text: str, voice: VoiceRef, *, model: str) -> dict[str, Any]:
@@ -36,7 +38,8 @@ def _f5_kwargs(text: str, voice: VoiceRef, *, model: str) -> dict[str, Any]:
     if voice.sample_path:
         kwargs["ref_audio_path"] = voice.sample_path
         if voice.ref_text:
-            kwargs["ref_text"] = voice.ref_text
+            # f5_tts_mlx.generate names the reference transcript `ref_audio_text`.
+            kwargs["ref_audio_text"] = voice.ref_text
     return kwargs
 
 
@@ -66,6 +69,9 @@ class F5MLXTTS(TTSAdapter):
 
     def _synthesize_wav(self, text: str, voice: VoiceRef) -> bytes:
         generate = self._get_generate()
+        ref_path, tmp_ref = self._ref_at_24k(voice.sample_path)
+        if tmp_ref is not None:  # point f5 at the resampled copy
+            voice = voice.model_copy(update={"sample_path": ref_path})
         kwargs = _f5_kwargs(text, voice, model=self.model or _DEFAULT_MODEL)
         with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmp:
             out_path = Path(tmp.name)
@@ -74,8 +80,29 @@ class F5MLXTTS(TTSAdapter):
             data = out_path.read_bytes()
         finally:
             out_path.unlink(missing_ok=True)
+            if tmp_ref is not None:
+                Path(tmp_ref).unlink(missing_ok=True)
         # Normalize to our canonical WAV (decode → re-encode) so the rate is predictable.
         from ...audio import encode_wav
 
         samples, _ = decode_wav(data)
         return encode_wav(samples, self.sample_rate)
+
+    def _ref_at_24k(self, sample_path: str | None) -> tuple[str | None, str | None]:
+        """Return a 24 kHz reference path f5 will accept, resampling if needed.
+
+        Returns `(ref_path, tmp_path)`: `tmp_path` is a temp file to delete afterwards, or
+        None when the original was already 24 kHz (or there's no reference).
+        """
+        if not sample_path:
+            return sample_path, None
+        from ...audio import encode_wav, resample
+
+        samples, sr = decode_wav(Path(sample_path).read_bytes())
+        if sr == _F5_REF_RATE:
+            return sample_path, None
+        samples = resample(samples, sr, _F5_REF_RATE)
+        with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmp:
+            tmp_path = tmp.name
+        Path(tmp_path).write_bytes(encode_wav(samples, _F5_REF_RATE))
+        return tmp_path, tmp_path

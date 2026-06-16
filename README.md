@@ -21,11 +21,12 @@ it never rewrites a persona/voices YAML, is consulted at resolve time, and is on
 a backend that can actually clone (else the persona keeps its registry preset). Cloning reuses
 the cascade's STT to caption the sample for reference-text models (F5).
 
-> The cloning *system* is complete and unit-tested end-to-end (store, cloner, per-persona
-> resolution, CLI, `--check`). The **audible** clone needs a cloning backend installed
-> (`pip install -e '.[clone-mac]'` for F5 on Mac, or `'.[clone]'` for Chatterbox) — Kokoro
-> and Orpheus are preset-only. The live "speaks in the cloned voice in conversation" path
-> rides on the same open M3 LiveKit-server step. 146 tests green; ruff + mypy clean.
+> **Verified audibly on the M4 Max with F5:** a ~12 s sample → `personavoice-clone --sample …
+> --assign companion --say "…" --play` synthesized **15.4 s of speech in the cloned voice in
+> ~20 s** (the companion persona resolved to the clone via the registry). The cloning system
+> is also unit-tested end-to-end (store, cloner, per-persona resolution, CLI, `--check`) —
+> **147 tests green**; ruff + mypy clean. The live "speaks in the cloned voice in
+> conversation" path rides on the same open M3 LiveKit-server step.
 
 **M4 (done):** the four personas (PM/HR interviewer, language teacher, companion) are
 selectable at runtime and each behaves *and sounds* distinct. A **voice registry**

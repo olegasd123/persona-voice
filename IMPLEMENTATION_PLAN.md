@@ -275,15 +275,17 @@ Mark a milestone as `[Done]` when it's completed.
       rewrites persona/voices YAML). `personavoice-clone` CLI records/loads a sample, clones,
       assigns, and (`--say --play`) speaks a line in the new voice. `server --check` lists
       clones + assignments and suppresses the distinctness warning for an assigned clone.
-- **Acceptance:** ⚠️ *partial.* The cloning **system** is complete and unit-tested end-to-end
-      (sample validation, store persistence/reload, cloner + STT ref-text, per-persona
-      resolution, pipeline speaking the assigned clone, CLI, `--check`): **146 tests green** (0
-      skip in `.venv312`); ruff + mypy clean; both `BACKEND=mac|cuda server --check` PASS. The
-      **audible** clone (record a sample → hear the persona in that voice) needs a cloning
-      backend installed (`.[clone-mac]` F5 on Mac, or `.[clone]` Chatterbox) + the TTS adapter
-      switched to it; the **live-conversation** clone rides on the same open M3 LiveKit-server
-      step. Run `personavoice-clone --record 10 --name me --assign companion --say "..." --play`
-      with a cloning backend to close out the audible check.
+- **Acceptance:** ⚠️ *partial (audible clone now verified on the M4 Max).* The cloning system
+      is unit-tested end-to-end (sample validation, store persistence/reload, cloner + STT
+      ref-text, per-persona resolution, pipeline speaking the assigned clone, CLI, `--check`):
+      **147 tests green** (0 skip in `.venv312`); ruff + mypy clean; both `BACKEND=mac|cuda
+      server --check` PASS. **Verified audibly with F5 on the M4 Max:** a ~12 s female sample →
+      `personavoice-clone --sample … --assign companion --say "…" --play` synthesized **15.4 s
+      of speech in the cloned voice in ~20 s** (the companion persona resolved to the clone via
+      the registry). Two real-API fixes landed during this: f5's reference transcript kwarg is
+      `ref_audio_text` (not `ref_text`), and f5 requires the reference at **24 kHz** — the
+      adapter now resamples any sample on the fly. **Still open:** the *live-conversation* clone
+      rides on the same open M3 LiveKit-server step.
 - **→ MVP complete: a working, persona-driven, voice-cloning S2S server.**
 
 ### M6 — iPhone client *(≈ 1.5–2 weeks)*
