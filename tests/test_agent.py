@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import asyncio
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -44,6 +45,22 @@ class FakeSource:
 def test_require_livekit_raises_clean_error_without_extra() -> None:
     with pytest.raises(RuntimeError, match="livekit"):
         agent._require_livekit()
+
+
+def test_vad_event_type_prefers_agents_vad() -> None:
+    event_type = SimpleNamespace(START_OF_SPEECH=object(), END_OF_SPEECH=object())
+    agents = SimpleNamespace(vad=SimpleNamespace(VADEventType=event_type))
+    rtc = SimpleNamespace(VADEventType=object())
+
+    assert agent._vad_event_type(agents, rtc) is event_type
+
+
+def test_vad_event_type_falls_back_to_rtc() -> None:
+    event_type = SimpleNamespace(START_OF_SPEECH=object(), END_OF_SPEECH=object())
+    agents = SimpleNamespace(vad=SimpleNamespace())
+    rtc = SimpleNamespace(VADEventType=event_type)
+
+    assert agent._vad_event_type(agents, rtc) is event_type
 
 
 async def test_barge_in_interrupts_and_flushes_source(config_dir: Path) -> None:

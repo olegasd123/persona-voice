@@ -64,6 +64,15 @@ def _require_livekit() -> tuple[Any, Any, Any]:
     return agents, rtc, silero
 
 
+def _vad_event_type(agents: Any, rtc: Any) -> Any:
+    """Return the VAD event enum across LiveKit SDK versions."""
+    agents_vad = getattr(agents, "vad", None)
+    event_type = getattr(agents_vad, "VADEventType", None) or getattr(rtc, "VADEventType", None)
+    if event_type is None:
+        raise RuntimeError("LiveKit VAD event type is unavailable; update livekit-agents")
+    return event_type
+
+
 class PersonaAgent:
     """Drives one participant's conversation: VAD → STT → streaming reply, with barge-in.
 
@@ -146,7 +155,8 @@ class PersonaAgent:
 
 async def _consume_track(agent: PersonaAgent, track: Any, silero: Any) -> None:
     """Run VAD over a participant's audio track and feed utterances to the agent."""
-    _, rtc, _ = _require_livekit()
+    agents, rtc, _ = _require_livekit()
+    vad_event_type = _vad_event_type(agents, rtc)
     vad = silero.VAD.load()
     vad_stream = vad.stream()
     audio_stream = rtc.AudioStream(track)
@@ -158,9 +168,9 @@ async def _consume_track(agent: PersonaAgent, track: Any, silero: Any) -> None:
     pump = asyncio.create_task(_pump_frames())
     try:
         async for ev in vad_stream:
-            if ev.type == rtc.VADEventType.START_OF_SPEECH:
+            if ev.type == vad_event_type.START_OF_SPEECH:
                 agent.on_user_speech_started()
-            elif ev.type == rtc.VADEventType.END_OF_SPEECH:
+            elif ev.type == vad_event_type.END_OF_SPEECH:
                 # `ev.frames` holds the buffered speech; concatenate to one PCM utterance.
                 pcm = b"".join(bytes(f.data) for f in ev.frames)
                 sr = ev.frames[0].sample_rate if ev.frames else 16000
