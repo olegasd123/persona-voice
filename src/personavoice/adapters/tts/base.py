@@ -26,9 +26,19 @@ class TTSAdapter:
         self.model = model
         self.options = options or {}
 
-    def stream_tts(self, text: AsyncIterator[str], voice: VoiceRef) -> AsyncIterator[bytes]:
-        """Yield audio chunks as text streams in. Real backends are async generators."""
-        raise NotImplementedError(f"{self.name}.stream_tts is not implemented yet")
+    async def stream_tts(self, text: AsyncIterator[str], voice: VoiceRef) -> AsyncIterator[bytes]:
+        """Yield one WAV chunk per incoming text chunk (M3 streaming).
+
+        The default synthesizes each sentence-sized chunk as it arrives, so the first
+        sentence can be spoken while the LLM is still generating the rest of the reply.
+        Backends with a native token/audio stream may override this for finer-grained
+        output; delegating to `synthesize` is correct for all current backends.
+        """
+        async for chunk in text:
+            chunk = chunk.strip()
+            if not chunk:
+                continue
+            yield await self.synthesize(chunk, voice)
 
     async def synthesize(self, text: str, voice: VoiceRef) -> bytes:
         """Convenience one-shot synthesis (used by the file-based M1 pipeline)."""

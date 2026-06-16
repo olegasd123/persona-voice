@@ -66,6 +66,11 @@ def main(argv: list[str] | None = None) -> int:
         help="validate config and load (stub) adapters, then exit",
     )
     parser.add_argument(
+        "--serve",
+        action="store_true",
+        help="run the live LiveKit streaming agent (M3); needs the `livekit` extra",
+    )
+    parser.add_argument(
         "--backend",
         choices=("mac", "cuda"),
         default=None,
@@ -87,8 +92,19 @@ def main(argv: list[str] | None = None) -> int:
         _print_report(report, settings, use_color=use_color)
         return 0 if report.ok else 1
 
-    # No subcommand yet: the live server arrives in M3. Point the user at --check.
-    print("Nothing to run yet. Use `--check` to validate config (the live server lands in M3).")
+    if args.serve:
+        # The LiveKit worker takes over argv/lifecycle, so import lazily and hand off.
+        from ..orchestrator import agent
+
+        print(f"Starting LiveKit streaming agent (backend={settings.backend})...")
+        try:
+            agent.run()
+        except RuntimeError as exc:  # e.g. the `livekit` extra isn't installed
+            print(_c("ERROR", _RED, use_color=use_color), exc)
+            return 2
+        return 0
+
+    parser.print_help()
     return 0
 
 

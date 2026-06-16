@@ -27,16 +27,25 @@ class FakeSTT(STTAdapter):
 class FakeLLM(LLMAdapter):
     name = "fake_llm"
 
-    def __init__(self, reply: str = "a generic reply") -> None:
+    def __init__(self, reply: str = "a generic reply", *, tokens: list[str] | None = None) -> None:
         super().__init__()
         self._reply = reply
+        # When `tokens` is given, stream exactly those (lets tests control chunk shape and
+        # use a sentinel to assert mid-stream cancellation); otherwise split `reply` in two.
+        self._tokens = tokens
         self.last_messages: list[Msg] | None = None
+        self.completed = False  # set True only if the stream runs to exhaustion
 
     async def stream_chat(self, messages: list[Msg], persona: Persona) -> AsyncIterator[str]:
         self.last_messages = list(messages)
-        mid = len(self._reply) // 2  # yield in two chunks to exercise stream->collect
-        yield self._reply[:mid]
-        yield self._reply[mid:]
+        if self._tokens is not None:
+            for tok in self._tokens:
+                yield tok
+        else:
+            mid = len(self._reply) // 2  # yield in two chunks to exercise stream->collect
+            yield self._reply[:mid]
+            yield self._reply[mid:]
+        self.completed = True
 
 
 class FakeTTS(TTSAdapter):
@@ -47,10 +56,12 @@ class FakeTTS(TTSAdapter):
         super().__init__()
         self.last_text: str | None = None
         self.last_voice: VoiceRef | None = None
+        self.chunks: list[str] = []  # every text chunk synthesized (streaming uses many)
 
     async def synthesize(self, text: str, voice: VoiceRef) -> bytes:
         self.last_text = text
         self.last_voice = voice
+        self.chunks.append(text)
         return b"RIFF" + text.encode()  # fake "wav" bytes that carry the reply text
 
 

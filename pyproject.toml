@@ -62,6 +62,8 @@ dev = [
 [project.scripts]
 personavoice = "personavoice.server.__main__:main"
 personavoice-demo = "personavoice.orchestrator.demo:main"
+personavoice-stream-demo = "personavoice.orchestrator.stream_demo:main"
+personavoice-agent = "personavoice.orchestrator.agent:run"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/personavoice"]

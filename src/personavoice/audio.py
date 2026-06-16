@@ -85,6 +85,26 @@ def resample(audio: np.ndarray, sr_in: int, sr_out: int) -> np.ndarray:
     return np.interp(dst_idx, src_idx, audio).astype(np.float32)
 
 
+def wav_to_pcm16(data: bytes, target_sr: int) -> bytes:
+    """Decode WAV bytes to mono 16-bit little-endian PCM at `target_sr`.
+
+    This is the raw frame format LiveKit's `rtc.AudioFrame` carries, so the streaming
+    agent (M3) uses it to push TTS audio onto the WebRTC track.
+    """
+    np = _require_numpy()
+    samples, sr = decode_wav(data)
+    samples = resample(samples, sr, target_sr)
+    samples = np.clip(samples, -1.0, 1.0)
+    return (samples * 32767.0).round().astype("<i2").tobytes()
+
+
+def pcm16_to_wav(data: bytes, sample_rate: int) -> bytes:
+    """Encode mono 16-bit little-endian PCM to WAV bytes (e.g. a VAD-buffered utterance)."""
+    np = _require_numpy()
+    samples = np.frombuffer(data, dtype="<i2").astype(np.float32) / 32768.0
+    return encode_wav(samples, sample_rate)
+
+
 def read_wav_file(path: str | Path) -> bytes:
     return Path(path).read_bytes()
 

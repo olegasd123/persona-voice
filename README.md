@@ -12,15 +12,24 @@ See [IMPLEMENTATION_PLAN.md](IMPLEMENTATION_PLAN.md) for the full design and mil
 
 ## Status
 
-Current milestone: **M2 — Backend parity (Mac ↔ CUDA) ✅ done**. The CUDA cascade is now
-implemented alongside the Mac one: `faster_whisper` / `parakeet` (STT), `vllm` (LLM,
-OpenAI-compatible — it shares the streaming path with `lmstudio`), and `orpheus` /
-`chatterbox` (TTS). A `docker-compose.yml` brings up the vLLM server plus the persona-voice
-server on the 4080, and `scripts/bench_latency.py` reports per-stage timings on either
-machine.
+Current milestone: **M3 — Real-time orchestration & streaming (partial)**. The reply now
+**streams**: LLM tokens are chunked into sentences (`orchestrator/chunker.py`) and spoken as
+they're generated, so the persona starts talking before the full reply exists. A
+`TurnController` (`orchestrator/turn.py`) makes **barge-in** one cancellable task, and the
+**LiveKit agent** (`orchestrator/agent.py`, lazy-imported behind the `livekit` extra) wires
+WebRTC transport + Silero VAD endpointing + barge-in. `personavoice-stream-demo` runs the
+streaming loop on the Mac without LiveKit.
 
-> The CUDA code is complete, lazy-imported, and unit-tested at the logic level on the Mac;
-> the end-to-end run **on the 4080** is pending access to the GPU box.
+> Streaming is verified e2e on the M4 Max — a spoken question streamed back as 11 sentence
+> wavs, warm **first_token 0.76 s · first_audio 5.44 s · total 8.95 s** (speech starts at
+> 5.44 s while the rest generates). The live **browser/LiveKit** back-and-forth + barge-in
+> need a running LiveKit server (and the 4080 for the ≤900 ms first-audio budget) — that's
+> the open M3 step, analogous to M2's on-4080 run.
+
+**M2 (done):** the CUDA cascade mirrors the Mac one — `faster_whisper` / `parakeet` (STT),
+`vllm` (LLM, OpenAI-compatible, sharing the streaming path with `lmstudio`), `orpheus` /
+`chatterbox` (TTS), with `docker-compose.yml` (vLLM + server) and `scripts/bench_latency.py`.
+Code-complete, lazy-imported, unit-tested on the Mac; the on-4080 run is pending the GPU box.
 
 **M1 (done):** the Mac backend runs end-to-end — `whisper_mlx` (STT), `lmstudio` / `ollama`
 (LLM), `kokoro` (TTS) wired through a turn-based `pipeline` and the `personavoice-demo` CLI
@@ -81,13 +90,46 @@ personavoice-demo --record 5 --persona language_teacher --play
 ```
 
 It prints the transcript, the persona's reply, and per-stage timings, and writes the spoken
-reply to `reply.wav` (override with `--out`). Streaming, barge-in, and the live LiveKit
-server arrive in M3.
+reply to `reply.wav` (override with `--out`). For the streaming version (and barge-in / the
+live LiveKit server), see **Streaming voice loop (M3)** below.
 
 > **Reasoning models:** local models like Qwen3 / gpt-oss emit a hidden thinking trace
 > (`reasoning_content`) that the adapter never speaks. Keep it short with
 > `extra_body: {reasoning_effort: low}` (already set in `mac.yaml`) so replies start fast and
 > don't exhaust `max_tokens` before producing any spoken content.
+
+## Streaming voice loop (M3)
+
+Same cascade, but the reply is **streamed sentence-by-sentence** instead of waiting for the
+whole thing. Run it on the Mac with no LiveKit server:
+
+```bash
+# Speak into a wav; hear each sentence as soon as it's synthesized.
+personavoice-stream-demo --wav question.wav --persona companion --play
+personavoice-stream-demo --record 5 --persona language_teacher --play
+```
+
+It writes one wav per sentence to `reply_stream/` and prints **time-to-first-token** and
+**time-to-first-audio** (the perceived latency — when speech starts), which on the M4 Max is
+well below the turn-based total because TTS overlaps LLM generation.
+
+### Live LiveKit agent
+
+For a live, barge-in conversation over WebRTC, run the LiveKit Agents worker. It needs the
+`livekit` extra and a LiveKit server (cloud or self-hosted):
+
+```bash
+pip install -e '.[livekit]'          # livekit-agents + Silero VAD plugin
+# Set LIVEKIT_URL / LIVEKIT_API_KEY / LIVEKIT_API_SECRET in .env, then:
+personavoice --serve                 # production worker (BACKEND from env)
+personavoice-agent dev               # hot-reload dev worker
+```
+
+The agent (`orchestrator/agent.py`) uses Silero VAD to endpoint each utterance, transcribes
+it, and streams the persona's reply onto the published audio track; when VAD detects the
+user starting to speak, `TurnController` cancels the in-flight LLM+TTS and flushes the queue
+(**barge-in**). Connect any LiveKit client (the [Agents Playground](https://agents-playground.livekit.io/)
+or the iOS app in M6) to converse. This live run is the open M3 acceptance step.
 
 ## Run on the 4080 (CUDA, M2)
 
@@ -122,8 +164,8 @@ python scripts/bench_latency.py --backend mac  --wav question.wav --runs 5
 python scripts/bench_latency.py --backend cuda --wav question.wav --runs 5 --json cuda.json
 ```
 
-These are full-stage, turn-based wall times — not the streaming "time to first audio" budget
-(that arrives with the streaming pipeline in M3).
+These are full-stage, turn-based wall times. For the streaming "time to first audio", use
+`personavoice-stream-demo` (see **Streaming voice loop (M3)**), which reports it directly.
 
 ## Layout
 
@@ -135,8 +177,9 @@ src/personavoice/
   models.py                  # Persona, VoiceRef, Transcript, Msg, configs
   adapters/                  # stt/ llm/ tts/ — base classes + per-backend impls + factory
   persona/                   # loader, prompt builder, registry
-  server/                    # settings, config loading, `--check` entrypoint
-  orchestrator/ memory/ voice/   # filled in M1/M3, M8, M5/M9
+  server/                    # settings, config loading, `--check` / `--serve` entrypoint
+  orchestrator/              # pipeline (M1) + chunker/streaming/turn/agent (M3 streaming)
+  memory/ voice/             # filled in M8, M5/M9
 scripts/
   download_models.py         # pinned model manifest + downloader
   bench_latency.py           # per-stage latency benchmark (mac/cuda)

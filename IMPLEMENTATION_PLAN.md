@@ -207,13 +207,33 @@ Mark a milestone as `[Done]` when it's completed.
   - `cuda.yaml`'s LLM `model` must match the id vLLM serves (incl. the `-AWQ` suffix);
     `quantization`/`max-model-len` are vLLM *server* flags, set in `docker-compose.yml`.
 
-### M3 — Real-time orchestration & streaming *(≈ 1.5 weeks)*
+### M3 — Real-time orchestration & streaming *(≈ 1.5 weeks)* `[Partial]`
 **Goal:** live, low-latency, turn-based conversation with streaming + barge-in.
-- [ ] Integrate **LiveKit Agents**: WebRTC transport, Silero VAD, turn detection.
-- [ ] Streaming STT (partials), token→sentence chunker feeding streaming TTS.
-- [ ] Barge-in: cancel in-flight TTS/LLM when user starts speaking.
-- [ ] Hit latency budget (≤ ~900 ms to first audio on 4080).
-- **Acceptance:** a browser/LiveKit test client holds a natural spoken back-and-forth; barge-in works.
+- [x] Integrate **LiveKit Agents**: WebRTC transport, Silero VAD endpointing, barge-in
+      (`orchestrator/agent.py`). LiveKit + plugins are lazy-imported (the `livekit` extra),
+      so `--check`/tests/demos never need them. Launch with `personavoice --serve` (or
+      `personavoice-agent dev`).
+- [x] Token→sentence chunker (`orchestrator/chunker.py`) feeding streaming TTS: the base
+      `stream_tts` now speaks each sentence as it's generated, so every backend streams for
+      free on top of its one-shot `synthesize`. STT-in is VAD-segmented per utterance
+      (Whisper isn't a partial-decoding model), then transcribed — true partials deferred.
+- [x] Barge-in: `orchestrator/turn.py` `TurnController` drives the response as one
+      cancellable task; VAD speech-start cancels in-flight LLM+TTS and flushes the output
+      queue. Cancellation semantics are unit-tested with fakes.
+- [x] `StreamingPipeline` (`orchestrator/streaming.py`) + `personavoice-stream-demo`: a
+      runnable Mac streaming loop (no LiveKit needed) that synthesizes/plays the reply
+      sentence-by-sentence and reports time-to-first-token / time-to-first-audio.
+- [ ] Hit latency budget (≤ ~900 ms to first audio on 4080) — needs the GPU box (vLLM TTFT
+      + fast TTS); measure with the live agent there.
+- **Acceptance:** ⚠️ *partial.* Streaming verified e2e on the M4 Max: a spoken question →
+  Whisper transcript → gpt-oss-20b reply **streamed as 11 sentence wavs** with **warm
+  first_token 0.76 s · first_audio 5.44 s · total 8.95 s** — the persona starts speaking at
+  5.44 s while the rest of the reply is still being generated (a turn-based loop emits no
+  audio until the whole reply is generated *and* synthesized). 90 tests green (5 numpy/
+  soundfile tests skip in the light dev env); ruff + mypy clean. **Pending:** the live
+  browser/LiveKit back-and-forth + barge-in need a running
+  LiveKit server (and the 4080 for the latency budget) — `personavoice --serve` against a
+  LiveKit instance closes this out, the analog of M2's on-4080 step.
 
 ### M4 — Persona system *(≈ 1 week)*
 **Goal:** the four personas, selectable at runtime.

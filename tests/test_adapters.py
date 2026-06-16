@@ -9,6 +9,7 @@ from personavoice.adapters.factory import (
     build_backend,
 )
 from personavoice.adapters.protocols import LLMProtocol, STTProtocol, TTSProtocol
+from personavoice.adapters.tts.base import TTSAdapter
 from personavoice.models import BackendConfig, StageConfig, VoiceRef
 
 
@@ -43,14 +44,29 @@ def test_factory_rejects_unknown_adapter() -> None:
 
 
 @pytest.mark.parametrize("backend", ["mac", "cuda"])
-def test_streaming_not_implemented_until_m3(backend: str) -> None:
-    # Turn-based transcribe/synthesize land in M1/M2; live streaming arrives in M3, so the
-    # base streaming methods must still fail loudly on every backend.
+def test_stt_stream_is_not_used_directly(backend: str) -> None:
+    # Live STT endpointing is VAD-driven in the M3 agent, not the base `stream`, which
+    # stays unimplemented and must fail loudly if called.
     be = build_backend(_backend_config(backend))
     with pytest.raises(NotImplementedError):
         be.stt.stream(iter(()))  # type: ignore[arg-type]
-    with pytest.raises(NotImplementedError):
-        be.tts.stream_tts(iter(()), VoiceRef(id="x"))  # type: ignore[arg-type]
+
+
+async def test_tts_stream_tts_default_synthesizes_each_chunk() -> None:
+    # M3: the base `stream_tts` default speaks each sentence chunk as it arrives (skipping
+    # blanks), so every backend gets streaming for free on top of its one-shot synthesize.
+    class _OneShotTTS(TTSAdapter):
+        name = "oneshot"
+
+        async def synthesize(self, text: str, voice: VoiceRef) -> bytes:
+            return b"<" + text.encode() + b">"
+
+    async def chunks():
+        for c in ["First.", "   ", "Second."]:
+            yield c
+
+    out = [b async for b in _OneShotTTS().stream_tts(chunks(), VoiceRef(id="x"))]
+    assert out == [b"<First.>", b"<Second.>"]
 
 
 def test_cuda_adapters_are_implemented() -> None:

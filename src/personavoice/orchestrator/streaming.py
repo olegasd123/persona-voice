@@ -1,0 +1,95 @@
+"""Streaming STT → LLM → TTS pipeline (M3).
+
+The M1 `Pipeline` waits for the whole reply before speaking; this streaming variant pipes
+LLM tokens into the sentence chunker and on into TTS, so audio starts as soon as the first
+sentence is ready. That's the core of "stream everything": it cuts *perceived* latency
+even though total compute is unchanged.
+
+    user text ──▶ LLM.stream_chat ──▶ stream_sentences ──▶ TTS.stream_tts ──▶ wav chunks
+                       │ (tokens)            │ (sentences)         │ (audio)
+
+It depends only on the adapter base classes, so it runs with the real backend or with the
+test fakes. STT-in is handled upstream (by LiveKit VAD in `agent.py`, or by a one-shot
+`transcribe` in the demo); `stream_response` takes already-transcribed user text.
+"""
+
+from __future__ import annotations
+
+import time
+from collections.abc import AsyncIterator
+from dataclasses import dataclass
+
+from ..adapters.factory import Backend
+from ..models import Msg, Persona, Role
+from ..persona.prompt import build_messages
+from .chunker import stream_sentences
+from .pipeline import voice_ref_for
+
+
+@dataclass
+class StreamMetrics:
+    """Latency landmarks for one streamed response (seconds from turn start)."""
+
+    first_token: float | None = None  # time to the LLM's first token
+    first_audio: float | None = None  # time to the first audio chunk (perceived latency)
+    total: float | None = None  # time to finish speaking the whole reply
+    reply: str = ""  # the full reply text, assembled from the token stream
+
+
+class StreamingPipeline:
+    """Runs one persona conversation, streaming each reply sentence-by-sentence.
+
+    Keeps an in-memory `history` like the M1 pipeline so multi-turn sessions have context.
+    `stream_response` is a cancellable async generator: cancelling the task that drives it
+    (see `TurnController`) tears down the in-flight LLM and TTS streams for barge-in.
+    """
+
+    def __init__(self, backend: Backend, persona: Persona) -> None:
+        self.backend = backend
+        self.persona = persona
+        self.history: list[Msg] = []
+
+    async def stream_response(
+        self,
+        user_text: str,
+        *,
+        history: list[Msg] | None = None,
+        metrics: StreamMetrics | None = None,
+    ) -> AsyncIterator[bytes]:
+        """Yield WAV audio chunks for the persona's reply to `user_text`.
+
+        Records latency landmarks into `metrics` (if given) and appends the user turn and
+        full reply to `self.history` when using the internal history.
+        """
+        use_internal = history is None
+        history = self.history if use_internal else history
+
+        messages = build_messages(self.persona, history=history, user_input=user_text)
+        voice = voice_ref_for(self.persona, self.backend)
+        collected: list[str] = []
+        t0 = time.perf_counter()
+
+        async def _tokens() -> AsyncIterator[str]:
+            async for tok in self.backend.llm.stream_chat(messages, self.persona):
+                if metrics is not None and metrics.first_token is None:
+                    metrics.first_token = time.perf_counter() - t0
+                collected.append(tok)
+                yield tok
+
+        sentences = stream_sentences(_tokens())
+        try:
+            async for audio in self.backend.tts.stream_tts(sentences, voice):
+                if metrics is not None and metrics.first_audio is None:
+                    metrics.first_audio = time.perf_counter() - t0
+                yield audio
+        finally:
+            # Runs on normal completion *and* on cancellation (barge-in): record what we
+            # produced and commit the (possibly partial) reply to history so context stays
+            # consistent with what the user actually heard.
+            reply = "".join(collected).strip()
+            if metrics is not None:
+                metrics.total = time.perf_counter() - t0
+                metrics.reply = reply
+            if use_internal:
+                self.history.append(Msg(role=Role.user, content=user_text))
+                self.history.append(Msg(role=Role.assistant, content=reply))
