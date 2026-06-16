@@ -39,5 +39,15 @@ end
 post_install do |installer|
   installer.pods_project.targets.each do |target|
     flutter_additional_ios_build_settings(target)
+
+    # permission_handler gates each permission's native code behind a compile-time macro.
+    # Under CocoaPods the plugin's podspec sets no defaults (they live only in its
+    # Package.swift, used by SPM), so without this the microphone code is compiled out and
+    # `Permission.microphone.request()` returns `denied` immediately, never prompting iOS.
+    # Enable the permissions this app actually uses.
+    target.build_configurations.each do |config|
+      config.build_settings['GCC_PREPROCESSOR_DEFINITIONS'] ||= ['$(inherited)']
+      config.build_settings['GCC_PREPROCESSOR_DEFINITIONS'] << 'PERMISSION_MICROPHONE=1'
+    end
   end
 end
