@@ -33,13 +33,16 @@ def voice_ref_for(
 ) -> VoiceRef:
     """Build the VoiceRef a persona should speak with on the active backend.
 
-    With a `voices` registry, the persona's logical voice ref resolves to a backend-native
-    preset so personas sound distinct; without one, the raw ref is passed through (adapters
-    then fall back to their default voice).
+    With a `voices` registry, a clone assigned to this persona (M5) wins on a cloning
+    backend; otherwise the persona's logical voice ref resolves to a backend-native preset so
+    personas sound distinct. Without a registry, the raw ref is passed through (adapters then
+    fall back to their default voice).
     """
     if voices is not None:
-        return voices.resolve(
-            persona.voice.ref, backend.tts.name, default_emotion=persona.voice.emotion
+        return voices.resolve_for_persona(
+            persona,
+            backend.tts.name,
+            supports_cloning=getattr(backend.tts, "supports_cloning", False),
         )
     return VoiceRef(
         id=persona.voice.ref,

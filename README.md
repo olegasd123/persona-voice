@@ -12,16 +12,30 @@ See [IMPLEMENTATION_PLAN.md](IMPLEMENTATION_PLAN.md) for the full design and mil
 
 ## Status
 
-Current milestone: **M4 — Persona system (done)**. The four personas (PM/HR interviewer,
-language teacher, companion) are selectable at runtime and each behaves *and sounds*
-distinct. A **voice registry** (`config/voices.yaml`, `voice/registry.py`) maps each
-persona's logical voice to a backend-native preset, so on the Mac they speak as
-`af_heart` / `af_sarah` / `af_nicole` / `am_michael` (verified: four distinct Kokoro voices),
-and on the 4080 as Orpheus presets. The LiveKit agent **selects the persona** from job/room
-metadata (`{"persona": "hr_interviewer"}`) or `PERSONAVOICE_PERSONA`, and a client can
-**hot-swap** the persona mid-call via a data message — the registry hot-reloads so edited
-persona files take effect without a restart. `temperature` / `turn_style` are wired through
-to the LLM and prompt.
+Current milestone: **M5 — Voice cloning (partial)**. A voice is cloned **zero-shot** from a
+~10 s sample and assigned to a persona, so the persona speaks in that voice everywhere (demos
++ live agent). `personavoice-clone` records/loads a sample, runs it through the cloning
+backend (`f5_mlx` on Mac, `chatterbox` on CUDA), stores it under the clones dir, and assigns
+it to a persona. Assignment is a **non-destructive overlay** (`voice/clone.py` `ClonesStore`):
+it never rewrites a persona/voices YAML, is consulted at resolve time, and is only honored on
+a backend that can actually clone (else the persona keeps its registry preset). Cloning reuses
+the cascade's STT to caption the sample for reference-text models (F5).
+
+> The cloning *system* is complete and unit-tested end-to-end (store, cloner, per-persona
+> resolution, CLI, `--check`). The **audible** clone needs a cloning backend installed
+> (`pip install -e '.[clone-mac]'` for F5 on Mac, or `'.[clone]'` for Chatterbox) — Kokoro
+> and Orpheus are preset-only. The live "speaks in the cloned voice in conversation" path
+> rides on the same open M3 LiveKit-server step. 146 tests green; ruff + mypy clean.
+
+**M4 (done):** the four personas (PM/HR interviewer, language teacher, companion) are
+selectable at runtime and each behaves *and sounds* distinct. A **voice registry**
+(`config/voices.yaml`, `voice/registry.py`) maps each persona's logical voice to a
+backend-native preset, so on the Mac they speak as `af_heart` / `af_sarah` / `af_nicole` /
+`am_michael` (verified: four distinct Kokoro voices), and on the 4080 as Orpheus presets. The
+LiveKit agent **selects the persona** from job/room metadata (`{"persona": "hr_interviewer"}`)
+or `PERSONAVOICE_PERSONA`, and a client can **hot-swap** the persona mid-call via a data
+message — the registry hot-reloads so edited persona files take effect without a restart.
+`temperature` / `turn_style` are wired through to the LLM and prompt.
 
 **M3 (partial):** the reply **streams** — LLM tokens are chunked into sentences
 (`orchestrator/chunker.py`) and spoken as they're generated, so the persona starts talking
@@ -161,10 +175,10 @@ pm_calm:
   presets: { kokoro: am_michael, orpheus: leo }
 ```
 
-A clone-only backend (Chatterbox/F5) has no preset and falls back to its default voice until
-M5 wires zero-shot cloning (which will use a `sample:` per voice). `python -m
-personavoice.server --check` lists the loaded personas and voices and warns if a persona
-won't sound distinct on the active backend.
+A cloning backend (Chatterbox/F5) has no preset and falls back to its default voice unless a
+**clone is assigned** to the persona (see **Voice cloning** below). `python -m
+personavoice.server --check` lists the loaded personas, voices, and clones, and warns if a
+persona won't sound distinct on the active backend.
 
 **Selecting a persona on the live agent.** The LiveKit agent picks the persona from, in
 priority order: the dispatch's job metadata, the room metadata
@@ -173,6 +187,38 @@ registered persona). A connected client can also **switch persona mid-call** by 
 data message — a bare id (`hr_interviewer`) or `{"persona": "hr_interviewer"}`. The swap
 keeps the conversation history, and the persona registry reloads from disk first, so editing
 a persona file takes effect without restarting the worker.
+
+## Voice cloning (M5)
+
+Clone a voice **zero-shot** from a short sample and make a persona speak in it. Cloning needs
+a cloning TTS backend — `f5_mlx` on Mac or `chatterbox` on CUDA (Kokoro and Orpheus are
+preset-only):
+
+```bash
+# Install a cloning backend (one-time):
+pip install -e '.[clone-mac]'        # F5-TTS-mlx (Apple Silicon; CC-BY-NC weights)
+#   ...or, cross-platform / CUDA:  pip install -e '.[clone]'   # Chatterbox (MIT)
+# Then set the TTS adapter to the cloning backend in config/backends/<backend>.yaml
+# (mac: adapter: f5_mlx;  cuda: adapter: chatterbox).
+
+# Clone from a wav (or --record 10 from the mic) and assign it to a persona:
+personavoice-clone --sample me.wav --name my_voice --assign companion
+personavoice-clone --record 10 --name my_voice --assign companion --say "Hello!" --play
+
+personavoice-clone --list             # cloned voices + their assignments
+personavoice-clone --unassign companion
+```
+
+A clone is a stored reference sample plus, for reference-text models (F5), its transcript
+(auto-filled by the cascade's STT). It lands under the clones dir (`PERSONAVOICE_CLONES_DIR`,
+default `<models>/clones`) with a `clones.json` manifest, so it **survives restarts** and the
+live agent picks it up at startup. Assigning a clone is non-destructive — it overlays the
+voice registry at resolve time and is only honored on a backend that can clone, so switching
+back to Kokoro/Orpheus simply restores the persona's preset voice.
+
+> **Licensing:** F5's default checkpoint has **CC-BY-NC** weights (non-commercial) — fine for
+> Mac dev. For anything redistributed, clone with **Chatterbox** (MIT) on CUDA. See
+> **Models & licenses**.
 
 ## Run on the 4080 (CUDA, M2)
 
@@ -221,7 +267,7 @@ src/personavoice/
   models.py                  # Persona, VoiceRef, VoiceDef, Transcript, Msg, configs
   adapters/                  # stt/ llm/ tts/ — base classes + per-backend impls + factory
   persona/                   # loader, prompt builder, registry
-  voice/                     # voice registry (M4); zero-shot cloning in M5
+  voice/                     # voice registry (M4) + zero-shot cloning (M5) + `personavoice-clone`
   server/                    # settings, config loading, `--check` / `--serve` entrypoint
   orchestrator/              # pipeline (M1) + chunker/streaming/turn/agent (M3 streaming)
   memory/                    # filled in M8
@@ -239,7 +285,7 @@ tests/
 |-------|-----------|-------------|
 | STT   | `whisper_mlx` | `faster_whisper` / `parakeet` |
 | LLM   | `lmstudio` / `ollama` / `mlx_lm` | `vllm` |
-| TTS   | `kokoro` (fast, no clone) / `f5_mlx` (clone) | `orpheus` / `chatterbox` |
+| TTS   | `kokoro` (fast, no clone) / `f5_mlx` (clone) | `orpheus` (presets) / `chatterbox` (clone) |
 
 Select with `BACKEND=mac|cuda`. Each backend's `config/backends/<backend>.yaml` names the
 adapter, model, and per-adapter options (env interpolation via `${VAR:-default}` is

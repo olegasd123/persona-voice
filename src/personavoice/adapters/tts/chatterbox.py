@@ -1,10 +1,11 @@
 """Chatterbox TTS (CUDA; MPS on Mac) — emotion-exaggeration control, zero-shot cloning.
 
-The clean-license (MIT) alternative to Orpheus. M2 implements one-shot `synthesize`
-(text -> WAV bytes); `model.generate(text)` returns a float waveform tensor at the model's
-native sample rate (`model.sr`, 24 kHz). Zero-shot cloning via a reference sample
-(`audio_prompt_path`) lands in M5. `chatterbox` is imported lazily and the model is built
-once per adapter and cached.
+The clean-license (MIT) alternative to Orpheus, and the genuine cloning backend on CUDA.
+M2 implemented one-shot `synthesize` (text -> WAV bytes); `model.generate(text)` returns a
+float waveform tensor at the model's native sample rate (`model.sr`, 24 kHz). M5 adds
+zero-shot cloning: when the voice carries a reference sample, we pass it as
+`audio_prompt_path` so Chatterbox speaks in that voice. `chatterbox` is imported lazily and
+the model is built once per adapter and cached.
 """
 
 from __future__ import annotations
@@ -40,7 +41,9 @@ class ChatterboxTTS(TTSAdapter):
         self._model: object | None = None
 
     async def synthesize(self, text: str, voice: VoiceRef) -> bytes:
-        waveform, sample_rate = await asyncio.to_thread(self._synthesize_array, text)
+        waveform, sample_rate = await asyncio.to_thread(
+            self._synthesize_array, text, voice.sample_path
+        )
         return _waveform_to_wav(waveform, sample_rate)
 
     def _get_model(self) -> object:
@@ -55,9 +58,13 @@ class ChatterboxTTS(TTSAdapter):
             self._model = _Chatterbox.from_pretrained(device=self.options.get("device", "cuda"))
         return self._model
 
-    def _synthesize_array(self, text: str) -> tuple[Any, int]:
+    def _synthesize_array(self, text: str, sample_path: str | None = None) -> tuple[Any, int]:
         model = self._get_model()
-        waveform = model.generate(text)  # type: ignore[attr-defined]
+        # A reference sample → clone that voice; otherwise Chatterbox's built-in default.
+        if sample_path:
+            waveform = model.generate(text, audio_prompt_path=sample_path)  # type: ignore[attr-defined]
+        else:
+            waveform = model.generate(text)  # type: ignore[attr-defined]
         default_sr = self.options.get("sample_rate", _DEFAULT_SAMPLE_RATE)
         sample_rate = int(getattr(model, "sr", default_sr))
         return waveform, sample_rate

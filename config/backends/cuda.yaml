@@ -22,10 +22,10 @@ llm:
     base_url: ${VLLM_BASE_URL:-http://localhost:8000/v1}
 
 tts:
-  # Orpheus = expressive, emotion tags, zero-shot cloning, but runs its own in-process vLLM
-  # (tight on a single 4080) and inherits the Llama-3.2 license. Chatterbox (MIT, torch) is
-  # the clean-license, VRAM-friendly alternative — swap `adapter: chatterbox` for the dock-
-  # erized single-GPU stack (see docker-compose.yml).
+  # Orpheus = expressive, emotion tags (preset voices only), but runs its own in-process
+  # vLLM (tight on a single 4080) and inherits the Llama-3.2 license. Chatterbox (MIT, torch)
+  # is the clean-license, VRAM-friendly alternative AND the zero-shot cloning backend (M5) —
+  # swap `adapter: chatterbox` for the dockerized single-GPU stack (see docker-compose.yml).
   adapter: orpheus
   model: canopylabs/orpheus-3b-0.1-ft
   options:

@@ -51,6 +51,8 @@ class VoiceRef(BaseModel):
     sample_path: str | None = None
     # Cached speaker embedding / conditioning produced by `clone_voice`.
     embedding_path: str | None = None
+    # Transcript of `sample_path`, for reference-text cloning backends (e.g. F5).
+    ref_text: str | None = None
     emotion: str | None = None
     # Backend that produced/owns this voice (e.g. "kokoro", "orpheus").
     backend: str | None = None

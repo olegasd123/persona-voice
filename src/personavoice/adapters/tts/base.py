@@ -8,9 +8,14 @@ lets the orchestrator/persona layer know whether a backend can do zero-shot voic
 from __future__ import annotations
 
 from collections.abc import AsyncIterator
+from pathlib import Path
 from typing import Any
 
 from ...models import CheckResult, VoiceRef
+
+# Where clone samples land when the adapter isn't told otherwise (overridden by the
+# `clones_dir` option, which `VoiceCloner` points at its `ClonesStore` directory).
+_DEFAULT_CLONES_DIR = "models/clones"
 
 
 class TTSAdapter:
@@ -45,8 +50,25 @@ class TTSAdapter:
         raise NotImplementedError(f"{self.name}.synthesize is not implemented yet")
 
     async def clone_voice(self, sample_wav: bytes, name: str) -> VoiceRef:
-        """Create a zero-shot voice clone from a short sample (M5)."""
-        raise NotImplementedError(f"{self.name} does not support voice cloning")
+        """Create a zero-shot voice clone from a short sample (M5).
+
+        The cloning backends (Chatterbox, F5) synthesize directly from a reference WAV, so a
+        clone is the persisted sample itself: store it and return a `VoiceRef` pointing at it.
+        `synthesize` then passes `voice.sample_path` to the model as the reference. Backends
+        that can't clone (Kokoro, Orpheus presets) leave `supports_cloning=False` and reject.
+        """
+        if not self.supports_cloning:
+            raise NotImplementedError(f"{self.name} does not support voice cloning")
+        path = self._write_clone_sample(sample_wav, name)
+        return VoiceRef(id=name, name=name, sample_path=str(path), backend=self.name)
+
+    def _write_clone_sample(self, sample_wav: bytes, name: str) -> Path:
+        """Persist a clone's reference WAV under the adapter's clones directory."""
+        clones_dir = Path(self.options.get("clones_dir", _DEFAULT_CLONES_DIR)).expanduser()
+        clones_dir.mkdir(parents=True, exist_ok=True)
+        path = clones_dir / f"{name}.wav"
+        path.write_bytes(sample_wav)
+        return path
 
     def check(self) -> CheckResult:
         warnings = [] if self.implemented else ["stub adapter — implemented in a later milestone"]

@@ -259,11 +259,31 @@ Mark a milestone as `[Done]` when it's completed.
       ruff + mypy clean. The live LiveKit metadata-select / mid-call-swap path rides on the
       same open M3 step (needs a running LiveKit server).
 
-### M5 — Voice cloning (zero-shot) *(≈ 4–6 days)*
+### M5 — Voice cloning (zero-shot) *(≈ 4–6 days)* `[Partial]`
 **Goal:** clone a voice from a short sample and use it per persona.
-- [ ] `voice/clone.py` zero-shot from ~10 s sample (Orpheus/Chatterbox on CUDA, F5-mlx on Mac).
-- [ ] Voice registry + assign clones to personas.
-- **Acceptance:** record a sample → persona speaks in that voice in live conversation.
+- [x] `voice/clone.py` zero-shot from a ~10 s sample. Cloning here is **reference
+      conditioning**: the cloning TTS speaks *in the voice of* a stored reference WAV passed at
+      generation time. `Chatterbox` (CUDA, MIT) and `F5-mlx` (Mac) honor `voice.sample_path`
+      (F5 also takes `ref_text`, auto-filled by the cascade's STT); the base
+      `TTSAdapter.clone_voice` persists the sample → `VoiceRef`. **Orpheus is preset-only**
+      (`orpheus-speech`'s engine takes no reference sample), so cloning on CUDA is Chatterbox —
+      `supports_cloning=False` on Orpheus. All model libs are lazy-imported (`clone`/`clone-mac`
+      extras) so `--check`/tests run without them.
+- [x] Voice registry + assign clones to personas. `ClonesStore` (`<clones_dir>/clones.json`)
+      persists clones + **per-persona assignments**; `VoiceRegistry.resolve_for_persona` prefers
+      an assigned clone on a cloning backend, else the static preset. Non-destructive (never
+      rewrites persona/voices YAML). `personavoice-clone` CLI records/loads a sample, clones,
+      assigns, and (`--say --play`) speaks a line in the new voice. `server --check` lists
+      clones + assignments and suppresses the distinctness warning for an assigned clone.
+- **Acceptance:** ⚠️ *partial.* The cloning **system** is complete and unit-tested end-to-end
+      (sample validation, store persistence/reload, cloner + STT ref-text, per-persona
+      resolution, pipeline speaking the assigned clone, CLI, `--check`): **146 tests green** (0
+      skip in `.venv312`); ruff + mypy clean; both `BACKEND=mac|cuda server --check` PASS. The
+      **audible** clone (record a sample → hear the persona in that voice) needs a cloning
+      backend installed (`.[clone-mac]` F5 on Mac, or `.[clone]` Chatterbox) + the TTS adapter
+      switched to it; the **live-conversation** clone rides on the same open M3 LiveKit-server
+      step. Run `personavoice-clone --record 10 --name me --assign companion --say "..." --play`
+      with a cloning backend to close out the audible check.
 - **→ MVP complete: a working, persona-driven, voice-cloning S2S server.**
 
 ### M6 — iPhone client *(≈ 1.5–2 weeks)*
@@ -350,7 +370,7 @@ already isolates models so they can be exposed as HTTP/gRPC workers — but that
 
 ## 8. Open decisions (revisit as we build)
 
-- Final TTS pick for prod: **Orpheus** (expressive, emotion tags; but weights inherit the Llama-3.2 license) vs **Chatterbox** (emotion exaggeration control; clean MIT) — decide in M2/M5 after a quality+latency bake-off. License leans Chatterbox if redistribution/commercial matters. *M2 update:* both adapters are implemented; **Chatterbox is the default for the single-4080 dockerized stack** (no second in-process vLLM, fits VRAM, MIT). Orpheus stays available as the expressive option; final quality A/B in M5. Mac cloning via F5-TTS is CC-BY-NC (non-commercial) — fine for dev, not for shipping.
+- Final TTS pick for prod: **Orpheus** (expressive, emotion tags; but weights inherit the Llama-3.2 license) vs **Chatterbox** (emotion exaggeration control; clean MIT) — decide in M2/M5 after a quality+latency bake-off. License leans Chatterbox if redistribution/commercial matters. *M2 update:* both adapters are implemented; **Chatterbox is the default for the single-4080 dockerized stack** (no second in-process vLLM, fits VRAM, MIT). Orpheus stays available as the expressive option. *M5 update:* the `orpheus-speech` engine exposes **preset voices only** (no reference-sample input), so **zero-shot cloning on CUDA goes through Chatterbox** — Orpheus is now `supports_cloning=False`. This makes Chatterbox the prod default unless an expressive, non-cloned preset is wanted. Mac cloning via F5-TTS is CC-BY-NC (non-commercial) — fine for dev, not for shipping.
 - LLM base: **Qwen2.5-7B** vs **Llama-3.1-8B** — decide in M4 on persona quality.
 - Memory store: lightweight (SQLite + FAISS) vs managed vector DB — decide in M8.
 - Endpointing strategy: pure VAD vs semantic turn detection — tune in M3/M10.

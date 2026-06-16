@@ -17,6 +17,7 @@ from pydantic import ValidationError
 from .._env import expand_env_vars
 from ..models import BackendConfig, Persona
 from ..persona.loader import load_personas
+from ..voice.clone import ClonesStore
 from ..voice.registry import VoiceRegistry
 
 VALID_BACKENDS = ("mac", "cuda")
@@ -35,10 +36,12 @@ class Settings:
         backend: str,
         config_dir: Path,
         models_dir: Path,
+        clones_dir: Path | None = None,
     ) -> None:
         self.backend = backend
         self.config_dir = config_dir
         self.models_dir = models_dir
+        self._clones_dir = clones_dir
 
     @property
     def backends_dir(self) -> Path:
@@ -51,6 +54,11 @@ class Settings:
     @property
     def voices_path(self) -> Path:
         return self.config_dir / "voices.yaml"
+
+    @property
+    def clones_dir(self) -> Path:
+        """Where cloned voices + their manifest live (M5). Defaults under the models dir."""
+        return self._clones_dir or (self.models_dir / "clones")
 
     @classmethod
     def load(cls, *, backend: str | None = None, env_file: str | Path | None = ".env") -> Settings:
@@ -66,7 +74,14 @@ class Settings:
 
         config_dir = Path(os.getenv("PERSONAVOICE_CONFIG_DIR", "config")).expanduser()
         models_dir = Path(os.getenv("PERSONAVOICE_MODELS_DIR", "models")).expanduser()
-        return cls(backend=resolved, config_dir=config_dir, models_dir=models_dir)
+        clones_env = os.getenv("PERSONAVOICE_CLONES_DIR")
+        clones_dir = Path(clones_env).expanduser() if clones_env else None
+        return cls(
+            backend=resolved,
+            config_dir=config_dir,
+            models_dir=models_dir,
+            clones_dir=clones_dir,
+        )
 
 
 def load_backend_config(settings: Settings) -> BackendConfig:
@@ -92,6 +107,15 @@ def load_all_personas(settings: Settings) -> dict[str, Persona]:
     return load_personas(settings.personas_dir)
 
 
+def load_clones_store(settings: Settings) -> ClonesStore:
+    """Load the cloned-voice catalog (tolerates a missing manifest → empty store)."""
+    return ClonesStore.load(settings.clones_dir)
+
+
 def load_voice_registry(settings: Settings) -> VoiceRegistry:
-    """Load the voice registry (tolerates a missing `voices.yaml`)."""
-    return VoiceRegistry.load(settings.voices_path)
+    """Load the voice registry with the clone catalog attached (M5).
+
+    Tolerates a missing `voices.yaml` / clones manifest; the attached clones let
+    `resolve_for_persona` honor per-persona clone assignments on a cloning backend.
+    """
+    return VoiceRegistry.load(settings.voices_path, clones=load_clones_store(settings))

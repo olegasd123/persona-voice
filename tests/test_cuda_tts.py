@@ -13,7 +13,8 @@ def test_orpheus_flags() -> None:
     adapter = OrpheusTTS(model="canopylabs/orpheus-3b-0.1-ft")
     assert adapter.name == "orpheus"
     assert adapter.implemented is True
-    assert adapter.supports_cloning is True
+    # Orpheus exposes preset voices only (no reference-sample input); cloning is Chatterbox.
+    assert adapter.supports_cloning is False
     assert adapter.sample_rate == 24000
 
 

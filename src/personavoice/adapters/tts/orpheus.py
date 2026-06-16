@@ -1,13 +1,15 @@
-"""Orpheus TTS (CUDA / RTX 4080) — expressive, emotion tags, zero-shot cloning (clone in M5).
+"""Orpheus TTS (CUDA / RTX 4080) — expressive, emotion tags, preset voices.
 
 M2 implements one-shot `synthesize` (text -> WAV bytes) via the `orpheus_tts` engine, which
 runs the Orpheus LLM (vLLM-backed) and decodes its audio tokens with SNAC into a stream of
 24 kHz mono 16-bit PCM chunks. We concatenate the chunks and wrap them as WAV. The engine is
 imported lazily and built once per adapter (heavy) and cached.
 
-Orpheus ships preset voices (tara, leah, jess, leo, dan, mia, zac, zoe). A persona whose
-voice ref points at a clone (`voices/...`) falls back to the configured default preset until
-zero-shot cloning (`clone_voice`) is wired up in M5.
+Orpheus ships preset voices (tara, leah, jess, leo, dan, mia, zac, zoe), selected per
+persona by the voice registry. Its `generate_speech(prompt, voice=...)` engine takes only a
+preset name — there's no reference-sample input — so genuine zero-shot cloning (M5) goes
+through **Chatterbox** (MIT, the dockerized single-GPU default) on CUDA. Hence
+`supports_cloning = False` here; a persona assigned a clone keeps its Orpheus preset.
 """
 
 from __future__ import annotations
@@ -47,7 +49,7 @@ def _pcm16_to_wav(raw: bytes, sample_rate: int) -> bytes:
 
 class OrpheusTTS(TTSAdapter):
     name = "orpheus"
-    supports_cloning = True
+    supports_cloning = False  # preset voices only; clone via Chatterbox on CUDA (see module doc)
     implemented = True
 
     def __init__(self, *, model: str | None = None, options: dict[str, Any] | None = None) -> None:

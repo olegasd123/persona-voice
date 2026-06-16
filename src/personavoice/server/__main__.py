@@ -48,6 +48,17 @@ def _print_report(report: CheckReport, settings: Settings, *, use_color: bool) -
         print(f"Voices ({len(report.voices)}): {', '.join(report.voices)}")
         print()
 
+    if report.clones:
+        assigned = report.clone_assignments
+        # Show each clone, noting any persona it's assigned to (M5).
+        by_clone = {name: pid for pid, name in assigned.items()}
+        listed = ", ".join(
+            f"{name} -> {by_clone[name]}" if name in by_clone else name
+            for name in report.clones
+        )
+        print(f"Clones ({len(report.clones)}): {listed}")
+        print()
+
     if report.warnings:
         print("Warnings:")
         for w in report.warnings:

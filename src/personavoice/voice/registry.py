@@ -15,11 +15,15 @@ registry tolerates a missing file (returns empty) so partial configs and tests s
 from __future__ import annotations
 
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 import yaml
 from pydantic import ValidationError
 
-from ..models import VoiceDef, VoiceRef
+from ..models import Persona, VoiceDef, VoiceRef
+
+if TYPE_CHECKING:
+    from .clone import ClonesStore
 
 _VOICE_PREFIX = "voices/"
 
@@ -31,15 +35,20 @@ class VoiceError(ValueError):
 class VoiceRegistry:
     """Maps logical voice ids to backend-native voices."""
 
-    def __init__(self, voices: dict[str, VoiceDef]) -> None:
+    def __init__(
+        self, voices: dict[str, VoiceDef], *, clones: ClonesStore | None = None
+    ) -> None:
         self._voices = voices
+        # Cloned voices + per-persona assignments (M5). Consulted before the static preset
+        # in `resolve_for_persona`, but only on a backend that can actually clone.
+        self._clones = clones
 
     @classmethod
-    def load(cls, path: str | Path) -> VoiceRegistry:
+    def load(cls, path: str | Path, *, clones: ClonesStore | None = None) -> VoiceRegistry:
         """Load `config/voices.yaml`. A missing file yields an empty registry."""
         path = Path(path)
         if not path.is_file():
-            return cls({})
+            return cls({}, clones=clones)
         try:
             raw = yaml.safe_load(path.read_text()) or {}
         except yaml.YAMLError as exc:
@@ -50,7 +59,7 @@ class VoiceRegistry:
             voices = {vid: VoiceDef.model_validate(body or {}) for vid, body in raw.items()}
         except ValidationError as exc:
             raise VoiceError(f"{path}: invalid voice registry: {exc}") from exc
-        return cls(voices)
+        return cls(voices, clones=clones)
 
     @staticmethod
     def _key(ref: str) -> str:
@@ -77,10 +86,39 @@ class VoiceRegistry:
             backend=tts_name,
         )
 
+    def resolve_for_persona(
+        self, persona: Persona, tts_name: str, *, supports_cloning: bool
+    ) -> VoiceRef:
+        """Resolve the voice a `persona` speaks with, preferring an assigned clone.
+
+        When the backend can clone and a clone is assigned to this persona (M5), that clone
+        wins (the persona speaks in the cloned voice). Otherwise this falls back to the static
+        per-backend preset (`resolve`), so a non-cloning backend keeps its distinct presets.
+        """
+        if supports_cloning and self._clones is not None:
+            assigned = self._clones.assignment_for(persona.id)
+            if assigned:
+                ref = self._clones.voice_ref(
+                    assigned, tts_name, emotion=persona.voice.emotion
+                )
+                if ref is not None:
+                    return ref
+        return self.resolve(
+            persona.voice.ref, tts_name, default_emotion=persona.voice.emotion
+        )
+
     def has_preset(self, ref: str, tts_name: str) -> bool:
         """True when this voice maps to a concrete preset for `tts_name`."""
         entry = self._voices.get(self._key(ref))
         return bool(entry and tts_name in entry.presets)
+
+    @property
+    def clones(self) -> ClonesStore | None:
+        return self._clones
+
+    def clone_for_persona(self, persona_id: str) -> str | None:
+        """Name of the clone assigned to `persona_id`, if any."""
+        return self._clones.assignment_for(persona_id) if self._clones is not None else None
 
     def ids(self) -> list[str]:
         return sorted(self._voices)

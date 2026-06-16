@@ -49,6 +49,16 @@ livekit = [
     "livekit-agents>=0.11",
     "livekit-plugins-silero>=0.7",
 ]
+# --- Zero-shot voice cloning (added in M5) --------------------------------------------
+# Chatterbox is the clean-license (MIT) cloning backend; runs on CUDA (4080) and MPS (Mac).
+clone = [
+    "chatterbox-tts>=0.1",
+]
+# F5-TTS-mlx is the Apple-Silicon cloning backend. Its default checkpoint's *weights* are
+# CC-BY-NC (non-commercial) — fine for Mac dev, but ship with Chatterbox. See the README.
+clone-mac = [
+    "f5-tts-mlx>=0.2",
+]
 # --- Tooling --------------------------------------------------------------------------
 dev = [
     "ruff>=0.5",
@@ -64,6 +74,7 @@ personavoice = "personavoice.server.__main__:main"
 personavoice-demo = "personavoice.orchestrator.demo:main"
 personavoice-stream-demo = "personavoice.orchestrator.stream_demo:main"
 personavoice-agent = "personavoice.orchestrator.agent:run"
+personavoice-clone = "personavoice.voice.cli:main"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/personavoice"]
@@ -81,7 +92,8 @@ select = ["E", "F", "I", "UP", "B", "ASYNC", "RUF", "SIM"]
 ignore = ["E501"]  # line length handled by the formatter
 
 [tool.ruff.lint.per-file-ignores]
-"tests/*" = ["S101"]
+# Tests use asserts (S101) and may do blocking file I/O inside async test fns (ASYNC230/240).
+"tests/*" = ["S101", "ASYNC230", "ASYNC240"]
 
 [tool.pytest.ini_options]
 addopts = "-q"

@@ -1,5 +1,6 @@
-# M4 Max (dev) backend. Adapters are implemented across M1 (whisper_mlx, ollama, kokoro)
-# and M5 (f5_mlx cloning). For M0 they construct as stubs so `server --check` passes.
+# M4 Max (dev) backend. Adapters are implemented across M1 (whisper_mlx, lmstudio, kokoro)
+# and M5 (f5_mlx cloning). Kokoro is the fast default; swap the TTS to f5_mlx to use cloned
+# voices (`personavoice-clone`).
 backend: mac
 
 stt:
@@ -22,7 +23,9 @@ llm:
       reasoning_effort: low
 
 tts:
-  # Kokoro = fast dev TTS, no cloning. Swap to f5_mlx for zero-shot voices (M5).
+  # Kokoro = fast dev TTS, no cloning. Swap to f5_mlx for zero-shot voices (M5):
+  #   adapter: f5_mlx
+  #   model: lucasnewman/f5-tts-mlx   (needs `pip install -e '.[clone-mac]'`)
   adapter: kokoro
   model: hexgrad/Kokoro-82M
   options:
