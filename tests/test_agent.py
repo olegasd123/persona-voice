@@ -42,7 +42,12 @@ class FakeSource:
         self.frames.append(frame)
 
 
-def test_require_livekit_raises_clean_error_without_extra() -> None:
+def test_require_livekit_raises_clean_error_without_extra(monkeypatch: pytest.MonkeyPatch) -> None:
+    # Force the lazy `from livekit import ...` to fail regardless of whether the extra is
+    # installed in this env (setting a module to None in sys.modules makes import raise).
+    import sys
+
+    monkeypatch.setitem(sys.modules, "livekit", None)
     with pytest.raises(RuntimeError, match="livekit"):
         agent._require_livekit()
 
@@ -154,8 +159,7 @@ def test_persona_id_from_metadata(meta: str | None, expected: str | None) -> Non
 def test_resolve_persona_id_priority_and_default() -> None:
     # First non-empty source wins; later ones are ignored.
     assert (
-        agent.resolve_persona_id([None, "", "hr_interviewer", "companion"], "x")
-        == "hr_interviewer"
+        agent.resolve_persona_id([None, "", "hr_interviewer", "companion"], "x") == "hr_interviewer"
     )
     # All empty → default.
     assert agent.resolve_persona_id([None, ""], "companion") == "companion"

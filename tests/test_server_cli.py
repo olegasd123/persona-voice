@@ -26,6 +26,17 @@ def test_serve_without_livekit_extra_returns_2(monkeypatch: pytest.MonkeyPatch) 
     assert rc == 2
 
 
+def test_token_server_dispatches(monkeypatch: pytest.MonkeyPatch) -> None:
+    from personavoice.server import token_server
+
+    called: dict[str, bool] = {}
+    monkeypatch.setattr(token_server, "run", lambda _settings=None: called.setdefault("ran", True))
+
+    rc = cli.main(["--token-server", "--backend", "mac"])
+    assert rc == 0
+    assert called.get("ran") is True
+
+
 def test_no_subcommand_prints_help(capsys: pytest.CaptureFixture[str]) -> None:
     rc = cli.main(["--backend", "mac"])
     assert rc == 0

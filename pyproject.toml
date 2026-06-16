@@ -74,6 +74,7 @@ personavoice = "personavoice.server.__main__:main"
 personavoice-demo = "personavoice.orchestrator.demo:main"
 personavoice-stream-demo = "personavoice.orchestrator.stream_demo:main"
 personavoice-agent = "personavoice.orchestrator.agent:run"
+personavoice-token-server = "personavoice.server.token_server:main"
 personavoice-clone = "personavoice.voice.cli:main"
 
 [tool.hatch.build.targets.wheel]

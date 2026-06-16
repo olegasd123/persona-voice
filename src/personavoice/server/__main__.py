@@ -53,8 +53,7 @@ def _print_report(report: CheckReport, settings: Settings, *, use_color: bool) -
         # Show each clone, noting any persona it's assigned to (M5).
         by_clone = {name: pid for pid, name in assigned.items()}
         listed = ", ".join(
-            f"{name} -> {by_clone[name]}" if name in by_clone else name
-            for name in report.clones
+            f"{name} -> {by_clone[name]}" if name in by_clone else name for name in report.clones
         )
         print(f"Clones ({len(report.clones)}): {listed}")
         print()
@@ -86,6 +85,11 @@ def main(argv: list[str] | None = None) -> int:
         help="run the live LiveKit streaming agent (M3); needs the `livekit` extra",
     )
     parser.add_argument(
+        "--token-server",
+        action="store_true",
+        help="run the HTTP token server that mints LiveKit join tokens for clients (M6)",
+    )
+    parser.add_argument(
         "--backend",
         choices=("mac", "cuda"),
         default=None,
@@ -106,6 +110,14 @@ def main(argv: list[str] | None = None) -> int:
         report = run_check(settings)
         _print_report(report, settings, use_color=use_color)
         return 0 if report.ok else 1
+
+    if args.token_server:
+        # Pure stdlib HTTP server — no heavy extra needed; mints LiveKit join tokens.
+        from . import token_server
+
+        print(f"Starting token server (backend={settings.backend})...")
+        token_server.run(settings)
+        return 0
 
     if args.serve:
         # The LiveKit worker takes over argv/lifecycle, so import lazily and hand off.

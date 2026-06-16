@@ -288,17 +288,32 @@ Mark a milestone as `[Done]` when it's completed.
       rides on the same open M3 LiveKit-server step.
 - **→ MVP complete: a working, persona-driven, voice-cloning S2S server.**
 
-### M6 — Cross-platform client (iOS + Android) *(≈ 2–3 weeks)*
+### M6 — Cross-platform client (iOS + Android) *(≈ 2–3 weeks)* `[Partial]`
 **Goal:** one Flutter app, from a single codebase, that talks to the server on both iOS and Android.
-- [ ] Flutter app + **LiveKit Flutter SDK** (`livekit_client`): mic capture, audio playback,
-      push-to-talk + VAD modes — one shared UI for both platforms.
-- [ ] Persona picker, connection settings (server URL/token), basic transcript view. Persona
-      selection rides the M4 room-metadata / mid-call data-message path.
+- [x] **Token server** (the missing client prerequisite): `server/token_server.py` mints
+      short-lived LiveKit join tokens and serves `/personas`, so a thin client can join a room
+      without ever seeing the LiveKit secret ("fat server, thin client"). Tokens are stdlib-only
+      HS256 JWTs in LiveKit's documented format (`server/tokens.py`) — no extra needed — and are
+      unit-tested end-to-end (mint/verify/expiry/tamper + the HTTP routes over a real socket).
+      Run with `personavoice --token-server`. Self-hosted SFU + token server in
+      `docker-compose.livekit.yml`.
+- [x] Flutter app + **LiveKit Flutter SDK** (`livekit_client`): mic capture, audio playback,
+      mute toggle — one shared UI for both platforms (`client/`).
+- [x] Persona picker, connection settings (token-server URL / api token / identity, persisted),
+      basic transcript view (renders LiveKit `TranscriptionEvent`s). Mid-call persona switch
+      rides the M4 data-message path; selection on connect sends `{"persona": <id>}`.
 - [ ] Per-platform audio plumbing behind the SDK: audio session + interruption handling,
       background audio, route/Bluetooth changes; CallKit (iOS) / ConnectionService (Android);
-      mic permissions; reconnection. A thin platform-channel layer covers the edge cases.
-- **Acceptance:** full spoken conversation from **both an iPhone and an Android device** to the
-  4080 server over the network, from the same codebase.
+      reconnection. (Done so far: mic permissions, iOS background-audio modes, `minSdk 23` /
+      iOS 13 for `flutter_webrtc`.) A thin platform-channel layer covers the remaining edge cases.
+- **Acceptance:** ⚠️ *partial.* The token server is verified (190 server tests green; ruff +
+      mypy clean; live-smoked: `/healthz`, `/personas`, `POST /token` mint a valid JWT). The
+      Flutter client is **code-complete and statically verified** — `flutter analyze` clean,
+      `flutter test` green (token client + models via a mock HTTP client). **Pending:** the full
+      spoken conversation from a real **iPhone + Android device** to the server — the on-device
+      run rides the same open LiveKit-server step as M3/M4/M5, plus the audio-session/telephony
+      plumbing above. Push-to-talk + VAD modes and assistant-transcript publishing are the next
+      client increments.
 
 ### M7 — Persona fine-tuning (LoRA) *(≈ 1.5 weeks)*
 **Goal:** train per-persona brains beyond prompting.

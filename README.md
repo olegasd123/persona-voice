@@ -154,7 +154,46 @@ The agent (`orchestrator/agent.py`) uses Silero VAD to endpoint each utterance, 
 it, and streams the persona's reply onto the published audio track; when VAD detects the
 user starting to speak, `TurnController` cancels the in-flight LLM+TTS and flushes the queue
 (**barge-in**). Connect any LiveKit client (the [Agents Playground](https://agents-playground.livekit.io/)
-or the Flutter app in M6) to converse. This live run is the open M3 acceptance step.
+or the Flutter app — see M6 below) to converse. This live run is the open M3 acceptance step.
+
+## Token server & self-hosted LiveKit (M6)
+
+A real client can't join a room without a token, and it shouldn't see the LiveKit secret. The
+**token server** mints short-lived LiveKit join tokens and tells the client where to connect —
+"fat server, thin client". It's pure stdlib (no extra needed):
+
+```bash
+# Set LIVEKIT_URL / LIVEKIT_API_KEY / LIVEKIT_API_SECRET in .env, then:
+personavoice --token-server          # HTTP on PERSONAVOICE_HOST:PERSONAVOICE_PORT (default :8080)
+```
+
+| Route            | Purpose                                                              |
+|------------------|----------------------------------------------------------------------|
+| `GET /healthz`   | liveness                                                             |
+| `GET /personas`  | `{"personas": [{"id","name"}], "default": <id>}`                     |
+| `POST /token`    | body `{"room"?, "identity"?, "persona"?}` → `{"url","token","room","identity","persona"}` |
+
+`room`/`identity` are generated when omitted; the persona is validated against the registry,
+embedded in the token metadata, and echoed back so the client can select it via a data message
+after connecting. If `PERSONAVOICE_API_TOKEN` is set, requests need `Authorization: Bearer …`.
+Tokens are standard HS256 JWTs in LiveKit's documented format (`server/tokens.py`).
+
+**Self-host the SFU.** `docker-compose.livekit.yml` brings up a LiveKit server (dev keys
+`devkey`/`secret`) plus the token server:
+
+```bash
+docker compose -f docker-compose.livekit.yml up --build       # LiveKit SFU + token server
+LIVEKIT_URL=ws://localhost:7880 LIVEKIT_API_KEY=devkey \
+  LIVEKIT_API_SECRET=secret BACKEND=mac personavoice --serve   # the conversation agent
+```
+
+`LIVEKIT_URL` is the address the **client** dials, so from a phone use the machine's LAN IP
+(`ws://192.168.x.y:7880`) and open UDP 7882. Use TLS (`wss://`) + a real key/secret in prod.
+
+**Flutter client.** `client/` is the cross-platform (iOS + Android) app: it fetches the
+persona list, requests a token, connects, publishes the mic, shows a transcript, and switches
+persona mid-call. `flutter analyze` is clean and `flutter test` is green; the live on-device
+run rides the same open LiveKit-server step. See [`client/README.md`](client/README.md).
 
 ## Personas & voices (M4)
 
@@ -269,13 +308,15 @@ src/personavoice/
   adapters/                  # stt/ llm/ tts/ — base classes + per-backend impls + factory
   persona/                   # loader, prompt builder, registry
   voice/                     # voice registry (M4) + zero-shot cloning (M5) + `personavoice-clone`
-  server/                    # settings, config loading, `--check` / `--serve` entrypoint
+  server/                    # settings, config, `--check`/`--serve`/`--token-server`; tokens.py (M6)
   orchestrator/              # pipeline (M1) + chunker/streaming/turn/agent (M3 streaming)
   memory/                    # filled in M8
+client/                      # Flutter app (iOS + Android), LiveKit SDK (M6)
 scripts/
   download_models.py         # pinned model manifest + downloader
   bench_latency.py           # per-stage latency benchmark (mac/cuda)
 docker-compose.yml           # 4080 stack: vLLM + persona-voice server
+docker-compose.livekit.yml   # self-hosted LiveKit SFU + token server (M6)
 Dockerfile                   # CUDA server image (STT + TTS)
 tests/
 ```
