@@ -113,10 +113,11 @@ UUID minted in Dart so both native sides stay trivial.
 `VoiceSession` starts/ends the system call across connect/teardown, hangs up on a system
 `EndCallRequested`, mirrors a system `MuteRequested` onto the mic, and pushes its own mic mutes
 back to the system button — with an echo guard so the two can't ping-pong. All of this is pure
-and unit-tested room-less with a fake controller; the native CallKit/Telecom compile + behavior
-is **device-verify pending** (no Android SDK / device in dev). On Android, app→system *mute* is a
-no-op (self-managed connections can't set mute programmatically — the WebRTC track is already
-muted, and the system UI owns the toggle).
+and unit-tested room-less with a fake controller; the iOS **CallKit** native side compiles and
+ran on a real device (basic connect/talk/hang-up), while the Android **Telecom** side is **out of
+scope** (no device on hand). On Android, app→system *mute* is a no-op (self-managed connections
+can't set mute programmatically — the WebRTC track is already muted, and the system UI owns the
+toggle).
 
 ## Status & remaining work
 
@@ -130,20 +131,33 @@ muted, and the system UI owns the toggle).
 - ✅ **Audio-session interruption + route handling** (platform channel): incoming-call/Siri
   interruption auto-mutes + auto-resumes the mic; headset/Bluetooth route changes surface to the
   UI. iOS `AVAudioSession` + Android `AudioManager` monitors → `audio_session.dart` → a pure,
-  unit-tested `VoiceSession` handler. *Native Swift/Kotlin compile + behavior is device-verify
-  pending* (no Android SDK / device in dev); the Dart layer is fully analyzed + tested.
+  unit-tested `VoiceSession` handler. *iOS native compiles + runs on a real device; the deeper
+  interruption/Bluetooth-route behavior got only light exercise. Android (no SDK/device) is out of
+  scope — written but device-unverified.* The Dart layer is fully analyzed + tested.
 - ✅ **Native telephony** (platform channel): present the conversation as a system call via
   iOS **CallKit** / Android self-managed **ConnectionService** — system end/mute buttons drive
-  the session; app mic mutes sync back. Dart layer pure + unit-tested; native compile is
-  device-verify pending. (Distinct from the interruption handling above, which is being
-  *interrupted by* a call — this is presenting *our* session *as* one.)
+  the session; app mic mutes sync back. Dart layer pure + unit-tested; iOS CallKit native compiles
+  and ran on a real device (basic connect/talk/hang-up exercised; deeper CallKit flows not yet);
+  Android ConnectionService is out of scope (no device). (Distinct from the interruption handling
+  above, which is being *interrupted by* a call — this is presenting *our* session *as* one.)
 - ✅ Mic permission (iOS `NSMicrophoneUsageDescription`, Android `RECORD_AUDIO`), background
   audio modes (`audio` + `voip`), `MANAGE_OWN_CALLS`, cleartext for local dev, `minSdk 23` /
-  iOS 13 for `flutter_webrtc`.
+  iOS 13 for `flutter_webrtc`. **iOS gotcha (fixed):** under CocoaPods, `permission_handler`
+  compiles each permission behind a macro whose default lives only in the plugin's `Package.swift`
+  (SPM) — the `ios/Podfile` `post_install` must set `GCC_PREPROCESSOR_DEFINITIONS << 'PERMISSION_MICROPHONE=1'`,
+  or `Permission.microphone.request()` returns `denied` with no prompt. For LAN dev the Info.plist
+  also needs `NSAllowsLocalNetworking` + `NSLocalNetworkUsageDescription` (cleartext + Local-Network
+  prompt for the token server / SFU).
 - `flutter analyze` clean; `flutter test` green (37 tests: token client, models, status-label,
   mic-mode + interruption/route + system-call logic via a mock HTTP client and a room-less
-  `VoiceSession`, and the audio-event / call-control parsers). The native Swift/Kotlin compile +
-  behavior is **device-verify pending** (no Android SDK / device in dev).
-- Remaining (device-only): the **live spoken run** from a real iPhone + Android device against a
-  running LiveKit server + the agent (the analog of the server's other "live LiveKit" steps),
-  which also exercises/tunes the native audio-session + CallKit/ConnectionService monitors.
+  `VoiceSession`, and the audio-event / call-control parsers). The **iOS** native (Swift) side
+  compiles and runs on a real device; the **Android** (Kotlin) side has no SDK/device here.
+- ✅ **Live on-device run (iOS) — verified** on a real **iPhone 17 Pro / iOS 26.5**: a full spoken
+  conversation (connect → talk to the Companion persona → streamed reply → hang up) against the
+  self-hosted LiveKit SFU + token server + `personavoice --serve` agent over the LAN. Required the
+  `permission_handler` Podfile macro + Info.plist Local-Network/ATS keys above, and `flutter run
+  --release` (a debug build needs the host↔device VM-service handshake and crashes without it).
+- **Out of scope:** the **Android** on-device run (no Android device on hand). The Android code
+  (audio-session monitor, self-managed ConnectionService) is written and analyzed but stays
+  device-unverified — see the repo README. The deeper iOS CallKit / Bluetooth-route behaviors also
+  got only light exercise on device.

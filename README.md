@@ -196,9 +196,11 @@ switches persona mid-call. The mic runs **open-mic (server VAD)** or **push-to-t
 talk); audio defaults to the loudspeaker; connection state surfaces LiveKit reconnects
 ("Reconnecting…"). The agent **publishes its spoken reply as a transcript** (one segment that
 grows sentence-by-sentence, in step with the audio), so the assistant's words appear in the
-client's transcript view. `flutter analyze` is clean and `flutter test` is green (14 tests);
-the live on-device run rides the same open LiveKit-server step. See
-[`client/README.md`](client/README.md).
+client's transcript view. `flutter analyze` is clean and `flutter test` is green (37 tests).
+The **live voice loop is verified on a real iPhone** (iPhone 17 Pro / iOS 26.5) against the
+self-hosted LiveKit stack — connect, talk to a persona, hear the streamed reply, hang up. A real
+**Android device run is out of scope** for this project (no Android device on hand): the Android
+code is written and analyzed but stays device-unverified. See [`client/README.md`](client/README.md).
 
 ## Personas & voices (M4)
 

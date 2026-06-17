@@ -288,8 +288,11 @@ Mark a milestone as `[Done]` when it's completed.
       rides on the same open M3 LiveKit-server step.
 - **→ MVP complete: a working, persona-driven, voice-cloning S2S server.**
 
-### M6 — Cross-platform client (iOS + Android) *(≈ 2–3 weeks)* `[Partial]`
+### M6 — Cross-platform client (iOS + Android) *(≈ 2–3 weeks)* `[Done on iOS; Android device run out of scope]`
 **Goal:** one Flutter app, from a single codebase, that talks to the server on both iOS and Android.
+**Scope note:** the iOS path is live-verified on a real device (below). A real **Android device run
+is out of scope** for this project — no Android hardware on hand — so the Android-native layers stay
+written-but-device-unverified; revisit if/when a device is available.
 - [x] **Token server** (the missing client prerequisite): `server/token_server.py` mints
       short-lived LiveKit join tokens and serves `/personas`, so a thin client can join a room
       without ever seeing the LiveKit secret ("fat server, thin client"). Tokens are stdlib-only
@@ -319,8 +322,8 @@ Mark a milestone as `[Done]` when it's completed.
       on an incoming-call/Siri interruption and **auto-resumes** a previously-live mic (open-mic)
       when it clears, and tracks the active route for the UI. The handler + parser are pure and
       unit-tested room-less; the native monitors only *observe* (LiveKit/WebRTC still owns the
-      session). *Native Swift/Kotlin compile is build/device-pending* (no Android SDK/device in
-      dev). (Already done: mic permissions, iOS background-audio modes, `minSdk 23` / iOS 13,
+      session). *iOS native compiles + runs on a real device; Android (no SDK/device) is out of
+      scope.* (Already done: mic permissions, iOS background-audio modes, `minSdk 23` / iOS 13,
       speakerphone routing, reconnection state.)
 - [x] Native telephony **CallKit (iOS) / ConnectionService (Android)** — presenting *our*
       conversation *as* a system call (lock-screen UI, OS call list). The platform layer is
@@ -335,20 +338,26 @@ Mark a milestone as `[Done]` when it's completed.
       `onCallAudioStateChanged` through a bridge singleton. `VoiceSession` starts/ends the call
       across connect/teardown, hangs up on a system end, mirrors a system mute onto the mic, and
       pushes app mutes back (with an echo guard). Distinct from the interruption handling above
-      (being interrupted *by* a call). *Native Swift/Kotlin compile + behavior is device-verify
-      pending* (no Android SDK / device in dev); the Dart layer is analyzed + unit-tested.
-- **Acceptance:** ⚠️ *partial.* Token server verified (live-smoked: `/healthz`, `/personas`,
+      (being interrupted *by* a call). *iOS CallKit native compiles + ran on a real device (basic
+      connect/talk/hang-up; deeper flows not yet); Android ConnectionService is out of scope (no
+      device).* The Dart layer is analyzed + unit-tested.
+- **Acceptance:** ✅ *met on iOS.* Token server verified (live-smoked: `/healthz`, `/personas`,
       `POST /token` mint a valid JWT). Server **188 tests green** (the streaming `on_sentence` tap
-      and the transcript-publisher); ruff + mypy clean. Flutter client **statically verified** —
+      and the transcript-publisher); ruff + mypy clean. Flutter client statically verified —
       `flutter analyze` clean, `flutter test` green (**37 tests**: token client + models, the pure
       `sessionStatusLabel`, mic-mode/PTT transitions on a room-less `VoiceSession`, the audio-event
       + call-control parsers, the interruption/route handler, and the system-call behavior with a
-      fake controller). Both platform-channel layers — interruption/route (audio session) and
-      telephony (CallKit/ConnectionService) — are written, with **native compile/behavior
-      build/device-pending** (no Android SDK/device in dev); the Dart sides are fully analyzed +
-      tested. **Pending (device-only):** the full spoken conversation from a real **iPhone +
-      Android device** to the server, which also exercises/tunes the native audio-session +
-      CallKit/ConnectionService monitors — rides the same open LiveKit-server step as M3/M4/M5.
+      fake controller). **Live on-device run verified (2026-06-16) on a real iPhone 17 Pro / iOS
+      26.5:** a full spoken conversation (connect → talk to the Companion persona → streamed reply →
+      hang up) over the LAN against the self-hosted LiveKit SFU + token server + `personavoice
+      --serve` agent (BACKEND=mac). Getting there required three iOS fixes: the `permission_handler`
+      **Podfile macro** (`GCC_PREPROCESSOR_DEFINITIONS << 'PERMISSION_MICROPHONE=1'`, else the mic
+      request returns `denied` with no prompt — the actual blocker), Info.plist `NSAllowsLocalNetworking`
+      + `NSLocalNetworkUsageDescription` for the LAN token server / SFU, and running `flutter run
+      --release` (a debug build needs the host↔device VM-service handshake and crashes without it).
+      **Out of scope:** the **Android** on-device run (no Android device on hand) — the Kotlin
+      audio-session + ConnectionService layers stay written-but-device-unverified; the deeper iOS
+      CallKit / Bluetooth-route behaviors also got only light on-device exercise.
 
 ### M7 — Persona fine-tuning (LoRA) *(≈ 1.5 weeks)*
 **Goal:** train per-persona brains beyond prompting.
