@@ -359,12 +359,38 @@ written-but-device-unverified; revisit if/when a device is available.
       audio-session + ConnectionService layers stay written-but-device-unverified; the deeper iOS
       CallKit / Bluetooth-route behaviors also got only light on-device exercise.
 
-### M7 — Persona fine-tuning (LoRA) *(≈ 1.5 weeks)*
+### M7 — Persona fine-tuning (LoRA) *(≈ 1.5 weeks)* `[Partial]`
 **Goal:** train per-persona brains beyond prompting.
-- [ ] `training/persona_lora/`: dataset format (in-character dialogues), curation scripts.
-- [ ] QLoRA training on 4080 (Unsloth/LLaMA-Factory); light LoRA on Mac via `mlx-lm`.
-- [ ] Adapter hot-swap at inference; eval harness comparing prompt-only vs LoRA.
-- **Acceptance:** an HR/Teacher LoRA measurably improves in-character behavior; adapters load at runtime.
+- [x] `training/persona_lora/`: dataset format (in-character dialogues) + curation. The format is
+      the OpenAI **messages-JSONL** shape (the cascade's `Msg`), so it's consumed unchanged by
+      mlx-lm's "chat" loader and converts to ShareGPT for LLaMA-Factory (`training/dataset.py`,
+      validated end-to-end). **Curation is self-chat** (`training/curate.py`): the persona LLM
+      answers while a *user simulator* (the same LLM, roles flipped) plays a realistic partner —
+      role-flipping + simulator prompt are pure/tested; the only impurity is the injected LLM.
+- [x] LoRA training, **backend-dispatched** (`training/config.py` + `train.py`): `mlx_lm lora` on
+      Mac, `llamafactory-cli train` QLoRA (4-bit) on CUDA. The plan (trainer config dict +
+      command) is built purely and unit-tested for both; `train.py` writes the config and shells
+      out (`--dry-run` previews). `merge.py` fuses the adapter back (`mlx_lm fuse` / LLaMA-Factory
+      `export`) for standalone serving. CUDA libs stay out of the light wheel (training image),
+      same policy as vLLM.
+- [x] Adapter hot-swap at inference + eval harness. **Hot-swap:** vLLM serves adapters via
+      `--lora-modules <name>=<path>`; a persona whose `llm.lora` basename matches routes there
+      automatically (`_openai_compat.lora_request_model` → request `model`; `supports_lora=True`
+      on vLLM, off on LM Studio). **Eval** (`training/eval.py`): deterministic persona-adherence
+      proxies (turn-style fit, spoken-clean rate, question rate vs `follow_up_probability`,
+      keyword coverage) → a `persona_adherence` composite, with a prompt-only-vs-LoRA `compare`.
+- **Acceptance:** ⚠️ *partial — Mac LoRA path verified live; prod A/B rides the GPU box.* The
+      whole loop ran for real on the M4 Max (mlx-lm 0.31.3 + LM Studio): **curated** companion
+      dialogues via LM Studio → **trained** a real LoRA through `personavoice-train run`
+      (**val loss 2.74 → 2.27**, train 2.99 → 2.36 over 6 iters; adapter saved) → the **adapter
+      loads at inference** (`mlx_lm generate --adapter-path` → coherent reply) → **merged** via
+      `mlx_lm fuse` → **eval** ran live (prompt-only, `persona_adherence 0.95`). **266 tests
+      green** (was 188; +78 for M7 — dataset/curate/config/train/merge/eval + the lora-routing
+      payload; 0 skip in `.venv312`); ruff + mypy clean. **Still open (same "needs the 4080" step
+      as M2/M3):** the **CUDA QLoRA** run (LLaMA-Factory on the 4080) and the **served-LoRA A/B**
+      (the prompt-only-vs-LoRA eval comparison needs vLLM hot-loading the adapter — LM Studio
+      can't serve it), to close out "an HR/Teacher LoRA *measurably improves* in-character
+      behavior."
 
 ### M8 — Memory / learn-from-conversations *(≈ 1.5 weeks)*
 **Goal:** continuity across sessions; foundation for long-term learning.

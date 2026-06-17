@@ -12,7 +12,29 @@ See [IMPLEMENTATION_PLAN.md](IMPLEMENTATION_PLAN.md) for the full design and mil
 
 ## Status
 
-Current milestone: **M5 — Voice cloning (partial)**. A voice is cloned **zero-shot** from a
+Current milestone: **M7 — Persona fine-tuning (LoRA) (partial)**. Per-persona "brains" beyond
+prompting: `personavoice-train` **curates** in-character dialogues by self-chat (the persona LLM
+answers; a *user simulator* plays the partner), **trains** a LoRA (`mlx_lm` on Mac, LLaMA-Factory
+QLoRA on the 4080), **merges** it for serving, and **evals** persona adherence (turn-style fit,
+spoken-clean, follow-up rate, keyword coverage). The dataset format is the cascade's own
+messages-JSONL, so curated data trains unchanged. At inference, vLLM hot-swaps adapters via
+`--lora-modules` and a persona's `llm.lora` routes there automatically.
+
+> **Verified live on the M4 Max** (mlx-lm 0.31.3 + LM Studio): curated companion dialogues →
+> trained a real LoRA through `personavoice-train run` (**val loss 2.74 → 2.27**) → the adapter
+> **loads at inference** (`mlx_lm generate --adapter-path`) → **merged** via `mlx_lm fuse` → eval
+> ran live (`persona_adherence 0.95`). **266 tests green**; ruff + mypy clean. Still open (same
+> "needs the 4080" step as M2/M3): the **CUDA QLoRA** run and the **served-LoRA A/B** eval
+> (prompt-only vs LoRA needs vLLM hot-loading the adapter).
+
+**M6 (done on iOS):** a single Flutter client (`client/`) talks to the server over LiveKit — mic
+capture/playback, persona picker, transcript, mic modes (open-mic / push-to-talk), audio-session
++ telephony plumbing. A stdlib-only **token server** (`personavoice --token-server`) mints join
+tokens so the thin client never sees the LiveKit secret. **Live-verified on a real iPhone** (full
+spoken conversation over the LAN). The Android-native layers are written but device-unverified
+(no hardware).
+
+**M5 (partial):** a voice is cloned **zero-shot** from a
 ~10 s sample and assigned to a persona, so the persona speaks in that voice everywhere (demos
 + live agent). `personavoice-clone` records/loads a sample, runs it through the cloning
 backend (`f5_mlx` on Mac, `chatterbox` on CUDA), stores it under the clones dir, and assigns
@@ -267,6 +289,36 @@ back to Kokoro/Orpheus simply restores the persona's preset voice.
 > Mac dev. For anything redistributed, clone with **Chatterbox** (MIT) on CUDA. See
 > **Models & licenses**.
 
+## Persona fine-tuning (LoRA) (M7)
+
+Train a per-persona LoRA when prompting isn't enough. One CLI, `personavoice-train`, drives the
+whole loop (heavy trainers are shelled out to, so the repo installs and tests without a GPU):
+
+```bash
+pip install -e '.[train]'        # Mac: mlx-lm (also in '.[mac]')
+
+# 1. Curate in-character data by self-chat (persona LLM vs a user simulator).
+#    Writes training/persona_lora/datasets/<persona>/{train,valid}.jsonl — review before training.
+personavoice-train curate --persona hr_interviewer --num 20 --exchanges 4
+
+# 2. Train (mlx-lm on Mac; LLaMA-Factory QLoRA on the 4080 with BACKEND=cuda).
+personavoice-train run --persona hr_interviewer --dry-run    # preview config + command
+personavoice-train run --persona hr_interviewer              # launch → models/adapters/<persona>/
+
+# 3a. Serve it: hot-swap with vLLM, then set the persona's llm.lora to the served module name.
+#     vllm serve <base> --enable-lora --lora-modules hr_interviewer=models/adapters/hr_interviewer
+# 3b. …or merge into a standalone checkpoint.
+personavoice-train merge --persona hr_interviewer --adapter models/adapters/hr_interviewer
+
+# 4. Score persona adherence (prompt-only vs LoRA).
+personavoice-train eval --persona hr_interviewer --compare
+```
+
+The dataset is the cascade's **messages-JSONL** (so curated data trains unchanged; converts to
+ShareGPT for LLaMA-Factory). See [training/persona_lora/README.md](training/persona_lora/README.md)
+for the format, CUDA dataset registration, and hyperparameters. Verified live on the M4 Max — a
+real mlx-lm LoRA trained (val loss 2.74 → 2.27), loaded at inference, and merged.
+
 ## Run on the 4080 (CUDA, M2)
 
 The `cuda` backend mirrors the Mac cascade: `faster_whisper`/`parakeet` (STT), `vllm` (LLM),
@@ -317,8 +369,10 @@ src/personavoice/
   voice/                     # voice registry (M4) + zero-shot cloning (M5) + `personavoice-clone`
   server/                    # settings, config, `--check`/`--serve`/`--token-server`; tokens.py (M6)
   orchestrator/              # pipeline (M1) + chunker/streaming/turn/agent (M3 streaming)
+  training/                  # persona LoRA: dataset/curate/config/train/merge/eval (M7)
   memory/                    # filled in M8
 client/                      # Flutter app (iOS + Android), LiveKit SDK (M6)
+training/persona_lora/       # LoRA configs, seed datasets, workflow docs (M7)
 scripts/
   download_models.py         # pinned model manifest + downloader
   bench_latency.py           # per-stage latency benchmark (mac/cuda)

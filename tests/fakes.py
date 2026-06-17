@@ -8,7 +8,36 @@ from personavoice.adapters.factory import Backend
 from personavoice.adapters.llm.base import LLMAdapter
 from personavoice.adapters.stt.base import STTAdapter
 from personavoice.adapters.tts.base import TTSAdapter
-from personavoice.models import Msg, Persona, Transcript, VoiceRef
+from personavoice.models import (
+    BehaviorSettings,
+    LLMSettings,
+    Msg,
+    Persona,
+    Transcript,
+    TurnStyle,
+    VoiceRef,
+    VoiceSettings,
+)
+
+
+def make_persona(
+    persona_id: str = "tester",
+    *,
+    turn_style: TurnStyle = TurnStyle.balanced,
+    follow_up_probability: float = 0.5,
+    lora: str | None = None,
+) -> Persona:
+    """A minimal valid persona for tests that need behavior knobs without a YAML file."""
+    return Persona(
+        id=persona_id,
+        name=persona_id.replace("_", " ").title(),
+        system_prompt="You are a test persona.",
+        llm=LLMSettings(base_model="test-model", lora=lora),
+        voice=VoiceSettings(ref="voices/test"),
+        behavior=BehaviorSettings(
+            turn_style=turn_style, follow_up_probability=follow_up_probability
+        ),
+    )
 
 
 class FakeSTT(STTAdapter):

@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import json
 from collections.abc import AsyncIterator
+from pathlib import Path
 from typing import Any
 
 from ...models import Msg, Persona
@@ -29,6 +30,20 @@ def chat_url(base_url: str) -> str:
     return f"{base_url.rstrip('/')}/chat/completions"
 
 
+def lora_request_model(persona: Persona) -> str | None:
+    """The served LoRA name to request for a persona, or None.
+
+    A persona's `llm.lora` is a path/name to the trained adapter; vLLM serves it under a name
+    registered with `--lora-modules <name>=<path>`, and a request selects it via the `model`
+    field. By convention the served name is the adapter's basename, so a backend launched with
+    `--lora-modules hr_interviewer=/adapters/hr_interviewer` matches `lora: adapters/hr_interviewer`.
+    """
+    lora = persona.llm.lora
+    if not lora:
+        return None
+    return Path(lora).name
+
+
 def build_payload(
     model: str | None,
     messages: list[Msg],
@@ -36,9 +51,12 @@ def build_payload(
     *,
     stream: bool = True,
     extra_body: dict[str, Any] | None = None,
+    lora: str | None = None,
 ) -> dict[str, Any]:
+    # On a LoRA-capable backend the request `model` selects the served adapter by name (M7);
+    # otherwise it's the base model the stage was configured with.
     payload: dict[str, Any] = {
-        "model": model,
+        "model": lora or model,
         "messages": [{"role": m.role.value, "content": m.content} for m in messages],
         "stream": stream,
         "temperature": persona.llm.temperature,
@@ -75,10 +93,13 @@ class OpenAICompatLLM(LLMAdapter):
     """Base for backends exposing an OpenAI-compatible `/v1/chat/completions` stream.
 
     Subclasses set `name`, `implemented = True`, and `default_base_url`. The active base
-    URL can still be overridden per-deployment via the `base_url` adapter option.
+    URL can still be overridden per-deployment via the `base_url` adapter option. Backends that
+    can hot-load LoRA adapters (vLLM) set `supports_lora = True` so a persona's `llm.lora`
+    routes the request to the served adapter (M7).
     """
 
     default_base_url = "http://localhost:8000/v1"
+    supports_lora = False
 
     async def stream_chat(self, messages: list[Msg], persona: Persona) -> AsyncIterator[str]:
         try:
@@ -92,7 +113,10 @@ class OpenAICompatLLM(LLMAdapter):
         base_url = self.options.get("base_url", self.default_base_url)
         timeout = self.options.get("timeout", _DEFAULT_TIMEOUT)
         extra_body = self.options.get("extra_body")
-        payload = build_payload(self.model, messages, persona, stream=True, extra_body=extra_body)
+        lora = lora_request_model(persona) if self.supports_lora else None
+        payload = build_payload(
+            self.model, messages, persona, stream=True, extra_body=extra_body, lora=lora
+        )
 
         async with (
             httpx.AsyncClient(timeout=timeout) as client,

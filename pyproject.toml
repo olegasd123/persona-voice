@@ -59,6 +59,13 @@ clone = [
 clone-mac = [
     "f5-tts-mlx>=0.2",
 ]
+# --- Persona LoRA fine-tuning (added in M7) -------------------------------------------
+# Mac LoRA training via mlx-lm (also in the `mac` extra). The CUDA QLoRA trainer
+# (LLaMA-Factory / Unsloth) is heavy + needs a CUDA toolchain, so it's installed in the
+# training image, not here — see training/persona_lora/README.md.
+train = [
+    "mlx-lm>=0.14",
+]
 # --- Tooling --------------------------------------------------------------------------
 dev = [
     "ruff>=0.5",
@@ -76,6 +83,7 @@ personavoice-stream-demo = "personavoice.orchestrator.stream_demo:main"
 personavoice-agent = "personavoice.orchestrator.agent:run"
 personavoice-token-server = "personavoice.server.token_server:main"
 personavoice-clone = "personavoice.voice.cli:main"
+personavoice-train = "personavoice.training.cli:main"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/personavoice"]

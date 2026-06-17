@@ -1,0 +1,19 @@
+# LLaMA-Factory QLoRA for the HR interviewer persona (CUDA / RTX 4080).
+#   personavoice-train run --persona hr_interviewer --backend cuda --config training/persona_lora/configs/hr_interviewer.cuda.yaml
+# Register the ShareGPT dataset as `hr_interviewer_persona` in <data_dir>/dataset_info.json
+# (see the training README).
+persona_id: hr_interviewer
+base_model: Qwen/Qwen2.5-7B-Instruct
+backend: cuda
+data_dir: training/persona_lora/datasets
+adapter_dir: models/adapters/hr_interviewer
+rank: 16
+alpha: 32.0
+dropout: 0.05
+learning_rate: 1.0e-4
+batch_size: 2
+epochs: 3.0
+max_seq_len: 2048
+quantize_4bit: true
+template: qwen
+seed: 0
