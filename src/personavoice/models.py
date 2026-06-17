@@ -108,7 +108,11 @@ class BehaviorSettings(BaseModel):
 
 class MemorySettings(BaseModel):
     enabled: bool = False
-    scope: str = "per_user"
+    scope: str = "per_user"  # "per_user" | "per_user_persona"
+    # How many relevant past turns to retrieve into the prompt each turn (M8 RAG).
+    top_k: int = Field(default=4, ge=0)
+    # Distill the rolling profile every N recorded turns (0 = manual/`consolidate` only).
+    summarize_every: int = Field(default=6, ge=0)
 
 
 class Persona(BaseModel):

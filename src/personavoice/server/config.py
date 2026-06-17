@@ -15,6 +15,7 @@ from dotenv import load_dotenv
 from pydantic import ValidationError
 
 from .._env import expand_env_vars
+from ..memory import ConversationMemory, MemoryStore, cipher_from_key
 from ..models import BackendConfig, Persona
 from ..persona.loader import load_personas
 from ..voice.clone import ClonesStore
@@ -37,11 +38,15 @@ class Settings:
         config_dir: Path,
         models_dir: Path,
         clones_dir: Path | None = None,
+        memory_dir: Path | None = None,
+        memory_key: str | None = None,
     ) -> None:
         self.backend = backend
         self.config_dir = config_dir
         self.models_dir = models_dir
         self._clones_dir = clones_dir
+        self._memory_dir = memory_dir
+        self.memory_key = memory_key
 
     @property
     def backends_dir(self) -> Path:
@@ -60,6 +65,11 @@ class Settings:
         """Where cloned voices + their manifest live (M5). Defaults under the models dir."""
         return self._clones_dir or (self.models_dir / "clones")
 
+    @property
+    def memory_dir(self) -> Path:
+        """Where per-user conversation memory lives (M8). Defaults under the models dir."""
+        return self._memory_dir or (self.models_dir / "memory")
+
     @classmethod
     def load(cls, *, backend: str | None = None, env_file: str | Path | None = ".env") -> Settings:
         """Resolve settings from env/.env, with an optional `backend` override."""
@@ -76,11 +86,16 @@ class Settings:
         models_dir = Path(os.getenv("PERSONAVOICE_MODELS_DIR", "models")).expanduser()
         clones_env = os.getenv("PERSONAVOICE_CLONES_DIR")
         clones_dir = Path(clones_env).expanduser() if clones_env else None
+        memory_env = os.getenv("PERSONAVOICE_MEMORY_DIR")
+        memory_dir = Path(memory_env).expanduser() if memory_env else None
+        memory_key = os.getenv("PERSONAVOICE_MEMORY_KEY") or None
         return cls(
             backend=resolved,
             config_dir=config_dir,
             models_dir=models_dir,
             clones_dir=clones_dir,
+            memory_dir=memory_dir,
+            memory_key=memory_key,
         )
 
 
@@ -119,3 +134,28 @@ def load_voice_registry(settings: Settings) -> VoiceRegistry:
     `resolve_for_persona` honor per-persona clone assignments on a cloning backend.
     """
     return VoiceRegistry.load(settings.voices_path, clones=load_clones_store(settings))
+
+
+def load_memory_store(settings: Settings) -> MemoryStore:
+    """Open the per-user memory store (M8), encrypted if `PERSONAVOICE_MEMORY_KEY` is set."""
+    return MemoryStore(settings.memory_dir, cipher=cipher_from_key(settings.memory_key))
+
+
+def build_conversation_memory(
+    settings: Settings, backend: object, persona: Persona | None = None
+) -> ConversationMemory:
+    """Build the runtime memory facade (M8) bound to the backend's LLM for distillation.
+
+    Retrieval / consolidation knobs come from `persona.memory` when a persona is given (the
+    facade is single-knobbed; the agent's primary persona seeds them). `backend` is an
+    `adapters.factory.Backend`; typed loosely to avoid a heavy import here.
+    """
+    store = load_memory_store(settings)
+    llm = getattr(backend, "llm", None)
+    mem = persona.memory if persona is not None else None
+    return ConversationMemory(
+        store,
+        llm=llm,
+        k=mem.top_k if mem else 4,
+        summarize_every=mem.summarize_every if mem else 6,
+    )

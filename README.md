@@ -12,20 +12,27 @@ See [IMPLEMENTATION_PLAN.md](IMPLEMENTATION_PLAN.md) for the full design and mil
 
 ## Status
 
-Current milestone: **M7 — Persona fine-tuning (LoRA) (partial)**. Per-persona "brains" beyond
-prompting: `personavoice-train` **curates** in-character dialogues by self-chat (the persona LLM
-answers; a *user simulator* plays the partner), **trains** a LoRA (`mlx_lm` on Mac, LLaMA-Factory
-QLoRA on the 4080), **merges** it for serving, and **evals** persona adherence (turn-style fit,
-spoken-clean, follow-up rate, keyword coverage). The dataset format is the cascade's own
-messages-JSONL, so curated data trains unchanged. At inference, vLLM hot-swaps adapters via
-`--lora-modules` and a persona's `llm.lora` routes there automatically.
+Current milestone: **M8 — Memory / learn-from-conversations (done)**. The assistant remembers a
+user across sessions: a **consent-gated** per-user store keeps transcripts; an LLM distills them
+into a rolling **profile** (durable facts + summary); each turn injects a **memory block** (profile
++ the most relevant prior turns, retrieved by a zero-dep keyword retriever or optional embeddings).
+Privacy is first-class — explicit consent, optional **at-rest encryption** (`PERSONAVOICE_MEMORY_KEY`,
+Fernet), and per-user **export/delete** via `personavoice-memory`. Transcripts also **distill** into
+the M7 LoRA dataset (opt-in, manual trigger). See "Memory across sessions (M8)" below.
 
-> **Verified live on the M4 Max** (mlx-lm 0.31.3 + LM Studio): curated companion dialogues →
-> trained a real LoRA through `personavoice-train run` (**val loss 2.74 → 2.27**) → the adapter
-> **loads at inference** (`mlx_lm generate --adapter-path`) → **merged** via `mlx_lm fuse` → eval
-> ran live (`persona_adherence 0.95`). **266 tests green**; ruff + mypy clean. Still open (same
-> "needs the 4080" step as M2/M3): the **CUDA QLoRA** run and the **served-LoRA A/B** eval
-> (prompt-only vs LoRA needs vLLM hot-loading the adapter).
+> **Verified live on the M4 Max** (LM Studio / gpt-oss-20b): a real conversation → `consolidate`
+> distilled a profile ("name is Sam", "has a dog named Rex", "high-school biology teacher",
+> "hikes on weekends") → a **fresh next-session facade recalled it** into the injected block; the
+> user can `--export`/`--delete` their data, and encryption round-trips under a real Fernet key
+> (`--check` reports `encrypted`; a bad key fails). **341 tests green** (+75 for M8; 0 skip in
+> `.venv312`); ruff + mypy clean; both `BACKEND=mac|cuda --check` PASS. Open (same rider as M3/M4):
+> the *live LiveKit* memory path needs a running LiveKit server.
+
+**M7 (partial):** per-persona "brains" beyond prompting — `personavoice-train` **curates**
+in-character dialogues by self-chat, **trains** a LoRA (`mlx_lm` on Mac, LLaMA-Factory QLoRA on the
+4080), **merges** it, and **evals** persona adherence. Verified live on the M4 Max: a real mlx-lm
+LoRA trained (**val loss 2.74 → 2.27**), loaded at inference, and merged. Open (the 4080): the CUDA
+QLoRA run and the served-LoRA A/B eval.
 
 **M6 (done on iOS):** a single Flutter client (`client/`) talks to the server over LiveKit — mic
 capture/playback, persona picker, transcript, mic modes (open-mic / push-to-talk), audio-session
@@ -318,6 +325,39 @@ The dataset is the cascade's **messages-JSONL** (so curated data trains unchange
 ShareGPT for LLaMA-Factory). See [training/persona_lora/README.md](training/persona_lora/README.md)
 for the format, CUDA dataset registration, and hyperparameters. Verified live on the M4 Max — a
 real mlx-lm LoRA trained (val loss 2.74 → 2.27), loaded at inference, and merged.
+
+## Memory across sessions (M8)
+
+The assistant remembers a user across calls: each turn it injects a compact **memory block**
+(an LLM-distilled profile of durable facts + a rolling summary, plus the most relevant prior
+turns retrieved for what was just said). It's **consent-gated** — nothing is stored or recalled
+until a user opts in — and keyed per user (`{"user": "..."}` room/job metadata, or the LiveKit
+participant identity). Core memory (store, profile, keyword recall, distill) needs **no extra**.
+
+```bash
+# Try it offline (no LiveKit). --user opts that id in and keys their memory:
+personavoice-stream-demo --wav intro.wav   --persona companion --user sam   # records + distills
+personavoice-stream-demo --wav later.wav   --persona companion --user sam   # recalls prior facts
+
+# Manage / inspect memory (privacy surface):
+personavoice-memory --list                       # users, consent, turn/session counts
+personavoice-memory --show sam                    # profile (facts + summary) + recent turns
+personavoice-memory --grant sam [--training]      # opt in (recording / training use)
+personavoice-memory --consolidate sam             # (re)distill the profile via the LLM
+personavoice-memory --export sam --out sam.json   # portable dump        (privacy)
+personavoice-memory --delete sam                  # wipe everything      (privacy)
+personavoice-memory --distill sam --out sam.jsonl # transcripts -> M7 LoRA dataset (opt-in)
+```
+
+**Encryption at rest** is optional: set `PERSONAVOICE_MEMORY_KEY` (generate with `pip install -e
+'.[memory]'` then `personavoice-memory --gen-key`) and stored conversations are Fernet-encrypted;
+unset = plaintext (dev default, flagged by `--check`). **Semantic recall** is an optional upgrade
+(`pip install -e '.[memory-embeddings]'`); the default keyword retriever needs nothing.
+
+Verified live on the M4 Max: a real conversation → `consolidate` distilled (via gpt-oss-20b) a
+profile ("name is Sam", "has a dog named Rex", "high-school biology teacher") that a fresh
+next-session facade recalled. Per-user `--export`/`--delete` satisfy the wipe/portability controls.
+The live LiveKit memory path rides the same open step as M3's live agent.
 
 ## Run on the 4080 (CUDA, M2)
 

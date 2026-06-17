@@ -32,9 +32,15 @@ from typing import Any
 
 from ..adapters.factory import Backend, build_backend
 from ..audio import pcm16_to_wav, wav_to_pcm16
+from ..memory import ConversationMemory
 from ..models import Persona
 from ..persona.registry import PersonaRegistry
-from ..server.config import Settings, load_backend_config, load_voice_registry
+from ..server.config import (
+    Settings,
+    build_conversation_memory,
+    load_backend_config,
+    load_voice_registry,
+)
 from ..voice.registry import VoiceRegistry
 from .streaming import StreamingPipeline
 from .turn import TurnController
@@ -97,11 +103,16 @@ class PersonaAgent:
         voices: VoiceRegistry | None = None,
         *,
         publish_transcript: TranscriptPublisher | None = None,
+        memory: ConversationMemory | None = None,
+        user_id: str | None = None,
     ) -> None:
         self._backend = backend
         self._persona = persona
         self._source = source
-        self._pipeline = StreamingPipeline(backend, persona, voices)
+        self._memory = memory
+        self._pipeline = StreamingPipeline(
+            backend, persona, voices, memory=memory, user_id=user_id
+        )
         self._turn = TurnController(self._capture_wav)
         self._frame_samples = max(1, _OUT_SAMPLE_RATE * _FRAME_MS // 1000)
         # Publishes the assistant's spoken words back as a live transcript (the client renders
@@ -201,6 +212,9 @@ class PersonaAgent:
             task.cancel()
             with contextlib.suppress(asyncio.CancelledError, Exception):
                 await task
+        if self._memory is not None:
+            # Flush any in-flight profile distillation before the worker tears down.
+            await self._memory.aclose()
 
 
 async def _consume_track(agent: PersonaAgent, track: Any, silero: Any) -> None:
@@ -312,6 +326,32 @@ def resolve_persona_id(sources: list[str | None], default: str) -> str:
     return default
 
 
+def user_id_from_metadata(meta: str | None) -> str | None:
+    """Extract a memory user id from a JSON metadata string's `user` key, or None.
+
+    Memory is keyed by a stable user id so it persists across sessions. The client tags the
+    room/job with `{"user": "...", "persona": "..."}`; only the JSON form carries a user id
+    (a bare string is treated as a persona id, see `persona_id_from_metadata`).
+    """
+    if not meta or not meta.strip() or not meta.strip().startswith("{"):
+        return None
+    try:
+        obj = json.loads(meta.strip())
+    except json.JSONDecodeError:
+        return None
+    uid = obj.get("user") if isinstance(obj, dict) else None
+    return uid.strip() if isinstance(uid, str) and uid.strip() else None
+
+
+def resolve_user_id(sources: list[str | None]) -> str | None:
+    """First memory user id found across `sources` (highest priority first), else None."""
+    for src in sources:
+        uid = user_id_from_metadata(src)
+        if uid:
+            return uid
+    return None
+
+
 def _default_persona_id(registry: PersonaRegistry) -> str:
     """The fallback persona: `PERSONAVOICE_PERSONA` if it's known, else the first registered."""
     env = os.getenv("PERSONAVOICE_PERSONA")
@@ -351,6 +391,17 @@ async def entrypoint(ctx: Any, *, persona_id: str | None = None) -> None:
 
     await ctx.connect(auto_subscribe=agents.AutoSubscribe.AUDIO_ONLY)
 
+    # Cross-session memory (M8): keyed by a stable user id from the room/job metadata
+    # (`{"user": "..."}`) or the remote participant's identity. Without one we run stateless;
+    # the facade is also dormant until that user grants consent (see `personavoice-memory`).
+    remote_ids = [p.identity for p in getattr(ctx.room, "remote_participants", {}).values()]
+    job_meta = getattr(getattr(ctx, "job", None), "metadata", None)
+    room_meta = getattr(getattr(ctx, "room", None), "metadata", None)
+    user_id = resolve_user_id([job_meta, room_meta]) or (remote_ids[0] if remote_ids else None)
+    memory = build_conversation_memory(settings, backend, persona) if user_id else None
+    if memory is not None:
+        logger.info("memory enabled for user %r (persona memory=%s)", user_id, persona.memory.enabled)
+
     source = rtc.AudioSource(_OUT_SAMPLE_RATE, 1)
     track = rtc.LocalAudioTrack.create_audio_track("assistant-voice", source)
     publication = await ctx.room.local_participant.publish_track(
@@ -360,7 +411,15 @@ async def entrypoint(ctx: Any, *, persona_id: str | None = None) -> None:
     publisher = make_transcript_publisher(
         ctx.room.local_participant, getattr(publication, "sid", None)
     )
-    agent = PersonaAgent(backend, persona, source, voices, publish_transcript=publisher)
+    agent = PersonaAgent(
+        backend,
+        persona,
+        source,
+        voices,
+        publish_transcript=publisher,
+        memory=memory,
+        user_id=user_id,
+    )
     consumers: set[asyncio.Task[None]] = set()  # keep strong refs so tasks aren't GC'd
 
     @ctx.room.on("track_subscribed")

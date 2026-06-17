@@ -23,10 +23,17 @@ from pathlib import Path
 
 from ..adapters.factory import build_backend
 from ..audio import read_wav_file, write_wav_file
+from ..memory import ConversationMemory
 from ..models import Persona
 from ..persona.loader import load_persona
 from ..persona.registry import PersonaRegistry
-from ..server.config import ConfigError, Settings, load_backend_config, load_voice_registry
+from ..server.config import (
+    ConfigError,
+    Settings,
+    build_conversation_memory,
+    load_backend_config,
+    load_voice_registry,
+)
 from .streaming import StreamingPipeline, StreamMetrics
 
 
@@ -63,15 +70,35 @@ def _play(path: Path) -> None:
 
 
 async def _run(
-    settings: Settings, persona: Persona, audio_in: bytes, out_dir: Path, play: bool
+    settings: Settings,
+    persona: Persona,
+    audio_in: bytes,
+    out_dir: Path,
+    play: bool,
+    user_id: str | None,
 ) -> StreamMetrics:
     backend = build_backend(load_backend_config(settings))
 
+    # Cross-session memory (M8). Passing --user opts that user in (grants consent) and keys
+    # their stored memory: run once to record, run again to hear prior facts recalled.
+    memory: ConversationMemory | None = None
+    if user_id:
+        memory = build_conversation_memory(settings, backend, persona)
+        memory.store.set_consent(user_id, granted=True, note="granted via stream-demo --user")
+
     transcript = await backend.stt.transcribe(audio_in)
     print(f"\nyou said : {transcript.text!r}")
+
+    if memory is not None and user_id:
+        block = await memory.recall(user_id, transcript.text, persona=persona)
+        if block:
+            print(f"\n[memory recalled]\n{block}\n")
+        else:
+            print("[memory] nothing recalled yet (first session for this user)\n")
+
     print(f"{persona.id} : ", end="", flush=True)
 
-    pipe = StreamingPipeline(backend, persona, load_voice_registry(settings))
+    pipe = StreamingPipeline(backend, persona, load_voice_registry(settings), memory=memory, user_id=user_id)
     metrics = StreamMetrics()
 
     idx = 0
@@ -85,6 +112,16 @@ async def _run(
         if play:
             _play(part)
     print(metrics.reply)
+
+    if memory is not None and user_id:
+        # One demo run is a single turn, below the auto-consolidation cadence, so distill now
+        # to extract durable facts the *next* run will recall. Then close out background work.
+        profile = await memory.consolidate(user_id, persona=persona)
+        await memory.aclose()
+        if profile is not None and profile.facts:
+            print("\n[memory] profile facts now stored:")
+            for fact in profile.fact_texts():
+                print(f"  - {fact}")
     return metrics
 
 
@@ -117,6 +154,12 @@ def main(argv: list[str] | None = None) -> int:
         "--out-dir", type=Path, default=Path("reply_stream"), help="dir for per-sentence wavs"
     )
     parser.add_argument("--play", action="store_true", help="play each sentence as it streams")
+    parser.add_argument(
+        "--user",
+        metavar="ID",
+        help="enable cross-session memory keyed by this user id (M8): grants consent, "
+        "records the turn, recalls prior-session facts on the next run",
+    )
     args = parser.parse_args(argv)
 
     try:
@@ -139,7 +182,9 @@ def main(argv: list[str] | None = None) -> int:
 
     args.out_dir.mkdir(parents=True, exist_ok=True)
     try:
-        metrics = asyncio.run(_run(settings, persona, audio_in, args.out_dir, args.play))
+        metrics = asyncio.run(
+            _run(settings, persona, audio_in, args.out_dir, args.play, args.user)
+        )
     except Exception as exc:  # surface backend/model errors without a traceback wall
         print(f"error: {exc}", file=sys.stderr)
         return 1

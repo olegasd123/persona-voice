@@ -21,6 +21,7 @@ from collections.abc import AsyncIterator, Awaitable, Callable
 from dataclasses import dataclass
 
 from ..adapters.factory import Backend
+from ..memory import ConversationMemory
 from ..models import Msg, Persona, Role
 from ..persona.prompt import build_messages
 from ..voice.registry import VoiceRegistry
@@ -47,12 +48,25 @@ class StreamingPipeline:
     """
 
     def __init__(
-        self, backend: Backend, persona: Persona, voices: VoiceRegistry | None = None
+        self,
+        backend: Backend,
+        persona: Persona,
+        voices: VoiceRegistry | None = None,
+        *,
+        memory: ConversationMemory | None = None,
+        user_id: str | None = None,
     ) -> None:
         self.backend = backend
         self.persona = persona
         self.voices = voices
         self.history: list[Msg] = []
+        # Cross-session memory (M8): consent-gated, no-op until a user opts in. The session id
+        # ties this run's recorded turns together so recall can exclude the live session.
+        self.memory = memory
+        self.user_id = user_id
+        self.session_id: str | None = (
+            memory.start_session(user_id, persona.id) if memory is not None and user_id else None
+        )
 
     async def stream_response(
         self,
@@ -76,7 +90,10 @@ class StreamingPipeline:
         use_internal = history is None
         history = self.history if use_internal else history
 
-        messages = build_messages(self.persona, history=history, user_input=user_text)
+        memory_context = await self._recall(user_text)
+        messages = build_messages(
+            self.persona, history=history, user_input=user_text, memory_context=memory_context
+        )
         voice = voice_ref_for(self.persona, self.backend, self.voices)
         collected: list[str] = []
         t0 = time.perf_counter()
@@ -113,3 +130,20 @@ class StreamingPipeline:
             if use_internal:
                 self.history.append(Msg(role=Role.user, content=user_text))
                 self.history.append(Msg(role=Role.assistant, content=reply))
+            await self._remember(user_text, reply)
+
+    async def _recall(self, user_text: str) -> str | None:
+        """Memory block to inject for this turn (None when memory is off / no consent)."""
+        if self.memory is None or not self.user_id:
+            return None
+        return await self.memory.recall(
+            self.user_id, user_text, persona=self.persona, session_id=self.session_id
+        )
+
+    async def _remember(self, user_text: str, reply: str) -> None:
+        """Persist this exchange to cross-session memory (no-op when memory is off)."""
+        if self.memory is None or not self.user_id or self.session_id is None:
+            return
+        await self.memory.record_user(self.user_id, self.session_id, self.persona, user_text)
+        if reply:
+            await self.memory.record_assistant(self.user_id, self.session_id, self.persona, reply)

@@ -66,6 +66,16 @@ clone-mac = [
 train = [
     "mlx-lm>=0.14",
 ]
+# --- Conversation memory (added in M8) ------------------------------------------------
+# Core memory (store, profile, keyword recall, distill) needs nothing beyond the base deps.
+# `memory` adds at-rest encryption; `memory-embeddings` adds semantic recall — both lazy,
+# so the default keyword-recall + plaintext path runs on the core install.
+memory = [
+    "cryptography>=42.0",   # Fernet encryption of stored conversations (PERSONAVOICE_MEMORY_KEY)
+]
+memory-embeddings = [
+    "sentence-transformers>=2.7",  # optional semantic retrieval (EmbeddingRetriever)
+]
 # --- Tooling --------------------------------------------------------------------------
 dev = [
     "ruff>=0.5",
@@ -84,6 +94,7 @@ personavoice-agent = "personavoice.orchestrator.agent:run"
 personavoice-token-server = "personavoice.server.token_server:main"
 personavoice-clone = "personavoice.voice.cli:main"
 personavoice-train = "personavoice.training.cli:main"
+personavoice-memory = "personavoice.memory.cli:main"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/personavoice"]

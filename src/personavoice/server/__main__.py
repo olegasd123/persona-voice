@@ -58,6 +58,11 @@ def _print_report(report: CheckReport, settings: Settings, *, use_color: bool) -
         print(f"Clones ({len(report.clones)}): {listed}")
         print()
 
+    if report.memory_dir:
+        enc = "encrypted" if report.memory_encrypted else "plaintext"
+        print(f"Memory: {report.memory_dir}  ({enc}, {report.memory_users} user(s))")
+        print()
+
     if report.warnings:
         print("Warnings:")
         for w in report.warnings:

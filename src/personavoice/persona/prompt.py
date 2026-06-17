@@ -37,9 +37,19 @@ def build_messages(
     persona: Persona,
     history: list[Msg] | None = None,
     user_input: str | None = None,
+    *,
+    memory_context: str | None = None,
 ) -> list[Msg]:
-    """Assemble system + history (+ optional new user turn) into the message list."""
+    """Assemble system + history (+ optional new user turn) into the message list.
+
+    `memory_context` (M8), if given, is appended to the system prompt as a second system
+    message so the persona recalls who it's talking to across sessions. It rides in its own
+    message (not folded into the persona prompt) so it can vary per turn without rebuilding
+    the persona's base prompt.
+    """
     messages: list[Msg] = [Msg(role=Role.system, content=render_system_prompt(persona))]
+    if memory_context and memory_context.strip():
+        messages.append(Msg(role=Role.system, content=memory_context.strip()))
     if history:
         messages.extend(history)
     if user_input is not None:

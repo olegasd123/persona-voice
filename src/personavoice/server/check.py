@@ -9,6 +9,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 
 from ..adapters.factory import Backend, build_backend
+from ..memory import MemoryStoreError
 from ..models import CheckResult, Persona
 from ..voice.registry import VoiceRegistry
 from .config import (
@@ -16,6 +17,7 @@ from .config import (
     Settings,
     load_all_personas,
     load_backend_config,
+    load_memory_store,
     load_voice_registry,
 )
 
@@ -28,6 +30,9 @@ class CheckReport:
     voices: list[str] = field(default_factory=list)
     clones: list[str] = field(default_factory=list)
     clone_assignments: dict[str, str] = field(default_factory=dict)
+    memory_dir: str = ""
+    memory_encrypted: bool = False
+    memory_users: int = 0
     errors: list[str] = field(default_factory=list)
     warnings: list[str] = field(default_factory=list)
 
@@ -111,5 +116,22 @@ def run_check(settings: Settings) -> CheckReport:
         report.clones = voices.clones.names()
         report.clone_assignments = voices.clones.assignments
     report.warnings.extend(_validate_personas(personas, backend, voices))
+
+    # 4. Memory (M8). Surfaces the store location, at-rest encryption, and #users so a
+    # misconfigured PERSONAVOICE_MEMORY_KEY (cryptography missing / bad key) fails the check.
+    report.memory_dir = str(settings.memory_dir)
+    memory_enabled = any(p.memory.enabled for p in personas.values())
+    try:
+        store = load_memory_store(settings)
+        report.memory_encrypted = store.encrypted
+        report.memory_users = len(store.users())
+    except MemoryStoreError as exc:
+        report.errors.append(str(exc))
+        return report
+    if memory_enabled and not report.memory_encrypted:
+        report.warnings.append(
+            "a persona has memory enabled but PERSONAVOICE_MEMORY_KEY is unset — stored "
+            "conversations are unencrypted at rest (fine for dev; set a key for real users)"
+        )
 
     return report

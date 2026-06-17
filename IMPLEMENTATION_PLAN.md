@@ -392,12 +392,48 @@ written-but-device-unverified; revisit if/when a device is available.
       can't serve it), to close out "an HR/Teacher LoRA *measurably improves* in-character
       behavior."
 
-### M8 — Memory / learn-from-conversations *(≈ 1.5 weeks)*
+### M8 — Memory / learn-from-conversations *(≈ 1.5 weeks)* `[Done]`
 **Goal:** continuity across sessions; foundation for long-term learning.
-- [ ] Per-user transcript store; rolling profile/summary; RAG retrieval into context.
-- [ ] Privacy controls: consent, local encryption, per-user delete/export.
-- [ ] Pipeline to distill logs into periodic SFT/DPO LoRA refreshes (manual trigger first).
-- **Acceptance:** the assistant recalls prior-session facts; user can wipe their data.
+- [x] **Per-user transcript store + rolling profile + RAG into context** (`src/personavoice/memory/`).
+      `store.py` `MemoryStore` persists per-user turns (`transcript.jsonl`), a `profile.json`, and a
+      `consent.json` under `<models>/memory/<user>/`. `profile.py` distills turns into a rolling
+      `UserProfile` (durable facts + summary) via an injected LLM (prompt-building + JSON parsing are
+      pure/tested; only `ProfileBuilder.update` calls the model). `rag.py` retrieves relevant prior
+      turns — `KeywordRetriever` (pure cosine over term counts, **zero deps**, default) or an optional
+      `EmbeddingRetriever` (lazy sentence-transformers, `memory-embeddings` extra) — and
+      `recall_context` assembles the spoken-friendly block (profile + top-k turns) injected as a
+      second system message (`persona/prompt.py build_messages(memory_context=...)`).
+- [x] **Consent-gated facade + cascade wiring.** `conversation.py` `ConversationMemory` is the
+      runtime API: nothing is recalled/recorded without granted consent, and it's keyed off
+      `persona.memory.enabled` so it's wired in unconditionally and stays dormant until opt-in.
+      `StreamingPipeline` (and so the LiveKit agent) recall before the turn, record after, and
+      distill the profile on a background cadence (`summarize_every`); the agent keys memory by the
+      room/job `{"user": ...}` metadata or the participant identity, and flushes distillation on
+      teardown (`aclose`). `personavoice-stream-demo --user <id>` is the offline (no-LiveKit) path.
+- [x] **Privacy controls: consent, local encryption, per-user delete/export.** Consent is explicit
+      (recording) with a separate stricter `allow_training` opt-in. **At-rest encryption** is optional
+      Fernet (`store.py` `FernetCipher`, lazy `cryptography`/`memory` extra, keyed from
+      `PERSONAVOICE_MEMORY_KEY`) — each JSONL line/blob is an independent token, so append stays
+      line-at-a-time; `NullCipher` (plaintext) is the dev default and `server --check` flags it.
+      `personavoice-memory` is the ops/privacy CLI: `--list/--show/--grant/--revoke/--consolidate/
+      --export/--delete/--distill/--gen-key`.
+- [x] **Distill logs → SFT LoRA refreshes (manual trigger).** `distill.py` groups a user's
+      transcripts by session, coerces them into well-formed training examples (drops dangling turns,
+      merges fragments), prepends the persona prompt, and emits the **M7 messages-JSONL** dataset —
+      consumed unchanged by `personavoice-train`. Strictly opt-in (`allow_training`), manual trigger
+      (`personavoice-memory --distill`). *DPO/preference-pair distillation deferred* (we don't collect
+      preferences yet); SFT refresh is the M8 deliverable.
+- **Acceptance:** ✅ **met + live-verified on the M4 Max.** The assistant **recalls prior-session
+      facts**: a real conversation → `consolidate` distilled (via **gpt-oss-20b** in LM Studio) a
+      profile ("name is Sam", "has a dog named Rex", "high-school biology teacher", "hikes on
+      weekends") → a fresh facade (next-session/process) recalled that block for a later query. The
+      user **can wipe their data** (`--delete`) and export it (`--export`); encryption round-trips
+      under a real Fernet key (`--check` reports `encrypted`, and a bad key fails the check). **341
+      tests green** (was 266; +75 for M8 — store/profile/rag/conversation/distill/cli + the streaming
+      integration; 0 skip in `.venv312` once `cryptography` is installed); ruff + mypy clean; both
+      `BACKEND=mac|cuda server --check` PASS with the memory section. **Open (same rider as M3/M4):**
+      the *live LiveKit* memory path (metadata-keyed user, mid-call recall) needs a running LiveKit
+      server; the served-LoRA A/B from a distilled dataset rides the 4080 (M7's open step).
 
 ### M9 — Voice fine-tuning (high fidelity) *(≈ 1 week)*
 **Goal:** custom voices beyond zero-shot for key personas.
