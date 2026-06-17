@@ -14,7 +14,7 @@
     <!-- usesCleartextTraffic allows http:// token server + ws:// LiveKit in local dev.
          Use https/wss in production and drop this. -->
     <application
-        android:label="personavoice_client"
+        android:label="Persona Voice"
         android:name="${applicationName}"
         android:icon="@mipmap/ic_launcher"
         android:usesCleartextTraffic="true">
