@@ -491,7 +491,7 @@ written-but-device-unverified; revisit if/when a device is available.
       the *live LiveKit* memory path (metadata-keyed user, mid-call recall) needs a running LiveKit
       server; the served-LoRA A/B from a distilled dataset rides the 4080 (M7's open step).
 
-### M9 — Voice fine-tuning (high fidelity) *(≈ 1 week)* `[Partial]`
+### M9 — Voice fine-tuning (high fidelity) *(≈ 1 week)* `[Done]`
 **Goal:** custom voices beyond zero-shot for key personas.
 - [x] Voice fine-tune on a target speaker dataset (CUDA), in `src/personavoice/training/voice/`
       (mirrors the M7 LoRA stack: pure, unit-tested logic; heavy trainers shelled out, lazy).
@@ -513,22 +513,45 @@ written-but-device-unverified; revisit if/when a device is available.
       adapters (Chatterbox `from_local`, F5 `model_name`) load the trained checkpoint via the new
       `VoiceRef.model_path`. `server --check` lists fine-tuned voices + assignments and suppresses
       the distinctness warning for an assigned voice.
-- **Acceptance:** ⚠️ *code-complete; the audible on-GPU A/B rides the RTX 5090 (same close-out
-      pattern as M2/M7).* The whole stack is unit-tested at the logic level (dataset validation,
-      engine plan-builders, prep→train ordering + failures, A/B scoring, store persistence,
-      registry precedence over a clone, adapter `model_path` wiring, `--check`): **407 tests
-      green** (was 344; +63 for M9; 3 skip in `.venv312`), ruff + mypy clean, both
-      `BACKEND=mac|cuda server --check` PASS. CLI flows smoke-tested (`run --dry-run` for both
-      engines, `dataset` from a sample manifest, `register`/`list`/`assign`). **Still open:** run
-      a real fine-tune on the 5090 (F5-TTS in the CUDA training image) and confirm the A/B shows
-      the fine-tuned voice **clearly higher fidelity** than its zero-shot clone (speaker-similarity
-      delta over margin + a human MOS spot-check).
+- **Acceptance:** ✅ *closed on real CUDA hardware — RTX 5090.* The stack is unit-tested at the
+      logic level (dataset validation, engine plan-builders, prep→train ordering + failures, A/B
+      scoring, store persistence, registry precedence over a clone, adapter `model_path` wiring,
+      `--check`): **407 tests green** (3 skip in `.venv312`), ruff + mypy clean, both
+      `BACKEND=mac|cuda server --check` PASS (and list the fine-tuned voice). **Run for real on the
+      5090** via a new F5-TTS Blackwell trainer image (`training/voice/Dockerfile.blackwell`,
+      cu128 torch) + runner (`run_finetune.sh`): a **public-domain LJSpeech** target speaker (Linda
+      Johnson) → **450 clips / 49 min** built through the repo's own `validate_dataset` → an F5-TTS
+      fine-tune from `F5TTS_v1_Base` (**4180 updates** on the 5090, ~15 min). The **A/B vs F5
+      zero-shot** (the fair same-engine baseline; `evaluate_f5_ab.py`, driving F5 directly but
+      scoring with the repo's pure `score_ab` + Resemblyzer over **14 held-out real** target clips)
+      is a **clear win**: fine-tune **0.832** vs zero-shot **0.811** speaker-similarity, **delta
+      +0.0208 over a 0.010 margin** — plus 10 MOS sample wavs (`models/finetuned/ljspeech/
+      ab_samples/`) for the spot-check. The winner is **registered** in the finetuned store with the
+      verdict (`personavoice-voice-train list` → `ljspeech [f5] (sim 0.832 vs clone 0.811)`).
+      **EMA finding:** F5 saves both EMA (`use_ema=True`, the inference default) and raw trained
+      weights; its EMA (`beta=0.9999` + `update_every=10`, a ~10⁵-step window) barely diverges from
+      the base for thousands of steps, so the EMA A/B is only +0.0098 (just under margin) while the
+      **deployable raw weights win clearly** — for a small-data fine-tune, evaluate/deploy `--no-ema`.
+      **Open (rider):** *live* CUDA use of an F5 fine-tune needs an F5 *cascade* adapter — Chatterbox
+      (the CUDA cloning adapter) can't load an F5 checkpoint — so the registered voice is left
+      unassigned; that adapter + the live path ride the same open M3 LiveKit-server step.
 - **Setup notes (CUDA / RTX 5090):** the voice trainers stay out of the light `cuda` wheel (same
       policy as vLLM/LLaMA-Factory) — install F5-TTS (`pip install f5-tts`) in the CUDA training
       image; on Blackwell (sm_120) use the cu128 torch wheels (the M2/M7 notes apply). Chatterbox
       ships **no official finetune CLI**, so its `trainer_script` points at a community trainer
       (documented in `training/voice/README.md`). Licensing: an F5 fine-tune inherits **CC-BY-NC**
       (dev/personal); fine-tune **Chatterbox** (MIT) for anything shipped — same consent gate as M5.
+      Several **f5-tts ≥1.1 interface deltas** surfaced doing it for real and are reconciled in
+      `training/voice/run_finetune.sh` (the verified runner; the `config.py` plan-builders stay the
+      tested declarative intent): prep is now a **module** (`python -m
+      f5_tts.train.datasets.prepare_csv_wavs <CSV> <OUT>`, not the `f5-tts_prepare_csv_wavs` script)
+      wanting a CSV with a `audio_file|text` **header + absolute** paths; F5 fixes its data/ckpt
+      roots by `--dataset_name` and finetune mode needs the base **pinyin vocab**
+      (`Emilia_ZH_EN_pinyin/vocab.txt`, fetched from `SWivid/F5-TTS`, not pip-bundled);
+      `--batch_size_per_gpu` is in **frames** under F5's default frame batching; and `--logger`'s
+      choices include the Python `None` object (omit it, don't pass `"None"`). Also: Resemblyzer's
+      `webrtcvad` imports `pkg_resources`, which setuptools ≥81 dropped — the image pins
+      `setuptools<81` (verified at build time).
 
 ### M10 — Hardening, eval & latency optimization *(≈ 1–1.5 weeks)*
 **Goal:** make it robust and fast enough to use daily.

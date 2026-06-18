@@ -12,7 +12,7 @@ See [IMPLEMENTATION_PLAN.md](IMPLEMENTATION_PLAN.md) for the full design and mil
 
 ## Status
 
-Current milestone: **M9 — Voice fine-tuning (code-complete; on-GPU run pending)**. When a
+Current milestone: **M9 — Voice fine-tuning (done; closed on the RTX 5090)**. When a
 zero-shot clone (M5) isn't faithful enough, `personavoice-voice-train` fine-tunes a high-fidelity
 voice for a target speaker — **build** a `metadata.csv` dataset (auto-transcribed by the STT),
 **train** on CUDA (F5-TTS by default, Chatterbox for the MIT path), **A/B** vs the clone by
@@ -24,9 +24,12 @@ out — so it installs and tests without a GPU. See "Voice fine-tuning (M9)" bel
 
 > **407 tests green** (+63 for M9: dataset / config / runner / A/B-eval / finetuned-store +
 > registry precedence + `--check`; 3 skip in `.venv312`); ruff + mypy clean; both
-> `BACKEND=mac|cuda --check` PASS with fine-tuned-voice listing. **Open:** the actual on-GPU
-> fine-tune + audible A/B ride the RTX 5090 (same close-out pattern as M7); the *live LiveKit*
-> path rides M3's open step.
+> `BACKEND=mac|cuda --check` PASS with fine-tuned-voice listing. **Closed on the RTX 5090:** an
+> F5-TTS fine-tune (public-domain LJSpeech, 450 clips / 49 min, 4180 updates in the
+> `Dockerfile.blackwell` trainer image) **clearly beats F5 zero-shot** — speaker-similarity
+> **0.832 vs 0.811, delta +0.0208 over a 0.010 margin** (raw trained weights; F5's lagging EMA
+> needs ~10⁵ steps), with MOS samples saved and the winner registered. The *live LiveKit* path
+> (and a CUDA F5 *cascade* adapter for live use) ride M3's open step.
 
 **M8 (done):** the assistant remembers a user across sessions — a **consent-gated** per-user store
 keeps transcripts, an LLM distills them into a rolling **profile** (durable facts + summary), and
@@ -407,6 +410,12 @@ personavoice-voice-train eval --voice my_voice --clone my_clone --target-dir hel
 personavoice-voice-train register --voice my_voice --checkpoint models/finetuned/my_voice --assign companion
 personavoice-voice-train list
 ```
+
+The steps above are the declarative CLI flow; the **verified end-to-end CUDA run** (used to close
+M9 on the RTX 5090) is the F5-TTS Blackwell image + `run_finetune.sh` + `evaluate_f5_ab.py`, which
+reconcile f5-tts ≥1.1's actual interface (prep is now a module, frame batching, the pinyin-vocab
+fetch) and run the A/B as fine-tune vs F5 zero-shot — see
+[training/voice/README.md](training/voice/README.md).
 
 A fine-tuned voice lands under `<models>/finetuned` with a `finetuned.json` manifest and, once
 assigned, takes precedence in the registry — **fine-tuned ▶ clone ▶ preset** — with the cloning

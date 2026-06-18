@@ -12,6 +12,14 @@ one), the trainer command, and any written config — for either:
                      the clean-license path, but it ships no official finetune CLI — point
                      `trainer_script` at the community trainer (see the M9 README).
 
+These plan-builders are the declarative *intent* (and what's unit-tested). The verified
+end-to-end CUDA runner is `training/voice/run_finetune.sh` (in the Blackwell trainer image):
+f5-tts ≥1.1 renamed the prep step to the `f5_tts.train.datasets.prepare_csv_wavs` *module*
+(which wants a CSV with a `audio_file|text` header and absolute wav paths) and fixes its data/
+ckpt roots by `dataset_name`, so the runner builds that CSV, fetches the pretrained pinyin
+vocab, runs prepare + finetune, and copies the checkpoint back out — the bits a flat argv can't
+capture. See `training/voice/README.md`.
+
 Voice fine-tuning is CUDA-centric (the plan's training track). Building the plan is pure (no
 model libs, no disk), so it's fully unit-tested; `finetune.py` writes any config and runs the
 commands.

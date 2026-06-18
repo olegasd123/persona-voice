@@ -36,6 +36,12 @@ voices/*.npz
 *.log
 scratch/
 
+# Datasets (downloaded target-speaker audio; not committed). Built dataset dirs are local
+# artifacts — the committed `sample/` shows the format; everything else is reproducible.
+data/
+training/voice/datasets/*/
+!training/voice/datasets/sample/
+
 # Bench results + generated sample/output audio (machine-specific; numbers live in the plan)
 bench_*.json
 samples/
