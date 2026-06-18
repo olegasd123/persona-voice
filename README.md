@@ -12,21 +12,30 @@ See [IMPLEMENTATION_PLAN.md](IMPLEMENTATION_PLAN.md) for the full design and mil
 
 ## Status
 
-Current milestone: **M8 — Memory / learn-from-conversations (done)**. The assistant remembers a
-user across sessions: a **consent-gated** per-user store keeps transcripts; an LLM distills them
-into a rolling **profile** (durable facts + summary); each turn injects a **memory block** (profile
-+ the most relevant prior turns, retrieved by a zero-dep keyword retriever or optional embeddings).
-Privacy is first-class — explicit consent, optional **at-rest encryption** (`PERSONAVOICE_MEMORY_KEY`,
-Fernet), and per-user **export/delete** via `personavoice-memory`. Transcripts also **distill** into
-the M7 LoRA dataset (opt-in, manual trigger). See "Memory across sessions (M8)" below.
+Current milestone: **M9 — Voice fine-tuning (code-complete; on-GPU run pending)**. When a
+zero-shot clone (M5) isn't faithful enough, `personavoice-voice-train` fine-tunes a high-fidelity
+voice for a target speaker — **build** a `metadata.csv` dataset (auto-transcribed by the STT),
+**train** on CUDA (F5-TTS by default, Chatterbox for the MIT path), **A/B** vs the clone by
+speaker similarity to held-out real clips, and **register** the winner. A fine-tuned voice folds
+into the registry as a non-destructive overlay (`voice/finetuned.py`) that **outranks a clone**
+(fine-tuned ▶ clone ▶ preset); the cloning adapters load its checkpoint via `VoiceRef.model_path`.
+The whole loop mirrors M7's discipline — pure, unit-tested logic with the heavy trainers shelled
+out — so it installs and tests without a GPU. See "Voice fine-tuning (M9)" below.
 
-> **Verified live on the M4 Max** (LM Studio / gpt-oss-20b): a real conversation → `consolidate`
-> distilled a profile ("name is Sam", "has a dog named Rex", "high-school biology teacher",
-> "hikes on weekends") → a **fresh next-session facade recalled it** into the injected block; the
-> user can `--export`/`--delete` their data, and encryption round-trips under a real Fernet key
-> (`--check` reports `encrypted`; a bad key fails). **341 tests green** (+75 for M8; 0 skip in
-> `.venv312`); ruff + mypy clean; both `BACKEND=mac|cuda --check` PASS. Open (same rider as M3/M4):
-> the *live LiveKit* memory path needs a running LiveKit server.
+> **407 tests green** (+63 for M9: dataset / config / runner / A/B-eval / finetuned-store +
+> registry precedence + `--check`; 3 skip in `.venv312`); ruff + mypy clean; both
+> `BACKEND=mac|cuda --check` PASS with fine-tuned-voice listing. **Open:** the actual on-GPU
+> fine-tune + audible A/B ride the RTX 5090 (same close-out pattern as M7); the *live LiveKit*
+> path rides M3's open step.
+
+**M8 (done):** the assistant remembers a user across sessions — a **consent-gated** per-user store
+keeps transcripts, an LLM distills them into a rolling **profile** (durable facts + summary), and
+each turn injects a **memory block** (profile + the most relevant prior turns, by a zero-dep
+keyword retriever or optional embeddings). Privacy is first-class — explicit consent, optional
+**at-rest encryption** (`PERSONAVOICE_MEMORY_KEY`, Fernet), per-user **export/delete** via
+`personavoice-memory`; transcripts also **distill** into the M7 LoRA dataset (opt-in). Verified
+live on the M4 Max (gpt-oss-20b): a real conversation distilled a profile ("name is Sam", "has a
+dog named Rex") that a fresh next-session facade recalled. See "Memory across sessions (M8)" below.
 
 **M7 (done):** per-persona "brains" beyond prompting — `personavoice-train` **curates**
 in-character dialogues by self-chat, **trains** a LoRA (`mlx_lm` on Mac, LLaMA-Factory QLoRA on
@@ -374,6 +383,42 @@ profile ("name is Sam", "has a dog named Rex", "high-school biology teacher") th
 next-session facade recalled. Per-user `--export`/`--delete` satisfy the wipe/portability controls.
 The live LiveKit memory path rides the same open step as M3's live agent.
 
+## Voice fine-tuning (M9)
+
+When a zero-shot clone (M5) isn't faithful enough, **fine-tune** a high-fidelity voice for a
+target speaker. Where a clone is reference conditioning, a fine-tune adapts the TTS model itself
+to the speaker on a small dataset. One CLI, `personavoice-voice-train`, drives the loop (heavy
+trainers are shelled out to, so the repo installs and tests without a GPU); it's **CUDA-only**.
+
+```bash
+pip install -e '.[voice-eval]'        # speaker-similarity A/B (Resemblyzer); trainers live in the CUDA image
+
+# 1. Build the target-speaker dataset (metadata.csv of audio|text; auto-transcribe with the STT).
+personavoice-voice-train dataset --voice my_voice --audio-dir clips/ --probe-durations
+
+# 2. Fine-tune (F5-TTS by default; Chatterbox for the MIT path). Preview, then launch on the GPU.
+personavoice-voice-train run --voice my_voice --engine f5 --dry-run
+personavoice-voice-train run --voice my_voice --engine f5 --config training/voice/configs/my_voice.f5.yaml
+
+# 3. A/B vs the zero-shot clone — speaker similarity to held-out real target clips.
+personavoice-voice-train eval --voice my_voice --clone my_clone --target-dir held_out/ --margin 0.02 --register
+
+# 4. Fold the winner into the registry + assign it (outranks a clone for that persona).
+personavoice-voice-train register --voice my_voice --checkpoint models/finetuned/my_voice --assign companion
+personavoice-voice-train list
+```
+
+A fine-tuned voice lands under `<models>/finetuned` with a `finetuned.json` manifest and, once
+assigned, takes precedence in the registry — **fine-tuned ▶ clone ▶ preset** — with the cloning
+adapters (Chatterbox/F5) loading the trained checkpoint via `VoiceRef.model_path`. See
+[training/voice/README.md](training/voice/README.md) for engines, the dataset format, and the
+licensing trade-off (F5 trainer is canonical but CC-BY-NC; Chatterbox is MIT).
+
+> **Licensing:** a voice fine-tuned with F5 inherits **CC-BY-NC** weights — fine for dev /
+> personal personas, not commercial redistribution. Fine-tune **Chatterbox** (MIT) for anything
+> shipped. Only fine-tune voices you're authorized to use (same consent gate as M5). See
+> **Models & licenses**.
+
 ## Run on the 4080 (CUDA, M2)
 
 The `cuda` backend mirrors the Mac cascade: `faster_whisper`/`parakeet` (STT), `vllm` (LLM),
@@ -421,13 +466,14 @@ src/personavoice/
   models.py                  # Persona, VoiceRef, VoiceDef, Transcript, Msg, configs
   adapters/                  # stt/ llm/ tts/ — base classes + per-backend impls + factory
   persona/                   # loader, prompt builder, registry
-  voice/                     # voice registry (M4) + zero-shot cloning (M5) + `personavoice-clone`
+  voice/                     # registry (M4) + zero-shot clones (M5) + fine-tuned voices (M9)
   server/                    # settings, config, `--check`/`--serve`/`--token-server`; tokens.py (M6)
   orchestrator/              # pipeline (M1) + chunker/streaming/turn/agent (M3 streaming)
-  training/                  # persona LoRA: dataset/curate/config/train/merge/eval (M7)
-  memory/                    # filled in M8
+  training/                  # persona LoRA (M7) + voice/ fine-tuning: dataset/config/finetune/eval (M9)
+  memory/                    # per-user store + profile + RAG + distill (M8)
 client/                      # Flutter app (iOS + Android), LiveKit SDK (M6)
 training/persona_lora/       # LoRA configs, seed datasets, workflow docs (M7)
+training/voice/              # voice-finetune configs, sample dataset, workflow docs (M9)
 scripts/
   download_models.py         # pinned model manifest + downloader
   bench_latency.py           # per-stage latency benchmark (mac/cuda)
@@ -465,9 +511,10 @@ redistribution / commercial use:
 - **Orpheus-3b-0.1-ft** is tagged Apache-2.0 but its weights are fine-tuned from
   **Llama-3.2-3B**, so Meta's Llama 3.2 Community License also applies. **Chatterbox**
   (`ResembleAI/chatterbox`, MIT) is the clean-license CUDA alternative.
-- **F5-TTS** weights (the M5 Mac cloning option) are **CC-BY-NC** (non-commercial) due to
-  the Emilia training set, even though the F5 *code* is MIT. For commercial cloning use
-  Chatterbox (MIT) on CUDA, or an Apache-licensed OpenF5 checkpoint.
+- **F5-TTS** weights (the M5 Mac cloning option, and the default M9 fine-tune engine) are
+  **CC-BY-NC** (non-commercial) due to the Emilia training set, even though the F5 *code* is
+  MIT — so a voice **fine-tuned** with F5 inherits CC-BY-NC too. For commercial cloning /
+  fine-tuning use **Chatterbox** (MIT) on CUDA, or an Apache-licensed OpenF5 checkpoint.
 
 > Licenses drift — **re-verify before any redistribution**.
 

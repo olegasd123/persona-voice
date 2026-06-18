@@ -19,6 +19,7 @@ from ..memory import ConversationMemory, MemoryStore, cipher_from_key
 from ..models import BackendConfig, Persona
 from ..persona.loader import load_personas
 from ..voice.clone import ClonesStore
+from ..voice.finetuned import FinetunedVoicesStore
 from ..voice.registry import VoiceRegistry
 
 VALID_BACKENDS = ("mac", "cuda")
@@ -38,6 +39,7 @@ class Settings:
         config_dir: Path,
         models_dir: Path,
         clones_dir: Path | None = None,
+        finetuned_dir: Path | None = None,
         memory_dir: Path | None = None,
         memory_key: str | None = None,
     ) -> None:
@@ -45,6 +47,7 @@ class Settings:
         self.config_dir = config_dir
         self.models_dir = models_dir
         self._clones_dir = clones_dir
+        self._finetuned_dir = finetuned_dir
         self._memory_dir = memory_dir
         self.memory_key = memory_key
 
@@ -64,6 +67,11 @@ class Settings:
     def clones_dir(self) -> Path:
         """Where cloned voices + their manifest live (M5). Defaults under the models dir."""
         return self._clones_dir or (self.models_dir / "clones")
+
+    @property
+    def finetuned_dir(self) -> Path:
+        """Where fine-tuned voices + their manifest live (M9). Defaults under the models dir."""
+        return self._finetuned_dir or (self.models_dir / "finetuned")
 
     @property
     def memory_dir(self) -> Path:
@@ -86,6 +94,8 @@ class Settings:
         models_dir = Path(os.getenv("PERSONAVOICE_MODELS_DIR", "models")).expanduser()
         clones_env = os.getenv("PERSONAVOICE_CLONES_DIR")
         clones_dir = Path(clones_env).expanduser() if clones_env else None
+        finetuned_env = os.getenv("PERSONAVOICE_FINETUNED_DIR")
+        finetuned_dir = Path(finetuned_env).expanduser() if finetuned_env else None
         memory_env = os.getenv("PERSONAVOICE_MEMORY_DIR")
         memory_dir = Path(memory_env).expanduser() if memory_env else None
         memory_key = os.getenv("PERSONAVOICE_MEMORY_KEY") or None
@@ -94,6 +104,7 @@ class Settings:
             config_dir=config_dir,
             models_dir=models_dir,
             clones_dir=clones_dir,
+            finetuned_dir=finetuned_dir,
             memory_dir=memory_dir,
             memory_key=memory_key,
         )
@@ -127,13 +138,23 @@ def load_clones_store(settings: Settings) -> ClonesStore:
     return ClonesStore.load(settings.clones_dir)
 
 
-def load_voice_registry(settings: Settings) -> VoiceRegistry:
-    """Load the voice registry with the clone catalog attached (M5).
+def load_finetuned_store(settings: Settings) -> FinetunedVoicesStore:
+    """Load the fine-tuned-voice catalog (M9; tolerates a missing manifest → empty store)."""
+    return FinetunedVoicesStore.load(settings.finetuned_dir)
 
-    Tolerates a missing `voices.yaml` / clones manifest; the attached clones let
-    `resolve_for_persona` honor per-persona clone assignments on a cloning backend.
+
+def load_voice_registry(settings: Settings) -> VoiceRegistry:
+    """Load the voice registry with the clone + fine-tuned catalogs attached (M5/M9).
+
+    Tolerates missing `voices.yaml` / manifests; the attached stores let `resolve_for_persona`
+    honor per-persona assignments on a cloning backend — a fine-tuned voice taking precedence
+    over a clone over the static preset.
     """
-    return VoiceRegistry.load(settings.voices_path, clones=load_clones_store(settings))
+    return VoiceRegistry.load(
+        settings.voices_path,
+        clones=load_clones_store(settings),
+        finetuned=load_finetuned_store(settings),
+    )
 
 
 def load_memory_store(settings: Settings) -> MemoryStore:

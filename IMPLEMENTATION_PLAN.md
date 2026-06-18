@@ -491,11 +491,44 @@ written-but-device-unverified; revisit if/when a device is available.
       the *live LiveKit* memory path (metadata-keyed user, mid-call recall) needs a running LiveKit
       server; the served-LoRA A/B from a distilled dataset rides the 4080 (M7's open step).
 
-### M9 — Voice fine-tuning (high fidelity) *(≈ 1 week)*
+### M9 — Voice fine-tuning (high fidelity) *(≈ 1 week)* `[Partial]`
 **Goal:** custom voices beyond zero-shot for key personas.
-- [ ] `training/voice/finetune.py` on a target speaker dataset (CUDA).
-- [ ] Quality A/B vs zero-shot; fold winners into the voice registry.
-- **Acceptance:** a fine-tuned voice is clearly higher fidelity than its zero-shot clone.
+- [x] Voice fine-tune on a target speaker dataset (CUDA), in `src/personavoice/training/voice/`
+      (mirrors the M7 LoRA stack: pure, unit-tested logic; heavy trainers shelled out, lazy).
+      `dataset.py` is the target-speaker dataset — a `metadata.csv` of `audio|text` (the LJSpeech
+      / F5 `prepare_csv_wavs` shape) with validation + STT auto-transcription. `config.py`
+      `VoiceTrainConfig` → an **engine-dispatched** `VoiceTrainPlan`: **f5** (`f5-tts_finetune-cli`,
+      the canonical trainer; CC-BY-NC weights → dev/personal) or **chatterbox** (MIT, a
+      configurable community `trainer_script`). `finetune.py` writes any config and runs the
+      prep + trainer commands (`--dry-run` previews). One CLI: `personavoice-voice-train`
+      (`dataset`/`run`/`eval`/`register`/`list`). Voice fine-tuning is CUDA-centric (the Mac path
+      stays zero-shot cloning).
+- [x] Quality **A/B vs zero-shot** (`evaluate.py`): synthesize the same probes with the
+      fine-tuned voice and the M5 clone, embed both + held-out **real** target clips (Resemblyzer,
+      `voice-eval` extra), and compare **speaker similarity** — PASS when the fine-tune clears the
+      target by a `--margin`. Cosine/mean/`score_ab` are pure + unit-tested with toy embeddings.
+      **Fold winners into the voice registry**: `voice/finetuned.py` `FinetunedVoicesStore` is a
+      non-destructive overlay (`finetuned.json` + per-persona assignments) that **outranks a
+      clone** in `VoiceRegistry.resolve_for_persona` (**fine-tuned ▶ clone ▶ preset**); the cloning
+      adapters (Chatterbox `from_local`, F5 `model_name`) load the trained checkpoint via the new
+      `VoiceRef.model_path`. `server --check` lists fine-tuned voices + assignments and suppresses
+      the distinctness warning for an assigned voice.
+- **Acceptance:** ⚠️ *code-complete; the audible on-GPU A/B rides the RTX 5090 (same close-out
+      pattern as M2/M7).* The whole stack is unit-tested at the logic level (dataset validation,
+      engine plan-builders, prep→train ordering + failures, A/B scoring, store persistence,
+      registry precedence over a clone, adapter `model_path` wiring, `--check`): **407 tests
+      green** (was 344; +63 for M9; 3 skip in `.venv312`), ruff + mypy clean, both
+      `BACKEND=mac|cuda server --check` PASS. CLI flows smoke-tested (`run --dry-run` for both
+      engines, `dataset` from a sample manifest, `register`/`list`/`assign`). **Still open:** run
+      a real fine-tune on the 5090 (F5-TTS in the CUDA training image) and confirm the A/B shows
+      the fine-tuned voice **clearly higher fidelity** than its zero-shot clone (speaker-similarity
+      delta over margin + a human MOS spot-check).
+- **Setup notes (CUDA / RTX 5090):** the voice trainers stay out of the light `cuda` wheel (same
+      policy as vLLM/LLaMA-Factory) — install F5-TTS (`pip install f5-tts`) in the CUDA training
+      image; on Blackwell (sm_120) use the cu128 torch wheels (the M2/M7 notes apply). Chatterbox
+      ships **no official finetune CLI**, so its `trainer_script` points at a community trainer
+      (documented in `training/voice/README.md`). Licensing: an F5 fine-tune inherits **CC-BY-NC**
+      (dev/personal); fine-tune **Chatterbox** (MIT) for anything shipped — same consent gate as M5.
 
 ### M10 — Hardening, eval & latency optimization *(≈ 1–1.5 weeks)*
 **Goal:** make it robust and fast enough to use daily.

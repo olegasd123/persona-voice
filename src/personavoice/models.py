@@ -56,6 +56,9 @@ class VoiceRef(BaseModel):
     emotion: str | None = None
     # Backend that produced/owns this voice (e.g. "kokoro", "orpheus").
     backend: str | None = None
+    # Fine-tuned checkpoint a cloning backend should load instead of its base weights
+    # (M9 voice fine-tuning). None → use the backend's base model.
+    model_path: str | None = None
 
 
 class VoiceDef(BaseModel):

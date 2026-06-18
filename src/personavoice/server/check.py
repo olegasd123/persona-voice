@@ -30,6 +30,8 @@ class CheckReport:
     voices: list[str] = field(default_factory=list)
     clones: list[str] = field(default_factory=list)
     clone_assignments: dict[str, str] = field(default_factory=dict)
+    finetuned: list[str] = field(default_factory=list)
+    finetuned_assignments: dict[str, str] = field(default_factory=dict)
     memory_dir: str = ""
     memory_encrypted: bool = False
     memory_users: int = 0
@@ -50,7 +52,10 @@ def _validate_personas(
     cloning = getattr(backend.tts, "supports_cloning", False)
     for persona in personas.values():
         ref = persona.voice.ref
-        # An assigned clone on a cloning backend (M5) → the persona speaks in that voice.
+        # An assigned fine-tuned voice (M9) / clone (M5) on a cloning backend → the persona
+        # speaks in that voice, so it'll sound distinct regardless of the static preset.
+        if cloning and voices.finetuned_for_persona(persona.id):
+            continue
         if cloning and voices.clone_for_persona(persona.id):
             continue
         # A concrete preset for this backend → the persona will sound distinct.
@@ -115,6 +120,9 @@ def run_check(settings: Settings) -> CheckReport:
     if voices.clones is not None:
         report.clones = voices.clones.names()
         report.clone_assignments = voices.clones.assignments
+    if voices.finetuned is not None:
+        report.finetuned = voices.finetuned.names()
+        report.finetuned_assignments = voices.finetuned.assignments
     report.warnings.extend(_validate_personas(personas, backend, voices))
 
     # 4. Memory (M8). Surfaces the store location, at-rest encryption, and #users so a

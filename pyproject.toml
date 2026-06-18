@@ -66,6 +66,13 @@ clone-mac = [
 train = [
     "mlx-lm>=0.14",
 ]
+# --- Voice fine-tuning A/B eval (added in M9) -----------------------------------------
+# Speaker-similarity scoring for the fine-tuned-vs-clone A/B. The voice trainers themselves
+# (F5-TTS / Chatterbox, CUDA) are heavy + need a CUDA toolchain, so they live in the training
+# image, not here — see training/voice/README.md.
+voice-eval = [
+    "resemblyzer>=0.1",     # speaker embeddings for the voice-quality A/B (PERSONAVOICE eval)
+]
 # --- Conversation memory (added in M8) ------------------------------------------------
 # Core memory (store, profile, keyword recall, distill) needs nothing beyond the base deps.
 # `memory` adds at-rest encryption; `memory-embeddings` adds semantic recall — both lazy,
@@ -94,6 +101,7 @@ personavoice-agent = "personavoice.orchestrator.agent:run"
 personavoice-token-server = "personavoice.server.token_server:main"
 personavoice-clone = "personavoice.voice.cli:main"
 personavoice-train = "personavoice.training.cli:main"
+personavoice-voice-train = "personavoice.training.voice.cli:main"
 personavoice-memory = "personavoice.memory.cli:main"
 
 [tool.hatch.build.targets.wheel]

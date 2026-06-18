@@ -1,0 +1,17 @@
+# Chatterbox voice fine-tune (M9). Loaded by `personavoice-voice-train run --config ...`.
+# Chatterbox is MIT (the clean-license path), but ships no official finetune CLI — point
+# `trainer_script` at the community Chatterbox trainer (see training/voice/README.md).
+voice_name: my_voice
+engine: chatterbox
+base_model: ResembleAI/chatterbox            # base checkpoint to fine-tune from
+data_dir: training/voice/datasets/my_voice   # holds metadata.csv (+ wavs)
+output_dir: models/finetuned/my_voice
+speaker: my_voice
+trainer_script: training/voice/chatterbox_finetune.py
+# Hyperparameters.
+epochs: 30
+learning_rate: 1.0e-5
+batch_size: 4
+grad_accum: 2
+max_seconds: 20.0
+lora: false                                  # set true for a parameter-efficient fine-tune
