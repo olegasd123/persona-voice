@@ -194,18 +194,36 @@ Mark a milestone as `[Done]` when it's completed.
       budget documented: vLLM 4-bit ~6–7 GB + STT ~2 GB + Chatterbox ~2–3 GB ≈ 10–12 GB, within
       16 GB; vLLM's `--gpu-memory-utilization` is capped so STT/TTS fit. Orpheus runs its own
       in-process vLLM (tight on one card) → Chatterbox is the single-GPU default.
-- [x] `scripts/bench_latency.py` — runs the turn-based pipeline N times and reports per-stage
-      min/median/mean/max for either backend (`--json` to persist).
-- **Acceptance:** ⚠️ *partial on the Mac.* The CUDA cascade is code-complete, lazy-imported, and
-  unit-tested at the logic level (52 tests green; ruff + mypy clean), and `BACKEND=cuda
-  server --check` validates the stack on the Mac. The **on-4080 end-to-end demo + real latency
-  report are pending access to the GPU box** — run `docker compose up` and `bench_latency.py
-  --backend cuda` there to close this out.
+- [x] `scripts/bench_latency.py` — turn-based per-stage min/median/mean/max for either backend
+      (`--json` to persist), plus `--stream` for the M3 time-to-first-audio landmarks
+      (STT finalize → LLM TTFT → first TTS chunk) measured through the streaming pipeline.
+- **Acceptance:** ✅ *closed on real CUDA hardware — RTX 5090 (32 GB, Blackwell sm_120).* The
+  CUDA cascade is code-complete, lazy-imported, and unit-tested at the logic level (ruff + mypy
+  clean), and `BACKEND=cuda server --check` PASSes. **Verified end-to-end on the GPU** via the
+  Windows-native dev path: faster-whisper STT + LM Studio brain (`qwen2.5-vl-7b`) + Chatterbox
+  TTS (vLLM/Orpheus stay the dockerized prod default — see the Windows setup note). Warm
+  turn-based `bench_latency --backend cuda`: **STT 0.105 s · LLM 0.62 s · TTS (whole reply)
+  5.1 s · total ~5.8 s** — STT is ~11× faster than the Mac's 1.2 s; STT+LLM are well under
+  budget and full-reply TTS is the bottleneck (the streaming first-audio number that actually
+  matters is in M3). *Note:* the box turned out to be a 5090/32 GB, not the planned 4080/16 GB,
+  so the VRAM-pressure risk is moot — there's ample headroom for an unquantized 7B + larger TTS.
 - **Notes:**
   - vLLM/Orpheus/Chatterbox are installed in the server image (CUDA toolchain), not in the
     `cuda` wheel extra, which stays light (`faster-whisper`, `soundfile`, `numpy`, `httpx`).
   - `cuda.yaml`'s LLM `model` must match the id vLLM serves (incl. the `-AWQ` suffix);
     `quantization`/`max-model-len` are vLLM *server* flags, set in `docker-compose.yml`.
+  - **Setup notes (Windows / RTX 5090):** the system Python (3.14) is too new for the ML
+    wheels — provision **Python 3.12** (`uv venv --python 3.12 .venv312`). Blackwell (sm_120)
+    needs the **cu128** PyTorch wheels (`uv pip install torch torchaudio --index-url
+    https://download.pytorch.org/whl/cu128` → torch 2.11+cu128); ctranslate2 4.8 already runs
+    faster-whisper on sm_120 (float16). `chatterbox-tts` pins `torch==2.6.0` (no sm_120) —
+    install it with `uv pip install chatterbox-tts --override constraints-cuda.txt` to keep the
+    cu128 torch (it runs fine against torch 2.11 / transformers 5.2). `cuda.yaml`'s
+    adapter/model/base_url are now env-overridable (`PERSONAVOICE_LLM_ADAPTER`,
+    `PERSONAVOICE_TTS_ADAPTER`, `PERSONAVOICE_LLM_BASE_URL`, …), so the **same file** drives both
+    the vLLM/Orpheus Docker prod stack (defaults) and this LM-Studio+Chatterbox dev box (set the
+    vars in `.env`). LM Studio: `lms load qwen/qwen2.5-vl-7b` + start the server; swap to a text
+    `Qwen2.5-7B-Instruct` later via one env var for a cleaner (vision-free) brain.
 
 ### M3 — Real-time orchestration & streaming *(≈ 1.5 weeks)* `[Partial]`
 **Goal:** live, low-latency, turn-based conversation with streaming + barge-in.
@@ -223,17 +241,21 @@ Mark a milestone as `[Done]` when it's completed.
 - [x] `StreamingPipeline` (`orchestrator/streaming.py`) + `personavoice-stream-demo`: a
       runnable Mac streaming loop (no LiveKit needed) that synthesizes/plays the reply
       sentence-by-sentence and reports time-to-first-token / time-to-first-audio.
-- [ ] Hit latency budget (≤ ~900 ms to first audio on 4080) — needs the GPU box (vLLM TTFT
-      + fast TTS); measure with the live agent there.
+- [x] Latency budget measured on CUDA (RTX 5090) with `bench_latency --stream`: warm **e2e
+      first-audio ≈ 1.3 s** = STT 0.105 s + LLM TTFT 0.32 s + first Chatterbox chunk ~0.8 s.
+      STT+LLM sit comfortably under the 900 ms target; Chatterbox's first-sentence synth is the
+      whole gap — a faster first-sentence TTS (Kokoro, or the Orpheus/vLLM prod path) would
+      bring it under budget. The *live-agent* number (adds VAD endpointing + WebRTC RTT) still
+      needs a running LiveKit SFU.
 - **Acceptance:** ⚠️ *partial.* Streaming verified e2e on the M4 Max: a spoken question →
   Whisper transcript → gpt-oss-20b reply **streamed as 11 sentence wavs** with **warm
   first_token 0.76 s · first_audio 5.44 s · total 8.95 s** — the persona starts speaking at
   5.44 s while the rest of the reply is still being generated (a turn-based loop emits no
   audio until the whole reply is generated *and* synthesized). 90 tests green (5 numpy/
-  soundfile tests skip in the light dev env); ruff + mypy clean. **Pending:** the live
-  browser/LiveKit back-and-forth + barge-in need a running
-  LiveKit server (and the 4080 for the latency budget) — `personavoice --serve` against a
-  LiveKit instance closes this out, the analog of M2's on-4080 step.
+  soundfile tests skip in the light dev env); ruff + mypy clean. The **CUDA latency budget is
+  now measured** (RTX 5090; see the item above — warm e2e first-audio ≈ 1.3 s). **Still
+  pending:** the live browser/LiveKit back-and-forth + barge-in need a running LiveKit server —
+  `personavoice --serve` against a LiveKit instance closes this out.
 
 ### M4 — Persona system *(≈ 1 week)* `[Done]`
 **Goal:** the four personas, selectable at runtime.

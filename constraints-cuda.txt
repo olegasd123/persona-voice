@@ -1,0 +1,4 @@
+# Override file: keep the Blackwell-capable cu128 torch instead of chatterbox-tts's torch==2.6.0
+# pin (2.6.0 has no sm_120 / RTX 5090 support). Used with `uv pip install --override`.
+torch==2.11.0+cu128
+torchaudio==2.11.0+cu128

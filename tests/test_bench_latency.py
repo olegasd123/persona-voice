@@ -62,5 +62,28 @@ def test_format_report_contains_stages() -> None:
     stats = bench.summarize_runs([{"stt": 1.0, "llm": 0.5, "tts": 2.0, "total": 3.5}])
     report = bench.format_report(stats, backend="mac", runs=1)
     assert "backend=mac" in report
+    assert "turn-based" in report
     for stage in ("stt", "llm", "tts", "total"):
+        assert stage in report
+
+
+def test_summarize_runs_stream_stages() -> None:
+    timings = [
+        {"stt": 0.1, "first_token": 0.3, "first_audio": 1.1, "e2e_audio": 1.2, "total": 6.6},
+        {"stt": 0.1, "first_token": 0.3, "first_audio": 1.0, "e2e_audio": 1.1, "total": 6.7},
+    ]
+    stats = bench.summarize_runs(timings, bench._STREAM_STAGES)
+    assert set(stats) == {"stt", "first_token", "first_audio", "e2e_audio", "total"}
+    assert stats["e2e_audio"].min == 1.1
+    assert stats["e2e_audio"].max == 1.2
+
+
+def test_format_report_streaming_header() -> None:
+    stats = bench.summarize_runs(
+        [{"stt": 0.1, "first_token": 0.3, "first_audio": 1.1, "e2e_audio": 1.2, "total": 6.6}],
+        bench._STREAM_STAGES,
+    )
+    report = bench.format_report(stats, backend="cuda", runs=1, streaming=True)
+    assert "streaming, seconds to first audio" in report
+    for stage in ("first_token", "first_audio", "e2e_audio"):
         assert stage in report

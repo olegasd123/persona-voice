@@ -3,15 +3,18 @@
 
     python scripts/bench_latency.py --backend mac  --wav question.wav --runs 5
     python scripts/bench_latency.py --backend cuda --wav question.wav --runs 5 --json cuda.json
+    python scripts/bench_latency.py --backend cuda --wav question.wav --stream   # M3 first-audio
 
-Runs the turn-based pipeline `--runs` times (after `--warmup` warmup turns that load model
-weights) and reports min / median / mean / max per stage and total. Needs a backend extra
-installed and its model servers running (LM Studio / vLLM, etc.).
+Runs the pipeline `--runs` times (after `--warmup` warmup turns that load model weights) and
+reports min / median / mean / max per stage and total. Needs a backend extra installed and
+its model servers running (LM Studio / vLLM, etc.).
 
-These are *turn-based, full-stage* wall times — the whole reply is synthesized before TTS
-stops. They are NOT the streaming "time to first audio" budget (endpointing → STT finalize
-→ LLM TTFT → first TTS chunk) that M3 targets; that needs the streaming pipeline. Use this
-to compare stage costs across the Mac and the 4080, and to track regressions.
+Default (turn-based): *full-stage* wall times — the whole reply is synthesized before TTS
+stops. Good for comparing stage costs across the Mac and the GPU and tracking regressions.
+
+`--stream`: the M3 "time to first audio" budget (STT finalize → LLM TTFT → first TTS chunk),
+measured through the streaming pipeline. `e2e_audio` is the perceived latency — when the
+persona starts speaking while the rest of the reply is still being generated.
 """
 
 from __future__ import annotations
@@ -21,17 +24,23 @@ import asyncio
 import json
 import statistics
 import sys
+import time
 from dataclasses import asdict, dataclass
 from pathlib import Path
 
 from personavoice.adapters.factory import build_backend
 from personavoice.audio import read_wav_file
 from personavoice.orchestrator.pipeline import Pipeline
+from personavoice.orchestrator.streaming import StreamingPipeline, StreamMetrics
 from personavoice.persona.registry import PersonaRegistry
-from personavoice.server.config import Settings, load_backend_config
+from personavoice.server.config import Settings, load_backend_config, load_voice_registry
 
 # Stage order for stable reporting (matches Pipeline timings keys).
 _STAGES = ("stt", "llm", "tts", "total")
+# Streaming landmarks (M3, `--stream`): first_token / first_audio are measured from LLM start;
+# e2e_audio folds in STT finalize (the real perceived latency — when speech starts); total is
+# STT + speaking the whole reply sentence-by-sentence.
+_STREAM_STAGES = ("stt", "first_token", "first_audio", "e2e_audio", "total")
 
 
 @dataclass
@@ -68,14 +77,17 @@ def summarize_runs(
     return stats
 
 
-def format_report(stats: dict[str, Stat], *, backend: str, runs: int) -> str:
+def format_report(
+    stats: dict[str, Stat], *, backend: str, runs: int, streaming: bool = False
+) -> str:
     """Render a fixed-width latency table."""
+    kind = "streaming, seconds to first audio" if streaming else "turn-based, full-stage seconds"
     lines = [
-        f"Latency — backend={backend}  runs={runs}  (turn-based, full-stage seconds)",
-        f"  {'stage':<7} {'min':>8} {'median':>8} {'mean':>8} {'max':>8}",
+        f"Latency — backend={backend}  runs={runs}  ({kind})",
+        f"  {'stage':<11} {'min':>8} {'median':>8} {'mean':>8} {'max':>8}",
     ]
     for stage, s in stats.items():
-        lines.append(f"  {stage:<7} {s.min:>8.3f} {s.median:>8.3f} {s.mean:>8.3f} {s.max:>8.3f}")
+        lines.append(f"  {stage:<11} {s.min:>8.3f} {s.median:>8.3f} {s.mean:>8.3f} {s.max:>8.3f}")
     return "\n".join(lines)
 
 
@@ -101,6 +113,52 @@ async def _bench(settings: Settings, persona_id: str, audio: bytes, *, warmup: i
     return timings
 
 
+async def _bench_stream(
+    settings: Settings, persona_id: str, audio: bytes, *, warmup: int, runs: int
+) -> list[dict[str, float]]:
+    """Measure the M3 streaming path: STT finalize → LLM TTFT → first TTS chunk.
+
+    Unlike `_bench` (turn-based, whole-reply), this reports *time to first audio* — the
+    perceived latency when the persona starts speaking while the rest is still generating.
+    """
+    backend = build_backend(load_backend_config(settings))
+    persona = PersonaRegistry(settings.personas_dir).get(persona_id)
+    voices = load_voice_registry(settings)
+
+    async def _turn() -> dict[str, float]:
+        t0 = time.perf_counter()
+        transcript = await backend.stt.transcribe(audio)
+        stt = time.perf_counter() - t0
+        metrics = StreamMetrics()
+        pipe = StreamingPipeline(backend, persona, voices)
+        async for _ in pipe.stream_response(transcript.text, history=[], metrics=metrics):
+            pass
+        first_audio = metrics.first_audio or 0.0
+        return {
+            "stt": stt,
+            "first_token": metrics.first_token or 0.0,
+            "first_audio": first_audio,
+            "e2e_audio": stt + first_audio,
+            "total": stt + (metrics.total or 0.0),
+        }
+
+    for i in range(warmup):
+        print(f"warmup {i + 1}/{warmup} ...", file=sys.stderr)
+        await _turn()
+
+    timings: list[dict[str, float]] = []
+    for i in range(runs):
+        t = await _turn()
+        timings.append(t)
+        print(
+            f"run {i + 1}/{runs}: stt={t['stt']:.3f} first_token={t['first_token']:.3f} "
+            f"first_audio={t['first_audio']:.3f} e2e_audio={t['e2e_audio']:.3f} "
+            f"total={t['total']:.3f}",
+            file=sys.stderr,
+        )
+    return timings
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Per-stage latency benchmark for a backend.")
     parser.add_argument("--backend", choices=("mac", "cuda"), default=None, help="override BACKEND")
@@ -108,6 +166,11 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--persona", default="companion", help="persona id (config/personas)")
     parser.add_argument("--runs", type=int, default=5, help="measured turns")
     parser.add_argument("--warmup", type=int, default=1, help="warmup turns (load weights)")
+    parser.add_argument(
+        "--stream",
+        action="store_true",
+        help="measure the M3 streaming time-to-first-audio instead of turn-based full-stage",
+    )
     parser.add_argument("--json", type=Path, default=None, help="also write the report as JSON")
     args = parser.parse_args(argv)
 
@@ -122,22 +185,25 @@ def main(argv: list[str] | None = None) -> int:
         return 2
 
     audio = read_wav_file(args.wav)
+    bench_fn = _bench_stream if args.stream else _bench
+    stages = _STREAM_STAGES if args.stream else _STAGES
     try:
         timings = asyncio.run(
-            _bench(settings, args.persona, audio, warmup=args.warmup, runs=args.runs)
+            bench_fn(settings, args.persona, audio, warmup=args.warmup, runs=args.runs)
         )
     except Exception as exc:  # surface backend/model errors without a traceback wall
         print(f"error: {exc}", file=sys.stderr)
         return 1
 
-    stats = summarize_runs(timings)
+    stats = summarize_runs(timings, stages)
     print()
-    print(format_report(stats, backend=settings.backend, runs=args.runs))
+    print(format_report(stats, backend=settings.backend, runs=args.runs, streaming=args.stream))
 
     if args.json is not None:
         payload = {
             "backend": settings.backend,
             "persona": args.persona,
+            "mode": "stream" if args.stream else "turn",
             "runs": args.runs,
             "warmup": args.warmup,
             "stats": {stage: asdict(s) for stage, s in stats.items()},

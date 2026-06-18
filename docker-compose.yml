@@ -56,7 +56,9 @@ services:
         condition: service_healthy
     environment:
       - BACKEND=cuda
-      - VLLM_BASE_URL=http://vllm:8000/v1
+      # cuda.yaml's LLM base_url reads PERSONAVOICE_LLM_BASE_URL (defaults to localhost:8000);
+      # inside compose the vLLM server is reachable at the `vllm` service hostname.
+      - PERSONAVOICE_LLM_BASE_URL=http://vllm:8000/v1
       - PERSONAVOICE_API_TOKEN=${PERSONAVOICE_API_TOKEN:-}
       - HF_TOKEN=${HF_TOKEN:-}
     ports:

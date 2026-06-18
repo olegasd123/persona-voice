@@ -35,3 +35,9 @@ voices/*.npz
 # Logs / scratch
 *.log
 scratch/
+
+# Bench results + generated sample/output audio (machine-specific; numbers live in the plan)
+bench_*.json
+samples/
+reply_stream/
+reply_*.wav

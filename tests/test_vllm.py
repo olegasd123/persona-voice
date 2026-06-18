@@ -57,7 +57,7 @@ async def test_vllm_streams_content_against_configured_url(
 
     monkeypatch.setattr(httpx, "AsyncClient", patched_client)
 
-    # Override the default base URL via options, as cuda.yaml does with ${VLLM_BASE_URL}.
+    # Override the default base URL via options, as cuda.yaml does with ${PERSONAVOICE_LLM_BASE_URL}.
     adapter = VLLMAdapter(
         model="Qwen/Qwen2.5-7B-Instruct-AWQ",
         options={"base_url": "http://vllm:8000/v1"},
