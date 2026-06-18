@@ -11,15 +11,18 @@ from personavoice.models import Msg, Role
 from personavoice.training.dataset import (
     DatasetError,
     DialogueExample,
+    clean_example,
     read_jsonl,
     render_chatml,
     split_examples,
     to_mlx_chat,
     to_sharegpt,
+    to_spoken,
     validate_example,
     write_dataset,
     write_jsonl,
 )
+from personavoice.training.eval import is_spoken_clean
 
 
 def _ex(*roles_contents: tuple[Role, str]) -> DialogueExample:
@@ -171,3 +174,32 @@ def test_split_is_deterministic_and_keeps_a_train_example() -> None:
 def test_split_never_empties_train() -> None:
     train, valid = split_examples([_good()], valid_fraction=0.9, seed=0)
     assert len(train) == 1 and len(valid) == 0
+
+
+# -- spoken-clean normalization --------------------------------------------------------
+
+
+def test_to_spoken_strips_markdown_and_passes_is_spoken_clean() -> None:
+    raw = "**Situation:** we had `incidents`.\n- one\n- two\n# Heading\n1. first"
+    out = to_spoken(raw)
+    assert "**" not in out and "`" not in out
+    assert "Situation: we had incidents." in out
+    assert "one" in out and "two" in out and "Heading" in out and "first" in out
+    assert is_spoken_clean(out)  # the eval's own spoken-clean check now passes
+
+
+def test_to_spoken_keeps_plain_text() -> None:
+    assert to_spoken("Tell me about a time you led a team.") == "Tell me about a time you led a team."
+
+
+def test_clean_example_cleans_turns_but_not_system() -> None:
+    ex = _ex(
+        (Role.system, "You are a tester."),
+        (Role.user, "hi"),
+        (Role.assistant, "Sure! **Step 1:** breathe. Then answer."),
+    )
+    cleaned = clean_example(ex)
+    assert cleaned.messages[0].content == "You are a tester."  # system untouched
+    assert "**" not in cleaned.messages[2].content
+    assert is_spoken_clean(cleaned.messages[2].content)
+    validate_example(cleaned)  # still well-formed

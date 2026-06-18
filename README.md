@@ -28,11 +28,14 @@ the M7 LoRA dataset (opt-in, manual trigger). See "Memory across sessions (M8)" 
 > `.venv312`); ruff + mypy clean; both `BACKEND=mac|cuda --check` PASS. Open (same rider as M3/M4):
 > the *live LiveKit* memory path needs a running LiveKit server.
 
-**M7 (partial):** per-persona "brains" beyond prompting — `personavoice-train` **curates**
-in-character dialogues by self-chat, **trains** a LoRA (`mlx_lm` on Mac, LLaMA-Factory QLoRA on the
-4080), **merges** it, and **evals** persona adherence. Verified live on the M4 Max: a real mlx-lm
-LoRA trained (**val loss 2.74 → 2.27**), loaded at inference, and merged. Open (the 4080): the CUDA
-QLoRA run and the served-LoRA A/B eval.
+**M7 (done):** per-persona "brains" beyond prompting — `personavoice-train` **curates**
+in-character dialogues by self-chat, **trains** a LoRA (`mlx_lm` on Mac, LLaMA-Factory QLoRA on
+CUDA), **merges** it, and **evals** persona adherence. Verified live on the M4 Max (mlx-lm, **val
+loss 2.74 → 2.27**) and **end-to-end on CUDA (RTX 5090)**: the brain runs on **vLLM**, a real 4-bit
+QLoRA trained (LLaMA-Factory; **train_loss 0.31**), vLLM **hot-loaded** the adapter, and the served
+prompt-only-vs-LoRA A/B ran. The strong base is near-ceiling with full prompting (parity), but under
+a **bare prompt** the LoRA measurably wins (`persona_adherence +0.066`, `spoken_clean +0.25`,
+`turn_style +0.14`) — it internalizes the persona's behavior beyond prompting.
 
 **M6 (done on iOS):** a single Flutter client (`client/`) talks to the server over LiveKit — mic
 capture/playback, persona picker, transcript, mic modes (open-mic / push-to-talk), audio-session
@@ -308,23 +311,35 @@ pip install -e '.[train]'        # Mac: mlx-lm (also in '.[mac]')
 #    Writes training/persona_lora/datasets/<persona>/{train,valid}.jsonl — review before training.
 personavoice-train curate --persona hr_interviewer --num 20 --exchanges 4
 
-# 2. Train (mlx-lm on Mac; LLaMA-Factory QLoRA on the 4080 with BACKEND=cuda).
+# 2. Train (mlx-lm on Mac; LLaMA-Factory QLoRA on CUDA with BACKEND=cuda).
 personavoice-train run --persona hr_interviewer --dry-run    # preview config + command
 personavoice-train run --persona hr_interviewer              # launch → models/adapters/<persona>/
+#    CUDA runs the trainer in Docker. The trainer config is written by --dry-run, then:
+#      docker run --rm --gpus all -v "$PWD":/workspace -w /workspace \
+#        -v persona-voice_hf-cache:/root/.cache/huggingface hiyouga/llamafactory:latest \
+#        llamafactory-cli train models/adapters/hr_interviewer/hr_interviewer_lora.cuda.yaml
+#    On a Blackwell card (sm_120, e.g. RTX 5090) build training/persona_lora/Dockerfile.blackwell
+#    first (stock image's torch 2.6 only supports up to sm_90) and use that image instead.
 
-# 3a. Serve it: hot-swap with vLLM, then set the persona's llm.lora to the served module name.
-#     vllm serve <base> --enable-lora --lora-modules hr_interviewer=models/adapters/hr_interviewer
+# 3a. Serve it: hot-swap with vLLM (compose overlay), then set the persona's llm.lora to the name.
+#     docker compose -f docker-compose.yml -f docker-compose.lora.yml up -d vllm
 # 3b. …or merge into a standalone checkpoint.
 personavoice-train merge --persona hr_interviewer --adapter models/adapters/hr_interviewer
 
-# 4. Score persona adherence (prompt-only vs LoRA).
-personavoice-train eval --persona hr_interviewer --compare
+# 4. Score persona adherence (prompt-only vs LoRA). --bare-prompt drops the spoken-clean/turn-style
+#    directives to measure what the LoRA internalizes beyond prompting.
+personavoice-train eval --persona hr_interviewer --compare [--bare-prompt]
 ```
 
 The dataset is the cascade's **messages-JSONL** (so curated data trains unchanged; converts to
 ShareGPT for LLaMA-Factory). See [training/persona_lora/README.md](training/persona_lora/README.md)
 for the format, CUDA dataset registration, and hyperparameters. Verified live on the M4 Max — a
-real mlx-lm LoRA trained (val loss 2.74 → 2.27), loaded at inference, and merged.
+real mlx-lm LoRA trained (val loss 2.74 → 2.27), loaded at inference, and merged — and
+**end-to-end on CUDA (RTX 5090)**: a 4-bit QLoRA trained via LLaMA-Factory (train_loss 0.31),
+**vLLM hot-loaded the adapter**, and the served prompt-only-vs-LoRA A/B ran. The strong base is
+near-ceiling under full prompting (parity), but with `--bare-prompt` the LoRA wins
+(`persona_adherence +0.066`, `spoken_clean +0.25`, `turn_style +0.14`) — internalizing the persona
+beyond prompting.
 
 ## Memory across sessions (M8)
 

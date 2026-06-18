@@ -20,8 +20,10 @@ stt:
     language: en
 
 llm:
-  # vLLM (default) serves an OpenAI-compatible API; `model` must match the served id incl. the
-  # -AWQ suffix (set in docker-compose.yml, along with quantization / max-model-len server flags).
+  # vLLM (default) serves an OpenAI-compatible API; `model` must match the id vLLM serves
+  # (= VLLM_MODEL in docker-compose.yml). The 4080-safe default is the AWQ 4-bit build; a bigger
+  # card serves the unquantized Qwen/Qwen2.5-7B-Instruct (set both VLLM_MODEL and this to it).
+  # vLLM auto-detects AWQ from the model config, so there is no `--quantization` server flag.
   # Windows-native dev: set PERSONAVOICE_LLM_ADAPTER=lmstudio + a matching model + base_url
   # (http://localhost:1234/v1) to serve the brain from LM Studio instead.
   adapter: ${PERSONAVOICE_LLM_ADAPTER:-vllm}

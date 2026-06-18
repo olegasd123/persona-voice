@@ -211,7 +211,7 @@ def load_config(path: str | Path) -> LoRATrainConfig:
     if not path.is_file():
         raise TrainConfigError(f"training config not found: {path}")
     try:
-        raw = yaml.safe_load(path.read_text()) or {}
+        raw = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
     except yaml.YAMLError as exc:
         raise TrainConfigError(f"{path}: invalid YAML: {exc}") from exc
     try:

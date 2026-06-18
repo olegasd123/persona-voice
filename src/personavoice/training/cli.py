@@ -30,7 +30,7 @@ from ..server.config import (
 from . import curate as curate_mod
 from . import eval as eval_mod
 from .config import LoRATrainConfig, TrainConfigError, from_persona, load_config
-from .dataset import DatasetError, split_examples, write_dataset, write_jsonl
+from .dataset import DatasetError, clean_example, split_examples, write_dataset, write_jsonl
 from .merge import MergeError, run_merge
 from .train import TrainingError, run_training
 
@@ -71,6 +71,9 @@ async def _curate(settings: Settings, args: argparse.Namespace) -> int:
     if not examples:
         print("no usable dialogues were generated", file=sys.stderr)
         return 1
+
+    if args.spoken_clean:
+        examples = [clean_example(ex) for ex in examples]
 
     data_dir = _data_dir(args)
     if args.fmt == "sharegpt":
@@ -150,7 +153,7 @@ def _run_merge(settings: Settings, args: argparse.Namespace) -> int:
 def _load_probes(path: str | None) -> list[str] | None:
     if not path:
         return None
-    raw = Path(path).read_text()
+    raw = Path(path).read_text(encoding="utf-8")
     # Accept a JSON array or one probe per line.
     try:
         data = json.loads(raw)
@@ -178,13 +181,17 @@ async def _run_eval(settings: Settings, args: argparse.Namespace) -> int:
     probes = _load_probes(args.probes)
     keywords = [k.strip() for k in args.keywords.split(",")] if args.keywords else None
 
-    base = await eval_mod.evaluate(backend.llm, persona, probes=probes, keywords=keywords)
-    _print_scores("prompt-only", base)
+    base = await eval_mod.evaluate(
+        backend.llm, persona, probes=probes, keywords=keywords, bare_prompt=args.bare_prompt
+    )
+    _print_scores("prompt-only" + (" [bare]" if args.bare_prompt else ""), base)
 
     if args.compare:
         lora_persona = persona.model_copy(deep=True)
         lora_persona.llm.lora = args.lora or persona.id
-        lora = await eval_mod.evaluate(backend.llm, lora_persona, probes=probes, keywords=keywords)
+        lora = await eval_mod.evaluate(
+            backend.llm, lora_persona, probes=probes, keywords=keywords, bare_prompt=args.bare_prompt
+        )
         _print_scores(f"LoRA ({lora_persona.llm.lora})", lora)
         print("\ndelta (lora - prompt-only):")
         for name, (_b, _l, d) in eval_mod.compare(base, lora).items():
@@ -219,6 +226,12 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     cur.add_argument("--valid-fraction", type=float, default=0.1)
     cur.add_argument("--seed", type=int, default=0)
+    cur.add_argument(
+        "--spoken-clean",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="strip markdown from turns so targets read cleanly through TTS (default: on)",
+    )
 
     run = sub.add_parser("run", help="run the LoRA trainer (mlx-lm on mac / LLaMA-Factory on cuda)")
     run.add_argument("--persona", required=True)
@@ -243,6 +256,12 @@ def _build_parser() -> argparse.ArgumentParser:
     ev.add_argument("--keywords", default=None, help="comma-separated expected vocabulary")
     ev.add_argument("--compare", action="store_true", help="also run with the LoRA and show deltas")
     ev.add_argument("--lora", default=None, help="lora name to request (default: persona id)")
+    ev.add_argument(
+        "--bare-prompt",
+        action="store_true",
+        help="send only the authored system_prompt (drop turn-style + spoken-clean directives), "
+        "to test whether the LoRA internalizes persona behavior beyond prompting",
+    )
 
     return parser
 

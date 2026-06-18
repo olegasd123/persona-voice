@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import json
 import random
+import re
 from pathlib import Path
 from typing import Any
 
@@ -108,7 +109,7 @@ def read_jsonl(path: str | Path) -> list[DialogueExample]:
     if not path.is_file():
         raise DatasetError(f"dataset file not found: {path}")
     out: list[DialogueExample] = []
-    for lineno, line in enumerate(path.read_text().splitlines(), start=1):
+    for lineno, line in enumerate(path.read_text(encoding="utf-8").splitlines(), start=1):
         if line.strip():
             out.append(_parse_line(line, lineno=lineno))
     if not out:
@@ -121,7 +122,7 @@ def write_jsonl(path: str | Path, examples: list[DialogueExample]) -> None:
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
     lines = [json.dumps(to_mlx_chat(ex), ensure_ascii=False) for ex in examples]
-    path.write_text("\n".join(lines) + "\n" if lines else "")
+    path.write_text("\n".join(lines) + "\n" if lines else "", encoding="utf-8")
 
 
 # --------------------------------------------------------------------------------------
@@ -153,6 +154,39 @@ def to_sharegpt(example: DialogueExample) -> dict[str, Any]:
     return out
 
 
+_BOLD_ITALIC_RE = re.compile(r"(\*\*|__)(.*?)\1", re.DOTALL)
+_HEADER_RE = re.compile(r"^\s*#{1,6}\s+")
+_BULLET_RE = re.compile(r"^\s*[-*]\s+")
+_NUMBERED_RE = re.compile(r"^\s*\d+\.\s+")
+
+
+def to_spoken(text: str) -> str:
+    """Strip markdown so the text reads cleanly through TTS (a *voice* assistant).
+
+    Removes the exact formatting `eval.is_spoken_clean` flags — bold/italic markers, code spans,
+    headers, and list bullets — while keeping the words. Training a persona LoRA on spoken-clean
+    targets is what lets it beat prompting alone on the spoken-clean metric.
+    """
+    text = _BOLD_ITALIC_RE.sub(r"\2", text)
+    text = re.sub(r"`+", "", text)  # inline code + fences
+    lines = []
+    for line in text.splitlines():
+        line = _HEADER_RE.sub("", line)
+        line = _BULLET_RE.sub("", line)
+        lines.append(_NUMBERED_RE.sub("", line))
+    text = "\n".join(lines).replace("**", "").replace("__", "")  # any unpaired markers
+    return text.strip()
+
+
+def clean_example(example: DialogueExample) -> DialogueExample:
+    """Return a copy with every user/assistant turn run through `to_spoken` (system left as-is)."""
+    cleaned = [
+        m if m.role is Role.system else Msg(role=m.role, content=to_spoken(m.content))
+        for m in example.messages
+    ]
+    return DialogueExample(messages=cleaned)
+
+
 def render_chatml(example: DialogueExample) -> str:
     """A deterministic ChatML-style rendering (previews / eval), not a trainer format."""
     parts = [f"<|im_start|>{m.role.value}\n{m.content}<|im_end|>" for m in example.messages]
@@ -173,7 +207,7 @@ def write_dataset(
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
     rows = [to_sharegpt(ex) for ex in examples]
-    path.write_text(json.dumps(rows, ensure_ascii=False, indent=2) + "\n")
+    path.write_text(json.dumps(rows, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
 
 
 def split_examples(

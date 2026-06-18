@@ -32,8 +32,8 @@ CLIENT = os.path.dirname(HERE)
 # ---- palette ---------------------------------------------------------------
 GRAD_TL = (139, 121, 230)   # #8B79E6  light violet (top-left)
 GRAD_BR = (67, 51, 143)     # #43338F  deep indigo (bottom-right)
-VOICE_L = (255, 255, 255)   # white   – left voice
-VOICE_R = (197, 184, 255)   # #C5B8FF lavender – right voice
+VOICE_L = (255, 255, 255)   # white   - left voice
+VOICE_R = (197, 184, 255)   # #C5B8FF lavender - right voice
 
 # ---- glyph geometry (in 1024-px design space, scaled to any canvas) --------
 BASE = 1024

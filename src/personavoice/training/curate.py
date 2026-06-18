@@ -28,8 +28,8 @@ from .dataset import DialogueExample
 
 logger = logging.getLogger("personavoice.training.curate")
 
-# A few neutral openers so generated dialogues don't all start identically. The simulator is
-# free to ignore them; they just seed variety when no explicit opening is supplied.
+# A few neutral scenarios so generated dialogues don't all start identically. The simulator is
+# free to ignore them; they just seed variety.
 DEFAULT_SCENARIOS = (
     "You are starting the conversation.",
     "You have a specific situation in mind you want to talk through.",
@@ -37,13 +37,32 @@ DEFAULT_SCENARIOS = (
     "You are upbeat and talkative.",
 )
 
+# Neutral, user-side opening lines (the counterpart — candidate / learner / friend — never the
+# persona). Seeding the first user turn anchors roles from the start so the simulator can't drift
+# into *playing* the persona (e.g. asking the interview questions itself). Generic on purpose so
+# the same pool works for every persona.
+DEFAULT_OPENINGS = (
+    "Hi! Thanks for making the time — I'm looking forward to this.",
+    "Hey, good to talk with you. I've got a few things on my mind.",
+    "Hi there. I'm a little nervous, to be honest, but I'm ready to start.",
+    "Hello! I appreciate you meeting with me. Where should we begin?",
+)
+
 
 def user_simulator_prompt(persona: Persona, *, scenario: str | None = None) -> str:
-    """System prompt that makes the LLM role-play a realistic partner for `persona`."""
+    """System prompt that makes the LLM role-play a realistic partner for `persona`.
+
+    Deliberately does NOT inject the persona's own ("You are a senior HR interviewer…") system
+    prompt: doing so makes the simulator adopt that role and *lead* the conversation, inverting
+    the data. The persona is referenced by name + role only, and the simulator is told plainly not
+    to take over.
+    """
     parts = [
-        f"You are role-playing a person talking to {persona.name}.",
-        f"For context, that persona is described as: {persona.system_prompt.strip()}",
+        f"You are role-playing a person talking to a {persona.name}. "
+        "They lead this conversation; you are the person on the other side, talking to them.",
         "Play the OTHER side of this conversation — the human user, not the assistant. "
+        f"Do NOT act as the {persona.name} or take over their role — do not run the session, "
+        "ask their questions, or give their guidance; only respond and bring your own side. "
         "Speak naturally in the first person, one short conversational turn at a time. "
         "Stay in character, never break role, and do not narrate or use stage directions. "
         "Respond only with what the person would say out loud.",
@@ -122,14 +141,23 @@ async def generate_dataset(
     num_dialogues: int = 10,
     num_exchanges: int = 4,
     scenarios: Sequence[str] | None = None,
+    openings: Sequence[str] | None = None,
 ) -> list[DialogueExample]:
-    """Generate `num_dialogues` dialogues, cycling `scenarios` for variety."""
+    """Generate `num_dialogues` dialogues, cycling `scenarios`/`openings` for variety.
+
+    Each dialogue's first user turn is seeded from `openings` (a counterpart line) so roles stay
+    anchored; pass `openings=[]` to let the simulator invent the opener instead.
+    """
     gen = DialogueGenerator(llm, persona)
     scenario_pool = list(scenarios) if scenarios is not None else list(DEFAULT_SCENARIOS)
+    opening_pool = list(openings) if openings is not None else list(DEFAULT_OPENINGS)
     out: list[DialogueExample] = []
     for i in range(num_dialogues):
         scenario = scenario_pool[i % len(scenario_pool)] if scenario_pool else None
-        example = await gen.generate(num_exchanges=num_exchanges, scenario=scenario)
+        opening = opening_pool[i % len(opening_pool)] if opening_pool else None
+        example = await gen.generate(
+            num_exchanges=num_exchanges, opening=opening, scenario=scenario
+        )
         # Skip degenerate dialogues (a turn failed mid-way) rather than emit unusable data.
         if len(example.messages) >= 3:
             out.append(example)

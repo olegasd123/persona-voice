@@ -65,7 +65,7 @@ def test_export_to_file(mem_env: Path, tmp_path: Path) -> None:
     store.record_turn("alice", MemoryTurn(session_id="s1", persona_id="companion", role=Role.user, content="hello"))
     out = tmp_path / "dump.json"
     assert main(["--export", "alice", "--out", str(out), "--backend", "mac"]) == 0
-    assert "hello" in out.read_text()
+    assert "hello" in out.read_text(encoding="utf-8")
 
 
 def test_delete_with_yes(mem_env: Path) -> None:
@@ -99,7 +99,7 @@ def test_distill_writes_dataset(mem_env: Path, tmp_path: Path) -> None:
     out = tmp_path / "alice.jsonl"
     assert main(["--distill", "alice", "--out", str(out), "--backend", "mac"]) == 0
     assert out.is_file()
-    assert "hello" in out.read_text()
+    assert "hello" in out.read_text(encoding="utf-8")
 
 
 def test_gen_key(capsys: pytest.CaptureFixture[str]) -> None:

@@ -40,7 +40,7 @@ def prepare(cfg: LoRATrainConfig) -> TrainPlan:
     plan = build_train_plan(cfg)
     config_path = Path(plan.config_filename)
     config_path.parent.mkdir(parents=True, exist_ok=True)
-    config_path.write_text(yaml.safe_dump(plan.config, sort_keys=False))
+    config_path.write_text(yaml.safe_dump(plan.config, sort_keys=False), encoding="utf-8")
     logger.info("wrote %s trainer config -> %s", plan.tool, config_path)
     return plan
 

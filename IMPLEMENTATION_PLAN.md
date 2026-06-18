@@ -224,6 +224,10 @@ Mark a milestone as `[Done]` when it's completed.
     the vLLM/Orpheus Docker prod stack (defaults) and this LM-Studio+Chatterbox dev box (set the
     vars in `.env`). LM Studio: `lms load qwen/qwen2.5-vl-7b` + start the server; swap to a text
     `Qwen2.5-7B-Instruct` later via one env var for a cleaner (vision-free) brain.
+    *(M7 update: this dev box now serves the brain from **vLLM** like prod — `docker compose up
+    -d vllm` serving the unquantized `Qwen/Qwen2.5-7B-Instruct` on the 5090's 32 GB — so STT/LLM/
+    TTS all match the prod cascade and the M7 served-LoRA A/B works. LM Studio stays a documented
+    fallback in `.env`/`.env.example`.)*
   - **Low-latency TTS (Kokoro) on CUDA:** to hit the sub-900 ms first-audio budget, also
     `uv pip install kokoro --override constraints-cuda.txt`, then `uv pip install pip` +
     `python -m spacy download en_core_web_sm` (the uv venv ships no pip, and Kokoro's misaki G2P
@@ -390,7 +394,7 @@ written-but-device-unverified; revisit if/when a device is available.
       audio-session + ConnectionService layers stay written-but-device-unverified; the deeper iOS
       CallKit / Bluetooth-route behaviors also got only light on-device exercise.
 
-### M7 — Persona fine-tuning (LoRA) *(≈ 1.5 weeks)* `[Partial]`
+### M7 — Persona fine-tuning (LoRA) *(≈ 1.5 weeks)* `[Done]`
 **Goal:** train per-persona brains beyond prompting.
 - [x] `training/persona_lora/`: dataset format (in-character dialogues) + curation. The format is
       the OpenAI **messages-JSONL** shape (the cascade's `Msg`), so it's consumed unchanged by
@@ -409,19 +413,40 @@ written-but-device-unverified; revisit if/when a device is available.
       automatically (`_openai_compat.lora_request_model` → request `model`; `supports_lora=True`
       on vLLM, off on LM Studio). **Eval** (`training/eval.py`): deterministic persona-adherence
       proxies (turn-style fit, spoken-clean rate, question rate vs `follow_up_probability`,
-      keyword coverage) → a `persona_adherence` composite, with a prompt-only-vs-LoRA `compare`.
-- **Acceptance:** ⚠️ *partial — Mac LoRA path verified live; prod A/B rides the GPU box.* The
-      whole loop ran for real on the M4 Max (mlx-lm 0.31.3 + LM Studio): **curated** companion
-      dialogues via LM Studio → **trained** a real LoRA through `personavoice-train run`
-      (**val loss 2.74 → 2.27**, train 2.99 → 2.36 over 6 iters; adapter saved) → the **adapter
-      loads at inference** (`mlx_lm generate --adapter-path` → coherent reply) → **merged** via
-      `mlx_lm fuse` → **eval** ran live (prompt-only, `persona_adherence 0.95`). **266 tests
-      green** (was 188; +78 for M7 — dataset/curate/config/train/merge/eval + the lora-routing
-      payload; 0 skip in `.venv312`); ruff + mypy clean. **Still open (same "needs the 4080" step
-      as M2/M3):** the **CUDA QLoRA** run (LLaMA-Factory on the 4080) and the **served-LoRA A/B**
-      (the prompt-only-vs-LoRA eval comparison needs vLLM hot-loading the adapter — LM Studio
-      can't serve it), to close out "an HR/Teacher LoRA *measurably improves* in-character
-      behavior."
+      keyword coverage) → a `persona_adherence` composite, with a prompt-only-vs-LoRA `compare`
+      and a `--bare-prompt` mode that drops the derived directives (turn-style + the "speak
+      without markdown" nudge) to measure what the LoRA internalizes *beyond* prompting.
+- **Acceptance:** ✅ *Mac LoRA path verified live (mlx-lm), then closed end-to-end on CUDA
+      (RTX 5090).* On the M4 Max the whole loop ran via mlx-lm 0.31.3 + LM Studio (**val loss
+      2.74 → 2.27**; adapter loads + merges; eval `persona_adherence 0.95`). **The CUDA brain is
+      now served by vLLM** (replacing the LM-Studio dev stopgap — see the M2 note), which closes
+      the served-LoRA A/B that LM Studio couldn't do. Full CUDA loop, run for real on the 5090:
+      **curated** 40 spoken-clean HR-interviewer dialogues via vLLM → **trained** a real QLoRA
+      (LLaMA-Factory, 4-bit bnb, in a Blackwell-patched trainer image; **train_loss 0.31**,
+      adapter 40.4 M params / 0.53 %, 45 s) → vLLM **hot-loaded** it (`--lora-modules
+      hr_interviewer=/models/adapters/hr_interviewer`) so prompt-only + LoRA are served
+      side-by-side → ran the **served A/B**. Result: with *full* prompting the strong
+      Qwen2.5-7B-Instruct base is already near-ceiling, so the proxies show **parity** (≈ ±0.04);
+      under a **bare prompt** the LoRA **measurably wins** — `persona_adherence` **+0.066**,
+      `spoken_clean_rate` **+0.25** (base leaks markdown 25 % without the directive; the LoRA
+      stays clean), `turn_style_fit` **+0.14** (concise; base rambles 66→55 words). I.e. the LoRA
+      *internalizes* the persona's spoken-clean, concise, questioning behavior beyond prompting —
+      the point of M7. **344 tests green** (was 266; +the spoken-clean/bare-prompt/role-anchor
+      additions); ruff + mypy clean; both `BACKEND=mac|cuda server --check` PASS.
+- **Setup notes (CUDA / RTX 5090):** vLLM and LLaMA-Factory run in Docker (the prod design;
+      `vllm/vllm-openai:latest` v0.23 serves Blackwell sm_120 fine). **The stock
+      `hiyouga/llamafactory:latest` ships torch 2.6.0/cu124, which only supports up to sm_90 and
+      refuses to run on a 5090** — `training/persona_lora/Dockerfile.blackwell` overlays cu128
+      torch 2.7.1 + bitsandbytes ≥0.47 (a 16 GB 4080 / sm_89 runs the stock image as-is). Train
+      with the trainer container mounting the repo + sharing the vLLM HF-cache volume (no
+      re-download); serve the A/B with `docker compose -f docker-compose.yml -f
+      docker-compose.lora.yml up -d vllm`. Three data-quality fixes landed here: the self-chat
+      **user simulator was inverting roles** (it inherited the persona's own prompt and started
+      *interviewing*) → it now references the persona by name only + seeds a counterpart opener;
+      curate gained a **`--spoken-clean`** pass (strip markdown from targets, since the curated
+      base leaks it ~20 %); and dataset read/write are now **UTF-8** (Windows wrote cp1252, which
+      the Linux trainer couldn't decode). The committed CUDA defaults stay 4080-safe (AWQ brain +
+      4-bit QLoRA); this 5090 box serves the unquantized brain via `.env`.
 
 ### M8 — Memory / learn-from-conversations *(≈ 1.5 weeks)* `[Done]`
 **Goal:** continuity across sessions; foundation for long-term learning.

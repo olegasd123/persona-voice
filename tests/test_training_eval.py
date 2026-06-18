@@ -6,6 +6,7 @@ import pytest
 
 from personavoice.models import TurnStyle
 from personavoice.training.eval import (
+    collect_replies,
     compare,
     ends_with_question,
     evaluate,
@@ -128,3 +129,16 @@ async def test_evaluate_runs_probes_through_llm() -> None:
     scores = await evaluate(FakeLLM("Tell me more about that?"), persona, probes=["a", "b", "c"])
     assert scores.n == 3
     assert scores.question_rate == 1.0
+
+
+async def test_bare_prompt_drops_derived_directives() -> None:
+    persona = make_persona()
+    full = FakeLLM("ok")
+    await collect_replies(full, persona, ["hi"], bare_prompt=False)
+    assert full.last_messages is not None
+    assert "without markdown" in full.last_messages[0].content  # render_system_prompt directive
+
+    bare = FakeLLM("ok")
+    await collect_replies(bare, persona, ["hi"], bare_prompt=True)
+    assert bare.last_messages is not None
+    assert bare.last_messages[0].content == persona.system_prompt.strip()  # authored only

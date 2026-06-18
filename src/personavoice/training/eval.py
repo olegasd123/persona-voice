@@ -25,7 +25,7 @@ from collections.abc import Sequence
 from pydantic import BaseModel
 
 from ..adapters.llm.base import LLMAdapter
-from ..models import Persona, TurnStyle
+from ..models import Msg, Persona, Role, TurnStyle
 from ..persona.prompt import build_messages
 
 # Generic conversational probes (the *user* side). Persona-neutral on purpose so the same set
@@ -179,11 +179,25 @@ def compare(base: EvalScores, lora: EvalScores) -> dict[str, tuple[float, float,
     return out
 
 
-async def collect_replies(llm: LLMAdapter, persona: Persona, probes: Sequence[str]) -> list[str]:
-    """Run the persona over each probe (one independent turn) and collect the replies."""
+async def collect_replies(
+    llm: LLMAdapter, persona: Persona, probes: Sequence[str], *, bare_prompt: bool = False
+) -> list[str]:
+    """Run the persona over each probe (one independent turn) and collect the replies.
+
+    `bare_prompt` sends only the authored `system_prompt`, dropping the derived directives
+    (turn-style + the "speak without markdown/lists" nudge) that `render_system_prompt` adds.
+    A persona LoRA's whole point is internalizing those behaviors into the weights, so a
+    bare-prompt A/B is where the LoRA should beat prompting alone ("brains beyond prompting").
+    """
     replies: list[str] = []
     for probe in probes:
-        messages = build_messages(persona, user_input=probe)
+        if bare_prompt:
+            messages = [
+                Msg(role=Role.system, content=persona.system_prompt.strip()),
+                Msg(role=Role.user, content=probe),
+            ]
+        else:
+            messages = build_messages(persona, user_input=probe)
         replies.append((await llm.chat(messages, persona)).strip())
     return replies
 
@@ -194,7 +208,8 @@ async def evaluate(
     *,
     probes: Sequence[str] | None = None,
     keywords: Sequence[str] | None = None,
+    bare_prompt: bool = False,
 ) -> EvalScores:
     """Convenience: collect replies for `probes` and score them."""
-    replies = await collect_replies(llm, persona, probes or DEFAULT_PROBES)
+    replies = await collect_replies(llm, persona, probes or DEFAULT_PROBES, bare_prompt=bare_prompt)
     return score_replies(replies, persona, keywords=keywords)

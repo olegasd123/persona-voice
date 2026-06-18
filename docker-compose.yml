@@ -16,16 +16,21 @@
 services:
   vllm:
     image: vllm/vllm-openai:latest
+    # Model / VRAM are env-interpolated; committed defaults fit a 16 GB 4080. A bigger card
+    # serves the unquantized 7B with `VLLM_MODEL=Qwen/Qwen2.5-7B-Instruct VLLM_GPU_UTIL=0.6`.
+    # `--quantization` is omitted on purpose: vLLM auto-detects AWQ from the model config, so the
+    # SAME command serves the AWQ build or the unquantized one with no flag change.
     command:
-      - --model=Qwen/Qwen2.5-7B-Instruct-AWQ
-      - --quantization=awq
-      - --max-model-len=8192
-      - --gpu-memory-utilization=0.45   # leave room for STT + TTS on the same card
+      - --model=${VLLM_MODEL:-Qwen/Qwen2.5-7B-Instruct-AWQ}
+      - --max-model-len=${VLLM_MAX_LEN:-8192}
+      - --gpu-memory-utilization=${VLLM_GPU_UTIL:-0.45}   # leave room for STT + TTS on the card
       - --port=8000
     ports:
       - "8000:8000"
     volumes:
       - hf-cache:/root/.cache/huggingface
+      # Persona LoRA adapters (M7) — hot-load with docker-compose.lora.yml (--lora-modules).
+      - ./models:/models
     environment:
       - HUGGING_FACE_HUB_TOKEN=${HF_TOKEN:-}
     deploy:
@@ -36,11 +41,8 @@ services:
               count: all
               capabilities: [gpu]
     healthcheck:
-      test:
-        - CMD
-        - python
-        - -c
-        - import urllib.request; urllib.request.urlopen('http://localhost:8000/health')
+      # vllm/vllm-openai ships python3 (no `python`) but does ship curl; hit vLLM's /health.
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
       interval: 15s
       timeout: 5s
       retries: 20

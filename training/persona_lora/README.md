@@ -43,12 +43,27 @@ review and edit before training.** `datasets/hr_interviewer.sample.jsonl` shows 
 personavoice-train run --persona hr_interviewer --dry-run   # preview the command + config
 personavoice-train run --persona hr_interviewer             # launch
 
-# CUDA (LLaMA-Factory QLoRA on the 4080) — BACKEND=cuda
-personavoice-train run --persona hr_interviewer --backend cuda
+# CUDA (LLaMA-Factory QLoRA) — BACKEND=cuda. `run` writes the trainer config; the heavy step
+# runs in the LLaMA-Factory container (the trainer isn't in the light wheel):
+personavoice-train run --persona hr_interviewer --backend cuda \
+  --config configs/hr_interviewer.cuda.yaml --dry-run     # writes models/adapters/<p>/<p>_lora.cuda.yaml
+docker run --rm --gpus all -v "$PWD":/workspace -w /workspace \
+  -v persona-voice_hf-cache:/root/.cache/huggingface hiyouga/llamafactory:latest \
+  llamafactory-cli train models/adapters/hr_interviewer/hr_interviewer_lora.cuda.yaml
 ```
 
-Or point at a checked-in config: `--config configs/hr_interviewer.mac.yaml`. Adapters land in
-`<models>/adapters/<persona>/`.
+Sharing the `persona-voice_hf-cache` volume reuses the base weights vLLM already downloaded (no
+re-download). **On a Blackwell GPU (sm_120, e.g. RTX 5090)** the stock `hiyouga/llamafactory:latest`
+won't run — its torch 2.6.0/cu124 only supports up to sm_90. Build the overlay once and use it as
+the image instead:
+
+```
+docker build -f training/persona_lora/Dockerfile.blackwell -t personavoice/llamafactory:blackwell .
+# …then `personavoice/llamafactory:blackwell` in the `docker run` above (Windows Git Bash: prefix
+# with MSYS_NO_PATHCONV=1 and use an explicit D:/… path so /workspace isn't path-mangled).
+```
+
+A 16 GB 4080 (sm_89) runs the stock image as-is. Adapters land in `<models>/adapters/<persona>/`.
 
 ### CUDA dataset registration (LLaMA-Factory)
 
@@ -90,14 +105,22 @@ personavoice-train merge --persona hr_interviewer --adapter models/adapters/hr_i
 
 ```
 personavoice-train eval --persona hr_interviewer --compare
+personavoice-train eval --persona hr_interviewer --compare --bare-prompt   # the discriminating one
 ```
 
 Scores persona adherence with deterministic proxies (turn-style fit, spoken-clean rate, question
 rate vs `follow_up_probability`, optional keyword coverage) and prints prompt-only-vs-LoRA deltas.
 A first-pass signal; pair with human spot-checks for the acceptance bar.
 
+A strong instruct base with the **full** persona prompt is already near-ceiling on these proxies, so
+the LoRA shows up as parity. `--bare-prompt` sends only the authored `system_prompt` (dropping the
+turn-style + "speak without markdown" directives `render_system_prompt` adds) — there the LoRA wins,
+which is the point: it *internalizes* the behavior that otherwise needs explicit prompting. Pass
+`--probes <file>` for in-domain prompts and `--keywords a,b,c` to score vocabulary coverage.
+
 ## Install
 
 - **Mac:** `pip install -e '.[train]'` (mlx-lm; also in `.[mac]`).
-- **CUDA:** install LLaMA-Factory (or Unsloth) in the training image — it needs a CUDA toolchain
-  and is heavy, so it stays out of the light `cuda` wheel extra (same policy as vLLM/Chatterbox).
+- **CUDA:** use the `hiyouga/llamafactory:latest` Docker image (or the
+  `Dockerfile.blackwell` overlay for sm_120 cards) — the trainer needs a CUDA toolchain and is
+  heavy, so it stays out of the light `cuda` wheel extra (same policy as vLLM/Chatterbox).

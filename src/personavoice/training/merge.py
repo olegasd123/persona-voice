@@ -95,7 +95,7 @@ def run_merge(
         config = llama_factory_export_config(base_model, adapter_dir, out_dir, template=template)
         config_path = Path(out_dir).with_suffix(".export.yaml")
         config_path.parent.mkdir(parents=True, exist_ok=True)
-        config_path.write_text(yaml.safe_dump(config, sort_keys=False))
+        config_path.write_text(yaml.safe_dump(config, sort_keys=False), encoding="utf-8")
         command = llama_factory_export_command(config_path)
         tool, available = "llamafactory-cli", shutil.which("llamafactory-cli") is not None
     else:
