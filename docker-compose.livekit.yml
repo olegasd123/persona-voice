@@ -21,6 +21,10 @@
 # open that port (and use the LAN IP above). For production, run LiveKit with TLS (wss://)
 # and a real key/secret instead of dev mode.
 
+# Separate project name from the main stack (so running both doesn't trigger orphan-container
+# warnings) but kept on the `persona-voice` prefix so they sort together in Docker Desktop.
+name: persona-voice-livekit
+
 services:
   livekit:
     image: livekit/livekit-server:latest
@@ -32,6 +36,8 @@ services:
     restart: unless-stopped
 
   token-server:
+    # Same image as the prod server (different command) — keeps one image, not two.
+    image: personavoice/server:${TAG:-prod}
     build:
       context: .
       dockerfile: Dockerfile

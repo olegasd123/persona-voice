@@ -13,6 +13,10 @@
 # on a single 4080 — prefer Chatterbox here (set `adapter: chatterbox` in
 # config/backends/cuda.yaml), or give Orpheus a second GPU.
 
+# `name:` pins the Compose project so Docker Desktop's Containers view always groups this
+# stack under "persona-voice" (independent of the directory name).
+name: persona-voice
+
 services:
   vllm:
     image: vllm/vllm-openai:latest
@@ -50,6 +54,9 @@ services:
     restart: unless-stopped
 
   personavoice:
+    # Name the built image into the personavoice/ namespace (else Compose auto-names it
+    # `persona-voice-personavoice`). Build once; the livekit token-server reuses the same image.
+    image: personavoice/server:${TAG:-prod}
     build:
       context: .
       dockerfile: Dockerfile

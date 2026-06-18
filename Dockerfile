@@ -6,6 +6,16 @@
 # predictable.
 FROM nvidia/cuda:12.4.1-cudnn-runtime-ubuntu22.04
 
+# Image identity. `com.personavoice.*` makes the whole app filterable regardless of tag:
+#   docker images --filter "label=com.personavoice.app=persona-voice"
+ARG VERSION=dev
+LABEL org.opencontainers.image.title="Persona-Voice — CUDA server" \
+      org.opencontainers.image.description="STT + TTS GPU server for the Persona-Voice app" \
+      org.opencontainers.image.source="https://github.com/olegasd123/persona-voice" \
+      org.opencontainers.image.version="${VERSION}" \
+      com.personavoice.app="persona-voice" \
+      com.personavoice.component="server"
+
 ENV DEBIAN_FRONTEND=noninteractive \
     PIP_NO_CACHE_DIR=1 \
     PYTHONUNBUFFERED=1 \

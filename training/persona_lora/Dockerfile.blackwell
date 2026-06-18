@@ -8,17 +8,22 @@
 # A 16 GB RTX 4080 (sm_89) runs the stock image as-is — this overlay is only for newer cards.
 #
 #   docker build -f training/persona_lora/Dockerfile.blackwell \
-#     -t personavoice/llamafactory:blackwell .
+#     -t personavoice/trainer:blackwell .
 #
 # Then train with it (mounting the repo + sharing the vLLM HF cache):
 #   docker run --rm --gpus all -v "$PWD":/workspace -w /workspace \
 #     -v persona-voice_hf-cache:/root/.cache/huggingface \
-#     personavoice/llamafactory:blackwell \
+#     personavoice/trainer:blackwell \
 #     llamafactory-cli train models/adapters/<persona>/<persona>_lora.cuda.yaml
 # torch 2.7.1 is the first release with Blackwell (sm_120) support; it stays close to the image's
 # 2.6.0 to minimize LLaMA-Factory dependency drift. `--upgrade` is required — without it pip sees
 # torch already installed and skips the swap. bitsandbytes >=0.47 ships sm_120 4-bit kernels.
 FROM hiyouga/llamafactory:latest
+LABEL org.opencontainers.image.title="Persona-Voice — Blackwell trainer" \
+      org.opencontainers.image.description="LLaMA-Factory QLoRA trainer patched for sm_120 (RTX 5090)" \
+      org.opencontainers.image.source="https://github.com/olegasd123/persona-voice" \
+      com.personavoice.app="persona-voice" \
+      com.personavoice.component="trainer"
 # Exact +cu128 wheels from the PyTorch index; PyPI stays available (--extra-index-url) for torch's
 # non-torch transitive deps (triton, ...). Without --extra-index-url, --index-url replaces PyPI and
 # resolution fails; without --upgrade, pip keeps the image's pre-installed torch 2.6.0.

@@ -58,8 +58,8 @@ won't run — its torch 2.6.0/cu124 only supports up to sm_90. Build the overlay
 the image instead:
 
 ```
-docker build -f training/persona_lora/Dockerfile.blackwell -t personavoice/llamafactory:blackwell .
-# …then `personavoice/llamafactory:blackwell` in the `docker run` above (Windows Git Bash: prefix
+docker build -f training/persona_lora/Dockerfile.blackwell -t personavoice/trainer:blackwell .
+# …then `personavoice/trainer:blackwell` in the `docker run` above (Windows Git Bash: prefix
 # with MSYS_NO_PATHCONV=1 and use an explicit D:/… path so /workspace isn't path-mangled).
 ```
 
