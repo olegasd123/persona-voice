@@ -1,12 +1,12 @@
-"""Target-speaker dataset for voice fine-tuning (M9).
+"""Target-speaker dataset for voice fine-tuning.
 
 A voice fine-tune learns one speaker from a small set of **(clip, transcript)** pairs. The
 shared, human-readable manifest is a `metadata.csv` of pipe-separated `audio_path|text` lines
 (the LJSpeech / F5-TTS `prepare_csv_wavs` shape), which both trainer engines consume.
 
 Everything here is pure and unit-tested except `transcribe_clips`, which — like curation's
-self-chat (M7) — takes an injected STT adapter to auto-fill missing transcripts. Reading and
-writing are UTF-8 (the Windows-cp1252 lesson from M7's datasets).
+self-chat — takes an injected STT adapter to auto-fill missing transcripts. Reading and
+writing are UTF-8 (the Windows-cp1252 lesson from the persona-LoRA datasets).
 """
 
 from __future__ import annotations

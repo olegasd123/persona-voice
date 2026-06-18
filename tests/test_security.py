@@ -1,4 +1,4 @@
-"""Token-server security audit (M10 security pass)."""
+"""Token-server security audit (security pass)."""
 
 from __future__ import annotations
 

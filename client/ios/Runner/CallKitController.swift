@@ -4,7 +4,7 @@ import Foundation
 
 /// Presents a Persona-Voice conversation as a native system call via **CallKit**, so it shows in
 /// the iOS in-call / lock-screen UI and the OS call list, and the system end/mute buttons drive
-/// the Flutter session. This is the iOS half of M6's telephony layer (`persona_voice/telephony`
+/// the Flutter session. This is the iOS half of the telephony layer (`persona_voice/telephony`
 /// MethodChannel for app→OS commands, `persona_voice/telephony_events` EventChannel for the
 /// reverse).
 ///

@@ -1,4 +1,4 @@
-"""`ConversationMemory`: the runtime facade the cascade talks to (M8).
+"""`ConversationMemory`: the runtime facade the cascade talks to.
 
 It ties the three pieces together behind a small, consent-gated API the orchestrator uses:
 

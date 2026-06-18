@@ -1,4 +1,4 @@
-"""`personavoice-memory`: inspect and manage per-user conversation memory (M8).
+"""`personavoice-memory`: inspect and manage per-user conversation memory.
 
     personavoice-memory --list                       # users, turn/session counts, consent
     personavoice-memory --show alice                 # profile (facts + summary) + recent turns
@@ -119,7 +119,7 @@ async def _cmd_consolidate(settings: Settings, user_id: str, args: argparse.Name
 def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="personavoice-memory",
-        description="Inspect and manage per-user conversation memory (M8).",
+        description="Inspect and manage per-user conversation memory.",
     )
     action = parser.add_mutually_exclusive_group(required=True)
     action.add_argument("--list", action="store_true", help="list users + consent + counts")

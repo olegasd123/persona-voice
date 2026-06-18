@@ -1,4 +1,4 @@
-"""f5-tts-mlx TTS (Mac) — zero-shot voice cloning on Apple Silicon (M5).
+"""f5-tts-mlx TTS (Mac) — zero-shot voice cloning on Apple Silicon.
 
 F5 is a *reference-text* cloning model: to speak in a voice it wants both the reference WAV
 and that sample's transcript (`ref_text`). Both ride on the `VoiceRef` produced by cloning
@@ -31,11 +31,11 @@ _F5_REF_RATE = 24000
 def _f5_kwargs(text: str, voice: VoiceRef, *, model: str) -> dict[str, Any]:
     """Build the `f5_tts_mlx.generate` kwargs for one synthesis.
 
-    Pure (no model import) so it's unit-testable: a fine-tuned voice (M9) loads its trained
+    Pure (no model import) so it's unit-testable: a fine-tuned voice loads its trained
     checkpoint via `model_name`; a clone passes its reference audio (and transcript, when
     known); without either, F5 uses its own built-in reference voice.
     """
-    # A fine-tuned checkpoint (M9) replaces the base model the generator loads.
+    # A fine-tuned checkpoint replaces the base model the generator loads.
     model_name = voice.model_path or model
     kwargs: dict[str, Any] = {"generation_text": text, "model_name": model_name}
     if voice.sample_path:

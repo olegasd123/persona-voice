@@ -1,4 +1,4 @@
-"""Security posture audit for the token server (M10 security pass).
+"""Security posture audit for the token server (security pass).
 
 A small, pure checklist over the server's effective configuration — auth, transport (TLS),
 rate limiting, secret strength — that turns "is this safe to expose?" into concrete findings.

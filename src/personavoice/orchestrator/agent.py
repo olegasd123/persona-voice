@@ -1,4 +1,4 @@
-"""LiveKit Agents worker: live, streaming, barge-in conversation (M3).
+"""LiveKit Agents worker: live, streaming, barge-in conversation.
 
 This is the production entrypoint. LiveKit handles the WebRTC transport and ships Silero
 VAD for endpointing; everything model-side reuses the tested streaming core:
@@ -14,7 +14,7 @@ LiveKit and its plugins are **heavy and only used at runtime**, so they're impor
 — `server --check`, the unit tests, and the offline demos never need the `livekit` extra.
 The pure pieces (wav↔PCM conversion in `audio.py`, the chunker/pipeline/turn controller)
 are unit-tested; the live browser run is validated against a running LiveKit server (see
-README "Live streaming server (M3)"), the analog of M2's on-4080 step.
+README "Live LiveKit agent"), the analog of the on-GPU validation step.
 """
 
 from __future__ import annotations
@@ -171,7 +171,7 @@ class PersonaAgent:
         """A complete user utterance (VAD-segmented PCM) → transcribe → streamed reply.
 
         STT failures are caught and logged rather than propagated: one bad utterance must not
-        kill the per-track consumer task (graceful error recovery, M10) — the session stays
+        kill the per-track consumer task (graceful error recovery) — the session stays
         live for the next turn.
         """
         wav = pcm16_to_wav(utterance_pcm, sample_rate)
@@ -196,7 +196,7 @@ class PersonaAgent:
         is published fire-and-forget from the `finally` so a barge-in cancellation — which
         tears this generator down mid-flight — still flips the (partial) line to final.
 
-        A `StreamMetrics` is captured per turn and logged on completion (M10 observability).
+        A `StreamMetrics` is captured per turn and logged on completion (observability).
         A non-cancellation error mid-stream is logged and swallowed so the worker survives;
         a `CancelledError` (barge-in) is recorded as `interrupted` and re-raised so the turn
         controller's teardown still runs.
@@ -255,7 +255,7 @@ class PersonaAgent:
 
 
 def _load_vad(silero: Any) -> Any:
-    """Load Silero VAD with the operator's endpointing knobs (M10), tolerating old SDKs.
+    """Load Silero VAD with the operator's endpointing knobs, tolerating old SDKs.
 
     `vad_load_kwargs()` reads `PERSONAVOICE_VAD_*`; if a kwarg isn't accepted by the installed
     `livekit-plugins-silero`, fall back to the stock defaults rather than crashing the worker.
@@ -444,7 +444,7 @@ async def entrypoint(ctx: Any, *, persona_id: str | None = None) -> None:
 
     await ctx.connect(auto_subscribe=agents.AutoSubscribe.AUDIO_ONLY)
 
-    # Cross-session memory (M8): keyed by a stable user id from the room/job metadata
+    # Cross-session memory: keyed by a stable user id from the room/job metadata
     # (`{"user": "..."}`) or the remote participant's identity. Without one we run stateless;
     # the facade is also dormant until that user grants consent (see `personavoice-memory`).
     remote_ids = [p.identity for p in getattr(ctx.room, "remote_participants", {}).values()]

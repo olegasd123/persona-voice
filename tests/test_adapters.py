@@ -45,7 +45,7 @@ def test_factory_rejects_unknown_adapter() -> None:
 
 @pytest.mark.parametrize("backend", ["mac", "cuda"])
 def test_stt_stream_is_not_used_directly(backend: str) -> None:
-    # Live STT endpointing is VAD-driven in the M3 agent, not the base `stream`, which
+    # Live STT endpointing is VAD-driven in the live agent, not the base `stream`, which
     # stays unimplemented and must fail loudly if called.
     be = build_backend(_backend_config(backend))
     with pytest.raises(NotImplementedError):
@@ -53,7 +53,7 @@ def test_stt_stream_is_not_used_directly(backend: str) -> None:
 
 
 async def test_tts_stream_tts_default_synthesizes_each_chunk() -> None:
-    # M3: the base `stream_tts` default speaks each sentence chunk as it arrives (skipping
+    # The base `stream_tts` default speaks each sentence chunk as it arrives (skipping
     # blanks), so every backend gets streaming for free on top of its one-shot synthesize.
     class _OneShotTTS(TTSAdapter):
         name = "oneshot"
@@ -70,7 +70,7 @@ async def test_tts_stream_tts_default_synthesizes_each_chunk() -> None:
 
 
 def test_cuda_adapters_are_implemented() -> None:
-    # After M2 the CUDA cascade is real, not stubs: no "stub adapter" warning.
+    # The CUDA cascade is real, not stubs: no "stub adapter" warning.
     be = build_backend(_backend_config("cuda"))
     for adapter in (be.stt, be.llm, be.tts):
         assert adapter.implemented is True

@@ -31,7 +31,7 @@ class STTAdapter:
         raise NotImplementedError(f"{self.name}.stream is not implemented yet")
 
     async def transcribe(self, audio: bytes) -> Transcript:
-        """Convenience one-shot transcription (used by the file-based M1 pipeline)."""
+        """Convenience one-shot transcription (used by the file-based pipeline)."""
         raise NotImplementedError(f"{self.name}.transcribe is not implemented yet")
 
     def check(self) -> CheckResult:

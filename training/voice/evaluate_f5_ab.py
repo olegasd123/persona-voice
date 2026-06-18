@@ -1,4 +1,4 @@
-"""M9 A/B: F5 fine-tuned voice vs F5 zero-shot, scored with the repo's speaker-similarity proxy.
+"""Voice A/B: F5 fine-tuned voice vs F5 zero-shot, scored with the repo's speaker-similarity proxy.
 
 The repo's `evaluate_voices` orchestrates the A/B through a persona-voice TTS adapter, but there
 is no CUDA F5 *cascade* adapter (Chatterbox is the CUDA cloning adapter, and it can't load an F5
@@ -55,7 +55,7 @@ def pick_finetuned_ckpt(ckpt_dir: Path) -> Path:
 
 
 def main() -> int:
-    ap = argparse.ArgumentParser(description="F5 fine-tune vs zero-shot A/B (M9).")
+    ap = argparse.ArgumentParser(description="F5 fine-tune vs zero-shot A/B.")
     ap.add_argument("--voice", default="ljspeech")
     ap.add_argument("--ckpt-dir", default=None, help="default models/finetuned/<voice>")
     ap.add_argument("--heldout-dir", default=None, help="default data/<voice>_heldout")
@@ -114,7 +114,7 @@ def main() -> int:
         print(f"  [{i + 1}/{len(probes)}] {probe!r}")
 
     scores = score_ab(ft_embs, cl_embs, target_embs, margin=args.margin)
-    print("\n==== M9 voice A/B (speaker similarity to held-out real target) ====")
+    print("\n==== Voice A/B (speaker similarity to held-out real target) ====")
     print(f"  fine-tuned similarity : {scores.finetuned_similarity:.4f}")
     print(f"  zero-shot similarity  : {scores.clone_similarity:.4f}")
     print(f"  delta (ft - zeroshot) : {scores.delta:+.4f}   (margin {scores.margin:.3f})")

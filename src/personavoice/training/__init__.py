@@ -1,4 +1,4 @@
-"""Persona fine-tuning (LoRA) stack (M7).
+"""Persona fine-tuning (LoRA) stack.
 
 Trains per-persona "brains" beyond prompting. The pieces mirror the cascade's discipline —
 light, pure, unit-testable logic here; the heavy trainers (mlx-lm on Mac, LLaMA-Factory /

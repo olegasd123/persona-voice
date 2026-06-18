@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Aggregate eval artifacts into one dashboard and gate them green/red (M10 acceptance).
+"""Aggregate eval artifacts into one dashboard and gate them green/red.
 
 This composes the outputs of the individual eval harnesses (it does not re-run heavy
 backends) into a single pass/fail dashboard:
@@ -39,7 +39,7 @@ def default_gates() -> list[Gate]:
     return [
         Gate("e2e_audio_ms", 900.0, CEILING, "time-to-first-audio budget"),
         Gate("wer", 0.15, CEILING, "STT word-error-rate"),
-        Gate("persona_adherence", 0.80, FLOOR, "persona adherence (M7)"),
+        Gate("persona_adherence", 0.80, FLOOR, "persona adherence"),
         Gate("mos", 3.5, FLOOR, "voice MOS spot-check"),
     ]
 

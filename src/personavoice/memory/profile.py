@@ -1,4 +1,4 @@
-"""Rolling user profile: durable facts + a running summary (M8).
+"""Rolling user profile: durable facts + a running summary.
 
 A profile is what lets the assistant *recall prior-session facts*: instead of replaying a
 whole transcript (token-expensive, and gone once context rolls over), we distill it into a

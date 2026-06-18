@@ -1,4 +1,4 @@
-"""Retrieval + context assembly (M8): KeywordRetriever ranking and recall_context."""
+"""Retrieval + context assembly: KeywordRetriever ranking and recall_context."""
 
 from __future__ import annotations
 

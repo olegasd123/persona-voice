@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# In-container F5-TTS voice fine-tune (M9), for the Blackwell trainer image.
+# In-container F5-TTS voice fine-tune, for the Blackwell trainer image.
 #
 # Reconciles the repo's target-speaker dataset (training/voice/datasets/<DATASET>/, the
 # audio_file|text manifest) with f5-tts 1.1.20's actual finetune interface, which differs from

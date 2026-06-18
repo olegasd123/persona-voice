@@ -1,4 +1,4 @@
-"""Audio helpers shared by the file-based (M1) pipeline and the adapters.
+"""Audio helpers shared by the file-based pipeline and the adapters.
 
 Audio flows between stages as **WAV-encoded bytes** (self-describing: sample rate and
 channels live in the header). The STT adapter decodes wav → mono float32 and resamples to
@@ -71,7 +71,7 @@ def resample(audio: np.ndarray, sr_in: int, sr_out: int) -> np.ndarray:
     """Resample mono float32 audio with linear interpolation (no ffmpeg needed).
 
     Linear interpolation is good enough for feeding STT; high-fidelity resampling for
-    playback is not needed in the M1 dev loop.
+    playback is not needed in the offline dev loop.
     """
     np = _require_numpy()
     audio = np.asarray(audio, dtype=np.float32).reshape(-1)
@@ -89,7 +89,7 @@ def wav_to_pcm16(data: bytes, target_sr: int) -> bytes:
     """Decode WAV bytes to mono 16-bit little-endian PCM at `target_sr`.
 
     This is the raw frame format LiveKit's `rtc.AudioFrame` carries, so the streaming
-    agent (M3) uses it to push TTS audio onto the WebRTC track.
+    agent uses it to push TTS audio onto the WebRTC track.
     """
     np = _require_numpy()
     samples, sr = decode_wav(data)

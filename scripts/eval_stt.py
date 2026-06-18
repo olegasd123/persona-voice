@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Measure STT word-error-rate for a backend (M10 automated eval).
+"""Measure STT word-error-rate for a backend (automated eval).
 
     python scripts/eval_stt.py --backend mac  --manifest tests/data/stt_manifest.jsonl
     python scripts/eval_stt.py --backend cuda --manifest manifest.jsonl --json wer.json

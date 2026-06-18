@@ -33,7 +33,7 @@ services:
       - "8000:8000"
     volumes:
       - hf-cache:/root/.cache/huggingface
-      # Persona LoRA adapters (M7) — hot-load with docker-compose.lora.yml (--lora-modules).
+      # Persona LoRA adapters — hot-load with docker-compose.lora.yml (--lora-modules).
       - ./models:/models
     environment:
       - HUGGING_FACE_HUB_TOKEN=${HF_TOKEN:-}
@@ -81,7 +81,7 @@ services:
             - driver: nvidia
               count: all
               capabilities: [gpu]
-    # M2: validate the cuda config against the running vLLM. M3 replaces this with the live
+    # Validate the cuda config against the running vLLM; the live
     # streaming server (`personavoice serve`).
     command:
       - python3.12

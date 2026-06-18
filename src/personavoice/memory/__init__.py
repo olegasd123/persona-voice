@@ -1,4 +1,4 @@
-"""Memory / learn-from-conversations (M8).
+"""Memory / learn-from-conversations.
 
 Continuity across sessions on top of the cascade: a consent-gated per-user store, a
 rolling LLM-distilled profile, and retrieval of relevant past turns — assembled into a
@@ -8,7 +8,7 @@ memory block injected into the prompt each turn.
     profile.py      — UserProfile + ProfileBuilder (LLM distillation into durable facts/summary)
     rag.py          — retrievers (keyword default, optional embeddings) + recall_context
     conversation.py — ConversationMemory: the consent-gated facade the orchestrator uses
-    distill.py      — transcripts → persona-LoRA training data (the M8→M7 bridge)
+    distill.py      — transcripts → persona-LoRA training data (the memory→LoRA bridge)
 """
 
 from .conversation import ConversationMemory

@@ -2,7 +2,7 @@
 
 Talks to a local Ollama server's `/api/chat` endpoint with streaming enabled, yielding
 reply tokens as they arrive. The base class's `chat()` collects them for the turn-based
-M1 pipeline. `httpx` is imported lazily so the adapter constructs without the `mac` extra;
+pipeline. `httpx` is imported lazily so the adapter constructs without the `mac` extra;
 the request/response plumbing is split into pure helpers so it's unit-testable offline.
 """
 

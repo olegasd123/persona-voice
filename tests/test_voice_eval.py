@@ -1,4 +1,4 @@
-"""M9 voice-quality A/B: cosine/mean/score_ab + the evaluate_voices orchestration."""
+"""Voice-quality A/B: cosine/mean/score_ab + the evaluate_voices orchestration."""
 
 from __future__ import annotations
 

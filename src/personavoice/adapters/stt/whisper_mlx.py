@@ -1,7 +1,7 @@
 """mlx-whisper STT (Mac / M4 Max).
 
-M1 implements the one-shot `transcribe` used by the file-based pipeline. Streaming
-(`stream`, partial transcripts) lands in M3. `mlx_whisper` is imported lazily so the
+Implements the one-shot `transcribe` used by the file-based pipeline. Streaming
+(`stream`, partial transcripts) is handled by the live agent. `mlx_whisper` is imported lazily so the
 adapter constructs and `check()`s without the `mac` extra installed.
 """
 

@@ -1,4 +1,4 @@
-"""LoRA training config + plan builders (M7).
+"""LoRA training config + plan builders.
 
 `LoRATrainConfig` is the one declarative description of a persona fine-tune. `build_train_plan`
 turns it into a backend-specific `TrainPlan` — the trainer config dict, the config filename, and

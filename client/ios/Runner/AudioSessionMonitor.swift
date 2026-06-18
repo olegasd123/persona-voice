@@ -3,7 +3,7 @@ import Flutter
 
 /// Bridges `AVAudioSession` interruption + route-change notifications to the Flutter
 /// `persona_voice/audio_session` EventChannel. This is the "deep audio-session plumbing"
-/// half of M6: the thin client reacts to incoming phone/VoIP calls, Siri, alarms, and
+/// half: the thin client reacts to incoming phone/VoIP calls, Siri, alarms, and
 /// headset/Bluetooth changes that the bare WebRTC stack doesn't surface to Dart.
 ///
 /// We only *observe* — LiveKit/WebRTC still owns configuring and activating the session, so we

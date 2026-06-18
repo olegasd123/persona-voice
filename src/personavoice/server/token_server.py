@@ -1,4 +1,4 @@
-"""A tiny HTTP token server so thin clients can join the LiveKit room (M6 enabler).
+"""A tiny HTTP token server so thin clients can join the LiveKit room.
 
 The Flutter client (and the LiveKit Agents Playground, and any other LiveKit client) needs
 two things to connect: the LiveKit server URL and a signed access token scoped to a room.
@@ -83,7 +83,7 @@ class TokenServiceConfig:
     # If set, requests must present `Authorization: Bearer <api_token>`. Empty = open (dev).
     api_token: str | None = None
     token_ttl: int = 3600
-    # Prod hardening (M10): refuse to start wide-open, and optional TLS for the HTTP server.
+    # Prod hardening: refuse to start wide-open, and optional TLS for the HTTP server.
     require_auth: bool = False
     tls_cert: str | None = None
     tls_key: str | None = None
@@ -335,7 +335,7 @@ def make_server(
 def run(settings: Settings | None = None) -> None:
     """Build the service from env and serve forever (blocking). Used by `--token-server`.
 
-    Runs a security audit first (M10): in strict mode (`PERSONAVOICE_REQUIRE_AUTH=1`) an
+    Runs a security audit first: in strict mode (`PERSONAVOICE_REQUIRE_AUTH=1`) an
     `error`-level finding — e.g. no API token — refuses to start rather than serve wide open.
     """
     settings = settings or Settings.load()

@@ -1,4 +1,4 @@
-"""Curate in-character training dialogues by self-chat (M7).
+"""Curate in-character training dialogues by self-chat.
 
 The cheapest way to bootstrap a persona dataset is to let the persona talk to a *simulated*
 user. Two roles share one LLM:

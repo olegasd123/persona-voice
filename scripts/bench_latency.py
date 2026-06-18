@@ -3,7 +3,7 @@
 
     python scripts/bench_latency.py --backend mac  --wav question.wav --runs 5
     python scripts/bench_latency.py --backend cuda --wav question.wav --runs 5 --json cuda.json
-    python scripts/bench_latency.py --backend cuda --wav question.wav --stream   # M3 first-audio
+    python scripts/bench_latency.py --backend cuda --wav question.wav --stream   # streaming first-audio
 
 Runs the pipeline `--runs` times (after `--warmup` warmup turns that load model weights) and
 reports min / median / mean / max per stage and total. Needs a backend extra installed and
@@ -12,7 +12,7 @@ its model servers running (LM Studio / vLLM, etc.).
 Default (turn-based): *full-stage* wall times — the whole reply is synthesized before TTS
 stops. Good for comparing stage costs across the Mac and the GPU and tracking regressions.
 
-`--stream`: the M3 "time to first audio" budget (STT finalize → LLM TTFT → first TTS chunk),
+`--stream`: the streaming "time to first audio" budget (STT finalize → LLM TTFT → first TTS chunk),
 measured through the streaming pipeline. `e2e_audio` is the perceived latency — when the
 persona starts speaking while the rest of the reply is still being generated.
 """
@@ -38,7 +38,7 @@ from personavoice.server.config import Settings, load_backend_config, load_voice
 
 # Stage order for stable reporting (matches Pipeline timings keys).
 _STAGES = ("stt", "llm", "tts", "total")
-# Streaming landmarks (M3, `--stream`): first_token / first_audio are measured from LLM start;
+# Streaming landmarks (`--stream`): first_token / first_audio are measured from LLM start;
 # e2e_audio folds in STT finalize (the real perceived latency — when speech starts); total is
 # STT + speaking the whole reply sentence-by-sentence.
 _STREAM_STAGES = ("stt", "first_token", "first_audio", "e2e_audio", "total")
@@ -95,7 +95,7 @@ def format_report(
 def check_budget(
     stats: dict[str, Stat], *, stage: str, budget_s: float
 ) -> tuple[bool, float | None]:
-    """Gate the median of `stage` against `budget_s` (M10 acceptance: within latency budget).
+    """Gate the median of `stage` against `budget_s` (within latency budget).
 
     Returns `(passed, observed_median)`. A missing stage passes vacuously (`observed=None`)
     so a turn-based run isn't failed for lacking a streaming-only stage.
@@ -137,11 +137,11 @@ async def _bench_stream(
     runs: int,
     chunk_kwargs: dict[str, int | None] | None = None,
 ) -> list[dict[str, float]]:
-    """Measure the M3 streaming path: STT finalize → LLM TTFT → first TTS chunk.
+    """Measure the streaming path: STT finalize → LLM TTFT → first TTS chunk.
 
     Unlike `_bench` (turn-based, whole-reply), this reports *time to first audio* — the
     perceived latency when the persona starts speaking while the rest is still generating.
-    `chunk_kwargs` overrides the TTS chunk-sizing knobs (M10) so a sweep can compare settings.
+    `chunk_kwargs` overrides the TTS chunk-sizing knobs so a sweep can compare settings.
     """
     backend = build_backend(load_backend_config(settings))
     persona = PersonaRegistry(settings.personas_dir).get(persona_id)
@@ -191,19 +191,19 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--stream",
         action="store_true",
-        help="measure the M3 streaming time-to-first-audio instead of turn-based full-stage",
+        help="measure the streaming time-to-first-audio instead of turn-based full-stage",
     )
     parser.add_argument(
         "--max-chunk-chars",
         type=int,
         default=None,
-        help="TTS run-on chunk cap (M10 sweep); default from PERSONAVOICE_TTS_MAX_CHUNK_CHARS",
+        help="TTS run-on chunk cap (sweep); default from PERSONAVOICE_TTS_MAX_CHUNK_CHARS",
     )
     parser.add_argument(
         "--first-chunk-chars",
         type=int,
         default=None,
-        help="early first-chunk clause-break length (M10; --stream only) to cut first-audio",
+        help="early first-chunk clause-break length (--stream only) to cut first-audio",
     )
     parser.add_argument(
         "--budget-ms",

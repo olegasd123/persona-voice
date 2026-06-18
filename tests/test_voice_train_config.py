@@ -1,4 +1,4 @@
-"""M9 voice fine-tune config + plan builders (F5 / Chatterbox)."""
+"""Voice fine-tune config + plan builders (F5 / Chatterbox)."""
 
 from __future__ import annotations
 

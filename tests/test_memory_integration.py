@@ -1,4 +1,4 @@
-"""M8 wiring: memory injected into the streaming pipeline + surfaced by `server --check`."""
+"""Memory wiring: memory injected into the streaming pipeline + surfaced by `server --check`."""
 
 from __future__ import annotations
 

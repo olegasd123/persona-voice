@@ -1,4 +1,4 @@
-# Persona LoRA fine-tuning (M7)
+# Persona LoRA fine-tuning
 
 Train per-persona "brains" beyond prompting. The workflow is one CLI — `personavoice-train` —
 backed by `personavoice.training`. Logic is pure and unit-tested; the heavy trainer is shelled

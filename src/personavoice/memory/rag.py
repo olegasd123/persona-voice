@@ -1,4 +1,4 @@
-"""Retrieval of relevant past turns + assembly of the memory context block (M8).
+"""Retrieval of relevant past turns + assembly of the memory context block.
 
 What actually gets injected into the prompt each turn is a short block built from two
 sources: the distilled `UserProfile` (always — summary + durable facts) and the top-k most

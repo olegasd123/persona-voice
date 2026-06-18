@@ -1,4 +1,4 @@
-"""Runtime persona registry with hot-reload (M4 builds the API on top of this)."""
+"""Runtime persona registry with hot-reload (the runtime API is built on top of this)."""
 
 from __future__ import annotations
 

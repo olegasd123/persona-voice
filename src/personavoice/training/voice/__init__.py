@@ -1,7 +1,7 @@
-"""Voice fine-tuning stack (M9).
+"""Voice fine-tuning stack.
 
-Trains a high-fidelity voice for a target speaker, beyond the M5 zero-shot clone. Same
-discipline as the persona-LoRA stack (M7): light, pure, unit-testable logic here; the heavy
+Trains a high-fidelity voice for a target speaker, beyond the zero-shot clone. Same
+discipline as the persona-LoRA stack: light, pure, unit-testable logic here; the heavy
 trainers (F5-TTS / Chatterbox, CUDA) are shelled out to and lazy-checked, so this package
 imports and tests on any machine without a GPU or training libs.
 

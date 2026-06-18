@@ -1,8 +1,8 @@
-"""Distill stored conversations into persona-LoRA training data (M8 → M7 bridge).
+"""Distill stored conversations into persona-LoRA training data (the memory → LoRA bridge).
 
-The third M8 bullet — "distill logs into periodic SFT/DPO LoRA refreshes (manual trigger
-first)" — is exactly: turn a user's real transcripts into the in-character dataset the M7
-trainer already consumes. So this module is a thin, *pure* converter on top of
+This turns a user's real transcripts into the in-character dataset the persona-LoRA
+trainer already consumes, so logs can periodically refresh a LoRA (a manual trigger for
+now). The module is a thin, *pure* converter on top of
 `training/dataset.py`: it groups stored turns into per-session conversations, prepends the
 persona's system prompt, coerces them into well-formed training examples, and hands back
 `DialogueExample`s ready for `write_dataset` / `train.py`.

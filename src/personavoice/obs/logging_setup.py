@@ -1,4 +1,4 @@
-"""Centralized logging configuration (M10 observability).
+"""Centralized logging configuration (observability).
 
 Every entrypoint (the LiveKit agent, the token server, the CLIs) should log in one consistent
 shape. `configure_logging()` installs a single root handler — plain text for humans, or

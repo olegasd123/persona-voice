@@ -1,4 +1,4 @@
-"""Per-turn latency metrics for the live agent (M10 observability).
+"""Per-turn latency metrics for the live agent (observability).
 
 The streaming pipeline already records latency landmarks into a `StreamMetrics`; this turns
 one of those (plus a little turn context) into a flat, loggable `TurnMetrics` record so each

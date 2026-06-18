@@ -1,4 +1,4 @@
-"""VAD endpointing knobs, resolved from the environment (M10 latency tuning).
+"""VAD endpointing knobs, resolved from the environment (latency tuning).
 
 Endpointing — deciding the user has *finished* talking — is a direct latency lever: a long
 trailing-silence window feels safe but adds dead air before the assistant replies; a short
@@ -65,7 +65,7 @@ def vad_load_kwargs(tuning: VadTuning | None = None) -> dict[str, float]:
     """Map a `VadTuning` to `silero.VAD.load(**kwargs)` (only the values the operator set).
 
     Returns an empty dict when nothing is configured, so `silero.VAD.load()` keeps all of its
-    own defaults — the behavior before M10.
+    own defaults — the default behavior.
     """
     tuning = tuning if tuning is not None else vad_tuning_from_env()
     kwargs: dict[str, float] = {}

@@ -1,4 +1,4 @@
-"""`personavoice-voice-train`: build a dataset, fine-tune, A/B, and register a voice (M9).
+"""`personavoice-voice-train`: build a dataset, fine-tune, A/B, and register a voice.
 
     personavoice-voice-train dataset  --voice my_voice --audio-dir clips/        # build metadata.csv
     personavoice-voice-train run      --voice my_voice --engine f5 [--dry-run]   # fine-tune (CUDA)
@@ -300,7 +300,7 @@ def _list(settings: Settings, args: argparse.Namespace) -> int:
 def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="personavoice-voice-train",
-        description="Build a dataset, fine-tune, A/B, and register a high-fidelity voice (M9).",
+        description="Build a dataset, fine-tune, A/B, and register a high-fidelity voice.",
     )
     parser.add_argument("--backend", choices=("mac", "cuda"), default=None, help="override BACKEND")
     sub = parser.add_subparsers(dest="cmd", required=True)
@@ -327,7 +327,7 @@ def _build_parser() -> argparse.ArgumentParser:
     e = sub.add_parser("eval", help="A/B speaker similarity: fine-tuned voice vs zero-shot clone")
     e.add_argument("--voice", required=True, help="fine-tuned voice name (in the store)")
     e.add_argument("--checkpoint", default=None, help="checkpoint dir (if not registered yet)")
-    e.add_argument("--clone", required=True, help="clone name to compare against (M5)")
+    e.add_argument("--clone", required=True, help="clone name to compare against")
     e.add_argument("--target-dir", required=True, help="dir of held-out real target-speaker .wav clips")
     e.add_argument("--probes", default=None, help="probe lines (JSON array or one per line)")
     e.add_argument("--margin", type=float, default=0.0, help="delta a clear win must clear")

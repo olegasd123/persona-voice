@@ -1,4 +1,4 @@
-"""Structured logging + per-turn metrics (M10 observability)."""
+"""Structured logging + per-turn metrics (observability)."""
 
 from __future__ import annotations
 

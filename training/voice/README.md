@@ -1,6 +1,6 @@
-# Voice fine-tuning (M9)
+# Voice fine-tuning
 
-Train a **high-fidelity voice** for a target speaker — beyond the M5 zero-shot clone. Where a
+Train a **high-fidelity voice** for a target speaker — beyond the zero-shot clone. Where a
 clone is *reference conditioning* (the TTS speaks in the voice of a stored sample at generation
 time), a fine-tune adapts the TTS model itself to the speaker on a small dataset, for higher
 fidelity. The workflow is one CLI — `personavoice-voice-train` — backed by
@@ -27,10 +27,10 @@ checkpoint's *weights* are CC-BY-NC (non-commercial). A voice fine-tuned on **yo
 consented speaker's** clips for a personal persona is fine; don't redistribute the weights
 commercially. For anything shipped, fine-tune **Chatterbox** (MIT) — it has no official CLI, so
 point `trainer_script` at a community Chatterbox trainer. Voice fine-tuning is **CUDA-only** (the
-training track); the Mac path stays zero-shot cloning (M5).
+training track); the Mac path stays zero-shot cloning.
 
-> **Consent.** Only fine-tune voices from samples you're authorized to use (same gate as M5
-> cloning). See the plan's "Voice-clone misuse / consent" risk row.
+> **Consent.** Only fine-tune voices from samples you're authorized to use — the same consent
+> gate as voice cloning. Cloning or fine-tuning a voice without consent is a misuse risk.
 
 ## 1. Dataset
 
@@ -66,7 +66,7 @@ personavoice-voice-train run --voice my_voice --engine f5 \
 
 The heavy step runs in the CUDA training image (the trainers aren't in the light `cuda` wheel,
 same policy as vLLM/LLaMA-Factory). F5-TTS: `pip install f5-tts` in the image. On a Blackwell GPU
-(sm_120, RTX 5090) use cu128 torch wheels (the M2/M7 notes apply). Checkpoints land in
+(sm_120, RTX 5090) use the cu128 torch wheels. Checkpoints land in
 `<models>/finetuned/<voice>/`.
 
 ### Verified runner (the real f5-tts ≥1.1 flow)
@@ -103,7 +103,7 @@ docker run --rm --gpus all -v "$PWD":/workspace -w /workspace \
 ## 3. Eval — A/B vs the zero-shot clone
 
 The acceptance bar is *"clearly higher fidelity than the zero-shot clone."* The proxy is
-**speaker similarity**: synthesize the same probes with the fine-tuned voice and with the M5 clone,
+**speaker similarity**: synthesize the same probes with the fine-tuned voice and with the zero-shot clone,
 embed both plus held-out **real** target clips, and compare cosine similarity to the real speaker.
 
 ```

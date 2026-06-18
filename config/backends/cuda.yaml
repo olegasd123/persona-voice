@@ -35,7 +35,7 @@ llm:
 tts:
   # Orpheus (default) = expressive, emotion tags (preset voices only), but runs its own
   # in-process vLLM (awkward on Windows native) and inherits the Llama-3.2 license. Chatterbox
-  # (MIT, torch) is the Windows-native + zero-shot-cloning backend (M5): set
+  # (MIT, torch) is the Windows-native + zero-shot-cloning backend: set
   # PERSONAVOICE_TTS_ADAPTER=chatterbox. `device`/`sample_rate` apply to whichever is selected.
   adapter: ${PERSONAVOICE_TTS_ADAPTER:-orpheus}
   model: ${PERSONAVOICE_TTS_MODEL:-canopylabs/orpheus-3b-0.1-ft}

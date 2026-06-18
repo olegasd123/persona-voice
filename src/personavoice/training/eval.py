@@ -1,4 +1,4 @@
-"""Persona-adherence eval harness (M7).
+"""Persona-adherence eval harness.
 
 To answer "did the LoRA actually help?" we score replies on cheap, deterministic proxies for
 in-character behavior — no second LLM judge needed for the first pass:

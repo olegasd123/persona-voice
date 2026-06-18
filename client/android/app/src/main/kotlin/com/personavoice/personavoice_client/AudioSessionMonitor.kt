@@ -13,7 +13,7 @@ import io.flutter.plugin.common.EventChannel
 
 /**
  * Bridges Android audio-focus changes + output-device changes to the Flutter
- * `persona_voice/audio_session` EventChannel — the Android half of M6's deep audio-session
+ * `persona_voice/audio_session` EventChannel — the Android half of the deep audio-session
  * plumbing. An incoming call (or any app grabbing audio focus) surfaces as
  * `interruptionBegan/Ended`; a headset/Bluetooth device connecting or dropping surfaces as
  * `routeChanged`, so the thin client can mute/resume the mic and show the active route.

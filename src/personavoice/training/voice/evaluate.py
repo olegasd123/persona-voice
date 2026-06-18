@@ -1,6 +1,6 @@
-"""Voice-quality A/B: fine-tuned voice vs zero-shot clone (M9).
+"""Voice-quality A/B: fine-tuned voice vs zero-shot clone.
 
-The M9 acceptance is "a fine-tuned voice is clearly higher fidelity than its zero-shot clone."
+The acceptance bar is "a fine-tuned voice is clearly higher fidelity than its zero-shot clone."
 The objective proxy is **speaker similarity**: synthesize the same probe lines with each voice,
 embed them with a speaker encoder, and measure cosine similarity to held-out *real* clips of the
 target speaker. The voice whose synthesis lands closer to the real speaker is the more faithful.

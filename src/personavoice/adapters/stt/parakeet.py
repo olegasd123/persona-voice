@@ -1,7 +1,7 @@
 """NVIDIA Parakeet STT (CUDA / RTX 4080) via NeMo — alternative to faster-whisper.
 
 Parakeet (e.g. `nvidia/parakeet-tdt-0.6b-v2`) is a fast, accurate English ASR model served
-through NeMo. M2 implements the one-shot `transcribe`; streaming lands in M3. NeMo's
+through NeMo. It implements the one-shot `transcribe`; streaming is handled by the live agent. NeMo's
 `transcribe` takes file paths, so we resample to 16 kHz mono and hand it a temp wav. `nemo`
 is imported lazily and the model is built once and cached on the instance.
 """

@@ -1,4 +1,4 @@
-"""M9 target-speaker dataset: parse/validate/metadata + STT auto-transcription."""
+"""Target-speaker dataset: parse/validate/metadata + STT auto-transcription."""
 
 from __future__ import annotations
 

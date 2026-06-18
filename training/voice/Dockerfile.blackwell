@@ -1,8 +1,8 @@
-# F5-TTS voice-fine-tune image for Blackwell (sm_120) GPUs — e.g. the RTX 5090 (M9).
+# F5-TTS voice-fine-tune image for Blackwell (sm_120) GPUs — e.g. the RTX 5090.
 #
 # The voice trainers stay out of the light `cuda` wheel (same policy as vLLM / LLaMA-Factory),
 # so this is their image. It bundles the canonical F5-TTS trainer (`f5-tts_finetune-cli` +
-# `f5-tts_prepare_csv_wavs`) and Resemblyzer (the M9 A/B speaker encoder), on a Blackwell-capable
+# `f5-tts_prepare_csv_wavs`) and Resemblyzer (the A/B speaker encoder), on a Blackwell-capable
 # cu128 torch.
 #
 # Why cu128: F5-TTS pulls a default torch that only supports up to sm_90 (Ada/Hopper) and refuses
@@ -53,7 +53,7 @@ RUN python3.12 -m pip install --upgrade pip \
         torch==2.7.1+cu128 torchaudio==2.7.1+cu128
 
 # The F5-TTS trainer (f5-tts_finetune-cli + the f5_tts.train.datasets.prepare_csv_wavs module)
-# and the M9 A/B speaker encoder. f5-tts only needs torch>=2.0, so it keeps the cu128 torch above.
+# and the A/B speaker encoder. f5-tts only needs torch>=2.0, so it keeps the cu128 torch above.
 RUN python3.12 -m pip install "f5-tts" resemblyzer
 
 # Resemblyzer → webrtcvad → `import pkg_resources`, but setuptools>=81 dropped the bundled

@@ -1,9 +1,9 @@
 """Kokoro TTS (Mac dev) — fast, no cloning. The default dev voice.
 
-M1 implements one-shot `synthesize` (text → WAV bytes) for the file-based pipeline.
-Streaming (`stream_tts`) lands in M3. Kokoro has no zero-shot cloning, so personas whose
+Implements one-shot `synthesize` (text → WAV bytes) for the file-based pipeline.
+Streaming (`stream_tts`) is handled by the live agent. Kokoro has no zero-shot cloning, so personas whose
 voice ref points at a clone (`voices/...`) fall back to the configured preset until the
-cloning backend (f5_mlx / Chatterbox) is wired up in M5.
+cloning backend (f5_mlx / Chatterbox) is wired up separately.
 
 `kokoro` is imported lazily and the pipeline is built once per adapter and cached.
 """

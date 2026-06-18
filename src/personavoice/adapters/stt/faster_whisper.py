@@ -1,7 +1,7 @@
 """faster-whisper STT (CUDA / RTX 4080).
 
-Mirrors the Mac `whisper_mlx` adapter: M2 implements the one-shot `transcribe` used by the
-file-based pipeline; streaming partials land in M3. `faster_whisper` is imported lazily so
+Mirrors the Mac `whisper_mlx` adapter: it implements the one-shot `transcribe` used by the
+file-based pipeline; streaming partials are handled by the live agent. `faster_whisper` is imported lazily so
 the adapter constructs and `check()`s without the `cuda` extra, and the (heavy) CTranslate2
 model is built once on first use and cached on the instance.
 """

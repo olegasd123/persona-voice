@@ -1,4 +1,4 @@
-"""MOS (Mean Opinion Score) spot-check aggregation (M10 automated eval).
+"""MOS (Mean Opinion Score) spot-check aggregation (automated eval).
 
 There's no reliable, license-clean objective MOS model we want to depend on, so voice quality
 is spot-checked the standard way: synthesize a handful of probe lines per voice, have a human

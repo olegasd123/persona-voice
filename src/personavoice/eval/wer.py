@@ -1,4 +1,4 @@
-"""Word Error Rate for STT quality (M10 automated eval).
+"""Word Error Rate for STT quality (automated eval).
 
 WER = (substitutions + deletions + insertions) / reference_words, computed from the
 word-level Levenshtein alignment between a reference transcript and the STT hypothesis.

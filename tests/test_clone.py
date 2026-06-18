@@ -1,4 +1,4 @@
-"""Zero-shot voice cloning (M5): sample validation, clone store, cloner, and resolution."""
+"""Zero-shot voice cloning: sample validation, clone store, cloner, and resolution."""
 
 from __future__ import annotations
 
@@ -319,7 +319,7 @@ def test_validate_personas_clone_suppresses_distinctness_warning(
     from personavoice.models import BackendConfig, StageConfig
     from personavoice.server.check import _validate_personas
 
-    # Chatterbox can clone but the registry has no chatterbox *presets*, so without M5 every
+    # Chatterbox can clone but the registry has no chatterbox *presets*, so without an assigned clone, every
     # persona would warn; an assigned clone (and cloning support) clears those warnings.
     backend = build_backend(
         BackendConfig(

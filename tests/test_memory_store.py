@@ -1,4 +1,4 @@
-"""MemoryStore (M8): consent gating, transcripts, sessions, profile, privacy, encryption."""
+"""MemoryStore: consent gating, transcripts, sessions, profile, privacy, encryption."""
 
 from __future__ import annotations
 

@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
-"""Load-test the token server (M10 observability / robustness).
+"""Load-test the token server (observability / robustness).
 
     python scripts/loadtest.py --url http://localhost:8080 --requests 500 --concurrency 20
     python scripts/loadtest.py --url http://localhost:8080 --token $PERSONAVOICE_API_TOKEN
 
 Fires `--requests` token mints across `--concurrency` workers and reports throughput, latency
-percentiles, and the error rate — the "load test" the M10 plan calls for and a quick way to
+percentiles, and the error rate — the "load test" and a quick way to
 confirm the server stays healthy (and that rate limiting kicks in) under concurrency. Uses
 only the stdlib (`urllib`, threads). The aggregation (`summarize_load`) is pure + unit-tested.
 """

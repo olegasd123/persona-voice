@@ -1,6 +1,6 @@
-"""Streaming STT → LLM → TTS pipeline (M3).
+"""Streaming STT → LLM → TTS pipeline.
 
-The M1 `Pipeline` waits for the whole reply before speaking; this streaming variant pipes
+The turn-based `Pipeline` waits for the whole reply before speaking; this streaming variant pipes
 LLM tokens into the sentence chunker and on into TTS, so audio starts as soon as the first
 sentence is ready. That's the core of "stream everything": it cuts *perceived* latency
 even though total compute is unchanged.
@@ -42,7 +42,7 @@ class StreamMetrics:
 class StreamingPipeline:
     """Runs one persona conversation, streaming each reply sentence-by-sentence.
 
-    Keeps an in-memory `history` like the M1 pipeline so multi-turn sessions have context.
+    Keeps an in-memory `history` like the turn-based pipeline so multi-turn sessions have context.
     `stream_response` is a cancellable async generator: cancelling the task that drives it
     (see `TurnController`) tears down the in-flight LLM and TTS streams for barge-in.
     """
@@ -61,10 +61,10 @@ class StreamingPipeline:
         self.persona = persona
         self.voices = voices
         self.history: list[Msg] = []
-        # TTS chunk-sizing knobs (M10 latency); resolved from the environment by default so
+        # TTS chunk-sizing knobs (latency); resolved from the environment by default so
         # the live agent and demos pick up `PERSONAVOICE_TTS_*` without extra wiring.
         self.chunk_kwargs = chunk_kwargs if chunk_kwargs is not None else chunk_kwargs_from_env()
-        # Cross-session memory (M8): consent-gated, no-op until a user opts in. The session id
+        # Cross-session memory: consent-gated, no-op until a user opts in. The session id
         # ties this run's recorded turns together so recall can exclude the live session.
         self.memory = memory
         self.user_id = user_id

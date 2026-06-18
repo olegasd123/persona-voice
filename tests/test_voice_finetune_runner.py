@@ -1,4 +1,4 @@
-"""M9 voice fine-tune runner: prepare, prepare+train ordering, dry-run, failures."""
+"""Voice fine-tune runner: prepare, prepare+train ordering, dry-run, failures."""
 
 from __future__ import annotations
 

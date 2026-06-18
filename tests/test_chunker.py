@@ -1,4 +1,4 @@
-"""The token -> sentence chunker that feeds streaming TTS (M3)."""
+"""The token -> sentence chunker that feeds streaming TTS."""
 
 from __future__ import annotations
 
@@ -80,7 +80,7 @@ async def test_stream_sentences_async_wrapper() -> None:
     assert got == ["Hello.", "World!"]
 
 
-# --- M10: first-chunk early flush + env tuning -----------------------------------------
+# --- first-chunk early flush + env tuning -----------------------------------------
 
 
 def test_first_chunk_breaks_early_on_clause_boundary() -> None:

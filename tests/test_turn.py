@@ -1,4 +1,4 @@
-"""Barge-in: the TurnController cancels an in-flight response when the user speaks (M3)."""
+"""Barge-in: the TurnController cancels an in-flight response when the user speaks."""
 
 from __future__ import annotations
 

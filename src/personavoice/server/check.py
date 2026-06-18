@@ -1,7 +1,7 @@
 """`server --check`: validate config and load (stub) adapters on this machine.
 
 Produces a structured `CheckReport` so the same logic is exercised by tests and by the
-CLI. This is the M0 acceptance test: it must pass on both the Mac and the 4080.
+CLI. This is the acceptance check: it must pass on both the Mac and the 4080.
 """
 
 from __future__ import annotations
@@ -52,7 +52,7 @@ def _validate_personas(
     cloning = getattr(backend.tts, "supports_cloning", False)
     for persona in personas.values():
         ref = persona.voice.ref
-        # An assigned fine-tuned voice (M9) / clone (M5) on a cloning backend → the persona
+        # An assigned fine-tuned voice / clone on a cloning backend → the persona
         # speaks in that voice, so it'll sound distinct regardless of the static preset.
         if cloning and voices.finetuned_for_persona(persona.id):
             continue
@@ -125,7 +125,7 @@ def run_check(settings: Settings) -> CheckReport:
         report.finetuned_assignments = voices.finetuned.assignments
     report.warnings.extend(_validate_personas(personas, backend, voices))
 
-    # 4. Memory (M8). Surfaces the store location, at-rest encryption, and #users so a
+    # 4. Memory. Surfaces the store location, at-rest encryption, and #users so a
     # misconfigured PERSONAVOICE_MEMORY_KEY (cryptography missing / bad key) fails the check.
     report.memory_dir = str(settings.memory_dir)
     memory_enabled = any(p.memory.enabled for p in personas.values())

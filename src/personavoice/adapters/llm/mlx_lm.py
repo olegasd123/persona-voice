@@ -1,4 +1,4 @@
-"""mlx-lm LLM (Mac / M4 Max) — in-process alternative to Ollama. Implemented in M1/M2."""
+"""mlx-lm LLM (Mac / M4 Max) — in-process alternative to Ollama."""
 
 from __future__ import annotations
 

@@ -1,4 +1,4 @@
-"""M7 eval harness: scorers, aggregation, compare, and the probe runner."""
+"""Persona-adherence eval harness: scorers, aggregation, compare, and the probe runner."""
 
 from __future__ import annotations
 

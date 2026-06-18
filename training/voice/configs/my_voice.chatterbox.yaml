@@ -1,4 +1,4 @@
-# Chatterbox voice fine-tune (M9). Loaded by `personavoice-voice-train run --config ...`.
+# Chatterbox voice fine-tune. Loaded by `personavoice-voice-train run --config ...`.
 # Chatterbox is MIT (the clean-license path), but ships no official finetune CLI — point
 # `trainer_script` at the community Chatterbox trainer (see training/voice/README.md).
 voice_name: my_voice

@@ -53,6 +53,6 @@ COPY scripts ./scripts
 # the build rather than the first request.
 RUN python3.12 -m personavoice.server --check --no-color
 
-# The live streaming server lands in M3; until then the container validates config and exits.
+# The container validates config and exits; the live streaming server runs separately (see the README).
 # docker-compose overrides this with the same command once the vLLM service is healthy.
 CMD ["python3.12", "-m", "personavoice.server", "--check", "--no-color"]

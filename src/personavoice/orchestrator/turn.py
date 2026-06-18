@@ -1,4 +1,4 @@
-"""Turn-taking & barge-in control (M3).
+"""Turn-taking & barge-in control.
 
 In a live conversation the user can start talking while the persona is still speaking
 (*barge-in*). The fix is simple in shape: drive each response as a single asyncio task, and

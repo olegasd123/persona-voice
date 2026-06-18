@@ -1,6 +1,6 @@
-"""`personavoice-stream-demo`: the M3 streaming voice loop on one machine (no LiveKit).
+"""`personavoice-stream-demo`: the streaming voice loop on one machine (no LiveKit).
 
-Same shape as the M1 `personavoice-demo`, but it streams: the reply is synthesized and
+Same shape as the offline `personavoice-demo`, but it streams: the reply is synthesized and
 played **sentence-by-sentence**, so you hear the first sentence while the rest is still
 being generated. It prints time-to-first-token and time-to-first-audio so the streaming win
 over the turn-based loop is visible.
@@ -79,7 +79,7 @@ async def _run(
 ) -> StreamMetrics:
     backend = build_backend(load_backend_config(settings))
 
-    # Cross-session memory (M8). Passing --user opts that user in (grants consent) and keys
+    # Cross-session memory. Passing --user opts that user in (grants consent) and keys
     # their stored memory: run once to record, run again to hear prior facts recalled.
     memory: ConversationMemory | None = None
     if user_id:
@@ -141,7 +141,7 @@ def _print_metrics(m: StreamMetrics) -> None:
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         prog="personavoice-stream-demo",
-        description="Streaming voice loop: speak into a wav, hear a persona reply stream (M3).",
+        description="Streaming voice loop: speak into a wav, hear a persona reply stream.",
     )
     src = parser.add_mutually_exclusive_group(required=True)
     src.add_argument("--wav", type=Path, help="input wav file (your spoken question)")
@@ -157,7 +157,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--user",
         metavar="ID",
-        help="enable cross-session memory keyed by this user id (M8): grants consent, "
+        help="enable cross-session memory keyed by this user id: grants consent, "
         "records the turn, recalls prior-session facts on the next run",
     )
     args = parser.parse_args(argv)

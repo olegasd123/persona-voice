@@ -32,7 +32,7 @@ class TTSAdapter:
         self.options = options or {}
 
     async def stream_tts(self, text: AsyncIterator[str], voice: VoiceRef) -> AsyncIterator[bytes]:
-        """Yield one WAV chunk per incoming text chunk (M3 streaming).
+        """Yield one WAV chunk per incoming text chunk (streaming).
 
         The default synthesizes each sentence-sized chunk as it arrives, so the first
         sentence can be spoken while the LLM is still generating the rest of the reply.
@@ -46,11 +46,11 @@ class TTSAdapter:
             yield await self.synthesize(chunk, voice)
 
     async def synthesize(self, text: str, voice: VoiceRef) -> bytes:
-        """Convenience one-shot synthesis (used by the file-based M1 pipeline)."""
+        """Convenience one-shot synthesis (used by the file-based pipeline)."""
         raise NotImplementedError(f"{self.name}.synthesize is not implemented yet")
 
     async def clone_voice(self, sample_wav: bytes, name: str) -> VoiceRef:
-        """Create a zero-shot voice clone from a short sample (M5).
+        """Create a zero-shot voice clone from a short sample.
 
         The cloning backends (Chatterbox, F5) synthesize directly from a reference WAV, so a
         clone is the persisted sample itself: store it and return a `VoiceRef` pointing at it.

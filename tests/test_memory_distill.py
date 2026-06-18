@@ -1,4 +1,4 @@
-"""Distill transcripts -> persona-LoRA training data (M8 -> M7 bridge)."""
+"""Distill transcripts -> persona-LoRA training data (memory -> LoRA bridge)."""
 
 from __future__ import annotations
 

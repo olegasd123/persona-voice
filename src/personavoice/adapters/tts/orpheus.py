@@ -1,13 +1,13 @@
 """Orpheus TTS (CUDA / RTX 4080) — expressive, emotion tags, preset voices.
 
-M2 implements one-shot `synthesize` (text -> WAV bytes) via the `orpheus_tts` engine, which
+Implements one-shot `synthesize` (text -> WAV bytes) via the `orpheus_tts` engine, which
 runs the Orpheus LLM (vLLM-backed) and decodes its audio tokens with SNAC into a stream of
 24 kHz mono 16-bit PCM chunks. We concatenate the chunks and wrap them as WAV. The engine is
 imported lazily and built once per adapter (heavy) and cached.
 
 Orpheus ships preset voices (tara, leah, jess, leo, dan, mia, zac, zoe), selected per
 persona by the voice registry. Its `generate_speech(prompt, voice=...)` engine takes only a
-preset name — there's no reference-sample input — so genuine zero-shot cloning (M5) goes
+preset name — there's no reference-sample input — so genuine zero-shot cloning goes
 through **Chatterbox** (MIT, the dockerized single-GPU default) on CUDA. Hence
 `supports_cloning = False` here; a persona assigned a clone keeps its Orpheus preset.
 """
@@ -28,7 +28,7 @@ def _resolve_voice(voice: VoiceRef, default: str) -> str:
     """Pick the Orpheus preset for a persona voice ref.
 
     Presets are bare names (`tara`, `leo`, ...). A clone-style ref (`voices/...`, or
-    anything with a path separator) can't be honored without cloning (M5), so we fall back
+    anything with a path separator) can't be honored without cloning, so we fall back
     to the configured default preset.
     """
     vid = voice.id

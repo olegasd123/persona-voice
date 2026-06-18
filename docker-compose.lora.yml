@@ -1,4 +1,4 @@
-# M7 served-LoRA overlay for vLLM.
+# Served-LoRA overlay for vLLM.
 #
 # Hot-loads a trained persona adapter so the prompt-only-vs-LoRA A/B
 # (`personavoice-train eval --persona <p> --compare`) routes to the served adapter. The persona's

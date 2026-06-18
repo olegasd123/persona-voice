@@ -1,4 +1,4 @@
-"""Token-bucket rate limiter (M10 security pass)."""
+"""Token-bucket rate limiter (security pass)."""
 
 from __future__ import annotations
 

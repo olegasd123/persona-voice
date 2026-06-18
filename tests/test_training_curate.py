@@ -1,4 +1,4 @@
-"""M7 dialogue curation: self-chat structure, role-flipping, simulator prompt."""
+"""Dialogue curation: self-chat structure, role-flipping, simulator prompt."""
 
 from __future__ import annotations
 

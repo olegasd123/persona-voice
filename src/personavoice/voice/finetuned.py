@@ -1,6 +1,6 @@
-"""Fine-tuned voices (M9): a persisted catalog of high-fidelity, trained voices.
+"""Fine-tuned voices: a persisted catalog of high-fidelity, trained voices.
 
-Where a *clone* (M5) is reference conditioning — the cloning TTS speaks in the voice of a
+Where a *clone* is reference conditioning — the cloning TTS speaks in the voice of a
 stored sample passed at generation time — a **fine-tuned voice** is a trained checkpoint: the
 TTS model itself is adapted to a target speaker on a small dataset, for fidelity beyond
 zero-shot. At inference the cloning backends load that checkpoint (`VoiceRef.model_path`)
@@ -43,7 +43,7 @@ class FinetunedVoice(BaseModel):
     engine: str | None = None  # "f5" | "chatterbox" (which trainer produced it)
     base_model: str | None = None  # the base checkpoint it was fine-tuned from
     speaker: str | None = None  # target speaker label (provenance)
-    # A/B verdict vs the zero-shot clone, when an eval was run (M9 acceptance).
+    # A/B verdict vs the zero-shot clone, when an eval was run.
     similarity: float | None = None  # speaker similarity to held-out target clips
     clone_similarity: float | None = None  # the zero-shot clone's similarity, for the delta
     created_at: str | None = None

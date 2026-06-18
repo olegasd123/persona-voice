@@ -1,4 +1,4 @@
-"""Structural contracts every backend implements (the snippet in IMPLEMENTATION_PLAN.md).
+"""Structural contracts every backend implements.
 
 These `Protocol`s are for static typing / documentation. Concrete adapters inherit from
 the base classes in each stage's `base.py`, which structurally satisfy these protocols.

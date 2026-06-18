@@ -1,4 +1,4 @@
-"""MOS spot-check aggregation (M10)."""
+"""MOS spot-check aggregation."""
 
 from __future__ import annotations
 

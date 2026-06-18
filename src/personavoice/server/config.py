@@ -65,17 +65,17 @@ class Settings:
 
     @property
     def clones_dir(self) -> Path:
-        """Where cloned voices + their manifest live (M5). Defaults under the models dir."""
+        """Where cloned voices + their manifest live. Defaults under the models dir."""
         return self._clones_dir or (self.models_dir / "clones")
 
     @property
     def finetuned_dir(self) -> Path:
-        """Where fine-tuned voices + their manifest live (M9). Defaults under the models dir."""
+        """Where fine-tuned voices + their manifest live. Defaults under the models dir."""
         return self._finetuned_dir or (self.models_dir / "finetuned")
 
     @property
     def memory_dir(self) -> Path:
-        """Where per-user conversation memory lives (M8). Defaults under the models dir."""
+        """Where per-user conversation memory lives. Defaults under the models dir."""
         return self._memory_dir or (self.models_dir / "memory")
 
     @classmethod
@@ -139,12 +139,12 @@ def load_clones_store(settings: Settings) -> ClonesStore:
 
 
 def load_finetuned_store(settings: Settings) -> FinetunedVoicesStore:
-    """Load the fine-tuned-voice catalog (M9; tolerates a missing manifest → empty store)."""
+    """Load the fine-tuned-voice catalog (tolerates a missing manifest → empty store)."""
     return FinetunedVoicesStore.load(settings.finetuned_dir)
 
 
 def load_voice_registry(settings: Settings) -> VoiceRegistry:
-    """Load the voice registry with the clone + fine-tuned catalogs attached (M5/M9).
+    """Load the voice registry with the clone + fine-tuned catalogs attached.
 
     Tolerates missing `voices.yaml` / manifests; the attached stores let `resolve_for_persona`
     honor per-persona assignments on a cloning backend — a fine-tuned voice taking precedence
@@ -158,14 +158,14 @@ def load_voice_registry(settings: Settings) -> VoiceRegistry:
 
 
 def load_memory_store(settings: Settings) -> MemoryStore:
-    """Open the per-user memory store (M8), encrypted if `PERSONAVOICE_MEMORY_KEY` is set."""
+    """Open the per-user memory store, encrypted if `PERSONAVOICE_MEMORY_KEY` is set."""
     return MemoryStore(settings.memory_dir, cipher=cipher_from_key(settings.memory_key))
 
 
 def build_conversation_memory(
     settings: Settings, backend: object, persona: Persona | None = None
 ) -> ConversationMemory:
-    """Build the runtime memory facade (M8) bound to the backend's LLM for distillation.
+    """Build the runtime memory facade bound to the backend's LLM for distillation.
 
     Retrieval / consolidation knobs come from `persona.memory` when a persona is given (the
     facade is single-knobbed; the agent's primary persona seeds them). `backend` is an

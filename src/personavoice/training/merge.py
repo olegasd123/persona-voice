@@ -1,4 +1,4 @@
-"""Fuse a trained LoRA adapter back into base weights (M7).
+"""Fuse a trained LoRA adapter back into base weights.
 
 Serving is simplest with a single merged checkpoint (vLLM / mlx-lm load it like any model),
 so after training we fuse the adapter:

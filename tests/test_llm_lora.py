@@ -1,4 +1,4 @@
-"""M7 inference hot-swap: a persona's `llm.lora` routes to the served adapter on vLLM."""
+"""Inference hot-swap: a persona's `llm.lora` routes to the served adapter on vLLM."""
 
 from __future__ import annotations
 

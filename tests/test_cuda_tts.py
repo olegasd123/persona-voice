@@ -28,7 +28,7 @@ def test_chatterbox_flags() -> None:
 def test_resolve_voice_preset_vs_clone_ref() -> None:
     # A bare preset name is honored as-is.
     assert _resolve_voice(VoiceRef(id="leo"), default="tara") == "leo"
-    # A clone-style ref falls back to the default preset (cloning is M5).
+    # A clone-style ref falls back to the default preset (cloning is a separate feature).
     assert _resolve_voice(VoiceRef(id="voices/hr_warm"), default="tara") == "tara"
     assert _resolve_voice(VoiceRef(id=""), default="tara") == "tara"
 

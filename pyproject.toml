@@ -39,17 +39,17 @@ cuda = [
     "faster-whisper>=1.0",
     "soundfile>=0.12",
     "numpy>=1.26",
-    "httpx>=0.27",          # OpenAI-compatible HTTP for the vLLM server (M2)
+    "httpx>=0.27",          # OpenAI-compatible HTTP for the vLLM server
     # vLLM (LLM), CUDA TTS (chatterbox-tts / orpheus-speech), and Parakeet STT
     # (nemo_toolkit[asr]) are installed in the server image, not here: they need a CUDA
     # toolchain / are heavy. faster-whisper (above) is the default CUDA STT. See Dockerfile.
 ]
-# --- Real-time orchestration (added in M3) --------------------------------------------
+# --- Real-time orchestration --------------------------------------------
 livekit = [
     "livekit-agents>=0.11",
     "livekit-plugins-silero>=0.7",
 ]
-# --- Zero-shot voice cloning (added in M5) --------------------------------------------
+# --- Zero-shot voice cloning --------------------------------------------
 # Chatterbox is the clean-license (MIT) cloning backend; runs on CUDA (4080) and MPS (Mac).
 clone = [
     "chatterbox-tts>=0.1",
@@ -59,21 +59,21 @@ clone = [
 clone-mac = [
     "f5-tts-mlx>=0.2",
 ]
-# --- Persona LoRA fine-tuning (added in M7) -------------------------------------------
+# --- Persona LoRA fine-tuning -------------------------------------------
 # Mac LoRA training via mlx-lm (also in the `mac` extra). The CUDA QLoRA trainer
 # (LLaMA-Factory / Unsloth) is heavy + needs a CUDA toolchain, so it's installed in the
 # training image, not here — see training/persona_lora/README.md.
 train = [
     "mlx-lm>=0.14",
 ]
-# --- Voice fine-tuning A/B eval (added in M9) -----------------------------------------
+# --- Voice fine-tuning A/B eval -----------------------------------------
 # Speaker-similarity scoring for the fine-tuned-vs-clone A/B. The voice trainers themselves
 # (F5-TTS / Chatterbox, CUDA) are heavy + need a CUDA toolchain, so they live in the training
 # image, not here — see training/voice/README.md.
 voice-eval = [
     "resemblyzer>=0.1",     # speaker embeddings for the voice-quality A/B (PERSONAVOICE eval)
 ]
-# --- Conversation memory (added in M8) ------------------------------------------------
+# --- Conversation memory ------------------------------------------------
 # Core memory (store, profile, keyword recall, distill) needs nothing beyond the base deps.
 # `memory` adds at-rest encryption; `memory-embeddings` adds semantic recall — both lazy,
 # so the default keyword-recall + plaintext path runs on the core install.

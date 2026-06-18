@@ -1,4 +1,4 @@
-"""The M1 turn-based pipeline (STT -> LLM -> TTS), exercised with fake adapters."""
+"""The turn-based pipeline (STT -> LLM -> TTS), exercised with fake adapters."""
 
 from __future__ import annotations
 

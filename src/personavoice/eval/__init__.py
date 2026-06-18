@@ -1,10 +1,10 @@
-"""Automated quality eval (M10): STT word-error-rate, voice MOS spot-checks, and a
+"""Automated quality eval: STT word-error-rate, voice MOS spot-checks, and a
 dashboard that gates the headline metrics against thresholds.
 
 The scoring primitives here are pure (text/number in, number out) so they're unit-tested
 offline; the runnable harnesses that exercise a real backend live in `scripts/eval_stt.py`
 and `scripts/run_eval.py`. Persona-adherence scoring already lives in
-`personavoice.training.eval` (M7); the dashboard composes all of them.
+`personavoice.training.eval`; the dashboard composes all of them.
 """
 
 from __future__ import annotations

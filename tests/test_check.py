@@ -1,4 +1,4 @@
-"""The M0 acceptance test: `server --check` passes on both backends with stub adapters."""
+"""The acceptance check: `server --check` passes on both backends with stub adapters."""
 
 from __future__ import annotations
 

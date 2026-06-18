@@ -1,4 +1,4 @@
-# Self-hosted LiveKit SFU + token server (M6). Lightweight, no GPU — runs on the Mac for
+# Self-hosted LiveKit SFU + token server. Lightweight, no GPU — runs on the Mac for
 # dev and on the 4080 alongside the prod stack.
 #
 #   docker compose -f docker-compose.livekit.yml up --build

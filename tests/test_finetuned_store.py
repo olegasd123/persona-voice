@@ -1,4 +1,4 @@
-"""M9 fine-tuned voices: store persistence, registry precedence, adapter wiring, --check."""
+"""Fine-tuned voices: store persistence, registry precedence, adapter wiring, --check."""
 
 from __future__ import annotations
 

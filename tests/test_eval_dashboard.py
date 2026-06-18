@@ -1,4 +1,4 @@
-"""Eval dashboard gate logic (M10)."""
+"""Eval dashboard gate logic."""
 
 from __future__ import annotations
 

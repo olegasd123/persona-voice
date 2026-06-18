@@ -50,7 +50,7 @@ def _print_report(report: CheckReport, settings: Settings, *, use_color: bool) -
 
     if report.clones:
         assigned = report.clone_assignments
-        # Show each clone, noting any persona it's assigned to (M5).
+        # Show each clone, noting any persona it's assigned to.
         by_clone = {name: pid for pid, name in assigned.items()}
         listed = ", ".join(
             f"{name} -> {by_clone[name]}" if name in by_clone else name for name in report.clones
@@ -96,12 +96,12 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--serve",
         action="store_true",
-        help="run the live LiveKit streaming agent (M3); needs the `livekit` extra",
+        help="run the live LiveKit streaming agent; needs the `livekit` extra",
     )
     parser.add_argument(
         "--token-server",
         action="store_true",
-        help="run the HTTP token server that mints LiveKit join tokens for clients (M6)",
+        help="run the HTTP token server that mints LiveKit join tokens for clients",
     )
     parser.add_argument(
         "--backend",

@@ -1,4 +1,4 @@
-"""personavoice-memory CLI (M8): consent, list/show, export, delete, distill, gen-key."""
+"""personavoice-memory CLI: consent, list/show, export, delete, distill, gen-key."""
 
 from __future__ import annotations
 

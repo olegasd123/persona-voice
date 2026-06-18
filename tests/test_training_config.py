@@ -1,4 +1,4 @@
-"""M7 training config + plan builders (mlx-lm / LLaMA-Factory)."""
+"""Training config + plan builders (mlx-lm / LLaMA-Factory)."""
 
 from __future__ import annotations
 

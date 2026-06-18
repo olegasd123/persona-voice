@@ -3,7 +3,7 @@
 # Each maps to a backend-native preset so the four personas sound DISTINCT on whichever
 # backend is active: Kokoro presets (af_*/am_* — female/male) on the Mac, Orpheus presets
 # (tara/leah/jess/leo/...) on the 4080. Clone-only backends (Chatterbox/F5) have no preset
-# and fall back to their default voice until M5 wires zero-shot cloning, which will use the
+# and fall back to their default voice until a clone is assigned, which then uses the
 # `sample` field (a ~10 s wav) added here per voice.
 #
 # Personas reference these as `voices/<id>`; the `voices/` prefix is stripped on lookup.

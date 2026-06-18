@@ -1,4 +1,4 @@
-"""Per-user memory persistence + privacy controls (M8).
+"""Per-user memory persistence + privacy controls.
 
 The store is the on-disk root for everything the assistant remembers about a user across
 sessions. It is intentionally decoupled from the live cascade: the orchestrator records
@@ -169,7 +169,7 @@ class Consent(BaseModel):
 
     user_id: str
     granted: bool = False
-    # Separate, stricter opt-in: may this user's transcripts feed a training distill (M7)?
+    # Separate, stricter opt-in: may this user's transcripts feed a training distill?
     allow_training: bool = False
     updated_at: str = Field(default_factory=_utcnow)
     note: str | None = None

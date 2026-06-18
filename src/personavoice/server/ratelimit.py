@@ -1,4 +1,4 @@
-"""Token-bucket rate limiting for the token server (M10 security pass).
+"""Token-bucket rate limiting for the token server (security pass).
 
 The token endpoint mints LiveKit credentials, so it's the one place worth protecting from a
 runaway/abusive client. A classic per-key token bucket: each key (client IP by default)

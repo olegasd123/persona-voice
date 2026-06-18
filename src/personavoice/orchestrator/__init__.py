@@ -1,6 +1,6 @@
 """Orchestration: turn-taking, the STT->LLM->TTS pipeline, and the LiveKit agent.
 
-M1 adds the file-based turn pipeline; M3 adds the streaming `agent.py` / `turn.py`.
+It includes the file-based turn pipeline plus the streaming `agent.py` / `turn.py`.
 """
 
 from .chunker import SentenceAggregator, stream_sentences

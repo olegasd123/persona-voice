@@ -1,4 +1,4 @@
-"""Persona LoRA dataset format + converters (M7).
+"""Persona LoRA dataset format + converters.
 
 A training example is one in-character conversation: an optional leading `system` turn (the
 persona's prompt) followed by alternating `user`/`assistant` turns, ending on `assistant` (the

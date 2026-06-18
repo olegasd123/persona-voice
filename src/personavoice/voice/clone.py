@@ -1,4 +1,4 @@
-"""Zero-shot voice cloning (M5): clone a voice from a short sample and assign it to a persona.
+"""Zero-shot voice cloning: clone a voice from a short sample and assign it to a persona.
 
 Cloning here is **reference conditioning**, not training: the cloning TTS backends
 (Chatterbox on CUDA, F5 on Mac) synthesize *in the voice of* a short reference WAV passed at

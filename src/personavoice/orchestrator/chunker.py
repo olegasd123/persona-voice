@@ -1,4 +1,4 @@
-"""Token → sentence chunking for streaming TTS (M3).
+"""Token → sentence chunking for streaming TTS.
 
 Streaming the LLM's reply into TTS sentence-by-sentence is what keeps perceived latency
 low: the first sentence can be *spoken* while the rest of the reply is still being
@@ -10,7 +10,7 @@ uses. A chunk is flushed when a sentence-ending run (``. ! ? …``) is followed 
 (so a trailing decimal like ``3.14`` or an abbreviation like ``Dr.`` doesn't break early),
 or on a newline, or when a run-on passage exceeds ``max_chunk_chars``.
 
-**Latency tuning (M10).** The single biggest perceived-latency lever is how soon the *first*
+**Latency tuning.** The single biggest perceived-latency lever is how soon the *first*
 chunk is voiced. ``first_chunk_chars`` lets the first chunk break early at a clause boundary
 (``, ; : —``) once it reaches that length, rather than waiting for a full sentence — trading a
 slightly less natural first boundary for faster time-to-first-audio. Later chunks keep using
@@ -64,7 +64,7 @@ class SentenceAggregator:
                 break
             self._take(idx, out)
 
-        # First-chunk shortcut (M10 latency): if nothing has been voiced yet, break the first
+        # First-chunk shortcut (latency): if nothing has been voiced yet, break the first
         # chunk early at a clause boundary once it's long enough, rather than waiting for a
         # full sentence. This is what cuts time-to-first-audio on a long opening sentence.
         clause = self._first_clause_break()
@@ -187,7 +187,7 @@ async def stream_sentences(
 
 
 # --------------------------------------------------------------------------------------
-# Tuning resolved from the environment (M10)
+# Tuning resolved from the environment
 # --------------------------------------------------------------------------------------
 
 
@@ -204,7 +204,7 @@ def _int_env(env: Mapping[str, str], name: str, default: int | None) -> int | No
 
 
 def chunk_kwargs_from_env(env: Mapping[str, str] | None = None) -> dict[str, int | None]:
-    """Resolve `stream_sentences` chunk-sizing kwargs from the environment (M10 latency).
+    """Resolve `stream_sentences` chunk-sizing kwargs from the environment (latency).
 
     ``PERSONAVOICE_TTS_MAX_CHUNK_CHARS`` caps a run-on sentence; ``…_FIRST_CHUNK_CHARS``
     enables the early first-chunk clause break that cuts time-to-first-audio. Unset/invalid

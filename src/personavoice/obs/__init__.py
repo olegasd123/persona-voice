@@ -1,4 +1,4 @@
-"""Observability (M10): structured logging + per-turn latency metrics.
+"""Observability: structured logging + per-turn latency metrics.
 
 `logging_setup.configure_logging()` gives every entrypoint a consistent log format (plain
 text by default, JSON when `PERSONAVOICE_LOG_FORMAT=json` for machine ingestion).

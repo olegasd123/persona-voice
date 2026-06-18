@@ -57,7 +57,7 @@ class VoiceRef(BaseModel):
     # Backend that produced/owns this voice (e.g. "kokoro", "orpheus").
     backend: str | None = None
     # Fine-tuned checkpoint a cloning backend should load instead of its base weights
-    # (M9 voice fine-tuning). None → use the backend's base model.
+    # (voice fine-tuning). None → use the backend's base model.
     model_path: str | None = None
 
 
@@ -66,7 +66,7 @@ class VoiceDef(BaseModel):
 
     A *logical* voice (e.g. `companion_soft`) that personas reference, mapped to a
     backend-native preset per TTS adapter so the personas sound distinct on each backend.
-    `sample` is a clone source used by cloning-capable backends (Chatterbox/F5) in M5; until
+    `sample` is a clone source used by cloning-capable backends (Chatterbox/F5); until
     then a backend with no `presets` entry falls back to its own default voice.
     """
 
@@ -76,7 +76,7 @@ class VoiceDef(BaseModel):
     emotion: str | None = None
     # tts adapter name ("kokoro" | "orpheus" | ...) -> that backend's preset id.
     presets: dict[str, str] = Field(default_factory=dict)
-    # Path to a ~10 s clone sample (M5), resolved by cloning backends.
+    # Path to a ~10 s clone sample, resolved by cloning backends.
     sample: str | None = None
 
 
@@ -93,7 +93,7 @@ class TurnStyle(StrEnum):
 
 class LLMSettings(BaseModel):
     base_model: str
-    lora: str | None = None  # adapter path; null until trained (M7)
+    lora: str | None = None  # adapter path; null until trained
     temperature: float = 0.7
     top_p: float = 0.95
     max_tokens: int = 512
@@ -112,7 +112,7 @@ class BehaviorSettings(BaseModel):
 class MemorySettings(BaseModel):
     enabled: bool = False
     scope: str = "per_user"  # "per_user" | "per_user_persona"
-    # How many relevant past turns to retrieve into the prompt each turn (M8 RAG).
+    # How many relevant past turns to retrieve into the prompt each turn (RAG).
     top_k: int = Field(default=4, ge=0)
     # Distill the rolling profile every N recorded turns (0 = manual/`consolidate` only).
     summarize_every: int = Field(default=6, ge=0)

@@ -1,4 +1,4 @@
-"""Word Error Rate scoring for STT eval (M10)."""
+"""Word Error Rate scoring for STT eval."""
 
 from __future__ import annotations
 

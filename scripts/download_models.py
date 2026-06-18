@@ -10,7 +10,7 @@ The manifest pins each model's repo, revision, and license. Hugging Face models 
 fetched with `huggingface_hub` (install the backend extra: `pip install -e '.[mac]'`).
 Ollama / vLLM models are pulled by their own runtimes — the script prints the command.
 
-License note (M0 task): the licenses below are recorded from each model card. Re-verify
+License note: the licenses below are recorded from each model card. Re-verify
 before any redistribution — licenses drift. See README.md "Models & licenses".
 """
 
@@ -38,7 +38,7 @@ class Model:
 #   * Orpheus-3b-0.1-ft is tagged Apache-2.0 but its weights are fine-tuned from
 #     Llama-3.2-3B-Instruct, so Meta's Llama 3.2 Community License ALSO applies
 #     (attribution + acceptable-use terms). Chatterbox (MIT) is the clean alternative.
-#   * F5-TTS pretrained weights (the M5 Mac cloning option, f5-tts-mlx) are CC-BY-NC
+#   * F5-TTS pretrained weights (the Mac cloning option, f5-tts-mlx) are CC-BY-NC
 #     (non-commercial) because of the Emilia training set, even though the CODE is MIT.
 #     For commercial use prefer Kokoro (Apache-2.0, no clone) or an Apache-licensed
 #     OpenF5 checkpoint, or do cloning on the CUDA side with Chatterbox (MIT).
@@ -54,7 +54,7 @@ MANIFEST: dict[str, list[Model]] = {
             note="run: ollama pull qwen2.5:7b-instruct",
         ),
         Model("tts", "hexgrad/Kokoro-82M", "main", "Apache-2.0", "hf"),
-        # f5-tts-mlx (M5 cloning) is fetched on first use; weights are CC-BY-NC (see above).
+        # f5-tts-mlx (cloning) is fetched on first use; weights are CC-BY-NC (see above).
     ],
     "cuda": [
         Model("stt", "Systran/faster-whisper-large-v3", "main", "MIT", "hf"),

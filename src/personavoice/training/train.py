@@ -1,4 +1,4 @@
-"""Run a persona LoRA fine-tune (M7).
+"""Run a persona LoRA fine-tune.
 
 `prepare` is pure-ish: it builds the backend `TrainPlan` and writes the trainer config file,
 returning the config path + command without launching anything (so `--dry-run` and tests stop

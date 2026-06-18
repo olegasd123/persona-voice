@@ -1,4 +1,4 @@
-"""The M3 streaming pipeline (LLM tokens -> sentences -> per-sentence TTS)."""
+"""The streaming pipeline (LLM tokens -> sentences -> per-sentence TTS)."""
 
 from __future__ import annotations
 

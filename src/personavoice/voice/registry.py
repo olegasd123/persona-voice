@@ -5,7 +5,7 @@ A persona declares a *logical* voice (`voice.ref: voices/companion_soft`). The r
 so the four personas sound **distinct** on whichever backend is active — `af_heart` vs
 `am_michael` on Kokoro (Mac), `tara` vs `leo` on Orpheus (CUDA). Clone-only backends
 (Chatterbox/F5) have no preset; they fall back to their own default voice until zero-shot
-cloning is wired up in M5, at which point the `sample` field feeds the clone.
+cloning is wired up separately, at which point the `sample` field feeds the clone.
 
 `resolve()` always returns a usable `VoiceRef`: a concrete preset when one exists for the
 backend, otherwise the original ref passed through (the adapter then uses its default). The
@@ -44,10 +44,10 @@ class VoiceRegistry:
         finetuned: FinetunedVoicesStore | None = None,
     ) -> None:
         self._voices = voices
-        # Cloned voices + per-persona assignments (M5). Consulted before the static preset
+        # Cloned voices + per-persona assignments. Consulted before the static preset
         # in `resolve_for_persona`, but only on a backend that can actually clone.
         self._clones = clones
-        # Fine-tuned voices + assignments (M9). Highest precedence — a trained checkpoint
+        # Fine-tuned voices + assignments. Highest precedence — a trained checkpoint
         # beats a zero-shot clone beats a static preset — again only on a cloning backend.
         self._finetuned = finetuned
 
@@ -106,8 +106,8 @@ class VoiceRegistry:
         """Resolve the voice a `persona` speaks with, in precedence order.
 
         On a backend that can synthesize from a reference/checkpoint (the cloning backends),
-        a **fine-tuned voice** assigned to this persona (M9) wins — the persona speaks through
-        a trained checkpoint. Failing that, an assigned zero-shot **clone** (M5) wins. Failing
+        a **fine-tuned voice** assigned to this persona wins — the persona speaks through
+        a trained checkpoint. Failing that, an assigned zero-shot **clone** wins. Failing
         both, this falls back to the static per-backend **preset** (`resolve`), so a
         non-cloning backend keeps its distinct presets.
         """
@@ -150,7 +150,7 @@ class VoiceRegistry:
         return self._finetuned
 
     def finetuned_for_persona(self, persona_id: str) -> str | None:
-        """Name of the fine-tuned voice assigned to `persona_id`, if any (M9)."""
+        """Name of the fine-tuned voice assigned to `persona_id`, if any."""
         return (
             self._finetuned.assignment_for(persona_id) if self._finetuned is not None else None
         )

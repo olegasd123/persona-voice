@@ -1,10 +1,10 @@
 """Chatterbox TTS (CUDA; MPS on Mac) — emotion-exaggeration control, zero-shot cloning.
 
 The clean-license (MIT) alternative to Orpheus, and the genuine cloning backend on CUDA.
-M2 implemented one-shot `synthesize` (text -> WAV bytes); `model.generate(text)` returns a
-float waveform tensor at the model's native sample rate (`model.sr`, 24 kHz). M5 adds
+Implements one-shot `synthesize` (text -> WAV bytes); `model.generate(text)` returns a
+float waveform tensor at the model's native sample rate (`model.sr`, 24 kHz). Cloning adds
 zero-shot cloning: when the voice carries a reference sample, we pass it as
-`audio_prompt_path` so Chatterbox speaks in that voice. M9 adds fine-tuned voices: when the
+`audio_prompt_path` so Chatterbox speaks in that voice. Fine-tuned voices add another path: when the
 voice carries a `model_path`, we load that trained checkpoint (`from_local`) instead of the
 base weights. `chatterbox` is imported lazily; models are built once and cached per
 checkpoint (the base under the `None` key).
@@ -60,7 +60,7 @@ class ChatterboxTTS(TTSAdapter):
                     "`pip install chatterbox-tts`"
                 ) from exc
             device = self.options.get("device", "cuda")
-            if model_path:  # a fine-tuned voice checkpoint (M9)
+            if model_path:  # a fine-tuned voice checkpoint
                 self._models[model_path] = _Chatterbox.from_local(model_path, device=device)
             else:
                 self._models[model_path] = _Chatterbox.from_pretrained(device=device)

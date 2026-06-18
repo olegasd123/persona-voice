@@ -1,7 +1,7 @@
 """LLM adapter base class.
 
 Concrete backends (ollama, vllm, mlx_lm) subclass this and override `stream_chat`.
-`chat` is a convenience that concatenates the streamed tokens for the turn-based M1 path.
+`chat` is a convenience that concatenates the streamed tokens for the turn-based path.
 """
 
 from __future__ import annotations

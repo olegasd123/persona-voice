@@ -1,4 +1,4 @@
-"""Voice fine-tune config + plan builders (M9).
+"""Voice fine-tune config + plan builders.
 
 `VoiceTrainConfig` is the one declarative description of a voice fine-tune; `build_voice_train_plan`
 turns it into an engine-specific `VoiceTrainPlan` — the dataset-prep command (when an engine needs
@@ -10,7 +10,7 @@ one), the trainer command, and any written config — for either:
                      `f5-tts_prepare_csv_wavs` first.
   - **chatterbox** → a configurable trainer script (`trainer_script`); Chatterbox is MIT, so it's
                      the clean-license path, but it ships no official finetune CLI — point
-                     `trainer_script` at the community trainer (see the M9 README).
+                     `trainer_script` at the community trainer (see the voice README).
 
 These plan-builders are the declarative *intent* (and what's unit-tested). The verified
 end-to-end CUDA runner is `training/voice/run_finetune.sh` (in the Blackwell trainer image):

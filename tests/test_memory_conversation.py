@@ -1,4 +1,4 @@
-"""ConversationMemory facade (M8): consent gating, cross-session recall, scope, cadence."""
+"""ConversationMemory facade: consent gating, cross-session recall, scope, cadence."""
 
 from __future__ import annotations
 

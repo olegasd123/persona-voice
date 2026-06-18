@@ -14,7 +14,7 @@ import io.flutter.plugin.common.MethodCall
 import io.flutter.plugin.common.MethodChannel
 
 /**
- * Flutter-facing telephony bridge — the Android half of M6's "present the conversation as a system
+ * Flutter-facing telephony bridge — the Android half of the "present the conversation as a system
  * call" layer, the analog of iOS [CallKitController]. Handles `persona_voice/telephony`
  * MethodChannel commands (app → OS) and owns the `persona_voice/telephony_events` EventChannel
  * sink (OS → app, via [Telephony]).

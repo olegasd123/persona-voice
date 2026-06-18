@@ -1,4 +1,4 @@
-"""Rolling profile (M8): fact merge/dedup, prompt building, response parsing, builder."""
+"""Rolling profile: fact merge/dedup, prompt building, response parsing, builder."""
 
 from __future__ import annotations
 

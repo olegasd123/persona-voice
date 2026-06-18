@@ -1,4 +1,4 @@
-"""Run a voice fine-tune (M9).
+"""Run a voice fine-tune.
 
 `prepare` is pure-ish: it builds the engine `VoiceTrainPlan` and writes any trainer config
 file, returning the plan without launching anything (so `--dry-run` and tests stop here).

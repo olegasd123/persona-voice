@@ -1,4 +1,4 @@
-"""VAD endpointing tuning resolved from the environment (M10)."""
+"""VAD endpointing tuning resolved from the environment."""
 
 from __future__ import annotations
 

@@ -1,4 +1,4 @@
-"""`personavoice-train`: curate data, train, merge, and eval per-persona LoRAs (M7).
+"""`personavoice-train`: curate data, train, merge, and eval per-persona LoRAs.
 
     personavoice-train curate --persona hr_interviewer --num 20 --exchanges 4
     personavoice-train run    --persona hr_interviewer [--config cfg.yaml] [--dry-run]
@@ -207,7 +207,7 @@ async def _run_eval(settings: Settings, args: argparse.Namespace) -> int:
 def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="personavoice-train",
-        description="Curate data, train, merge, and eval per-persona LoRAs (M7).",
+        description="Curate data, train, merge, and eval per-persona LoRAs.",
     )
     parser.add_argument("--backend", choices=("mac", "cuda"), default=None, help="override BACKEND")
     sub = parser.add_subparsers(dest="cmd", required=True)

@@ -42,7 +42,7 @@ def build_messages(
 ) -> list[Msg]:
     """Assemble system + history (+ optional new user turn) into the message list.
 
-    `memory_context` (M8), if given, is appended to the system prompt as a second system
+    `memory_context`, if given, is appended to the system prompt as a second system
     message so the persona recalls who it's talking to across sessions. It rides in its own
     message (not folded into the persona prompt) so it can vary per turn without rebuilding
     the persona's base prompt.

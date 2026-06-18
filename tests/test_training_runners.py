@@ -1,4 +1,4 @@
-"""M7 train + merge runners: config writing, command building, dispatch, failures."""
+"""Train + merge runners: config writing, command building, dispatch, failures."""
 
 from __future__ import annotations
 

@@ -1,4 +1,4 @@
-"""The voice registry: logical voice ref -> distinct backend-native preset (M4)."""
+"""The voice registry: logical voice ref -> distinct backend-native preset."""
 
 from __future__ import annotations
 
@@ -33,7 +33,7 @@ def test_shipped_registry_covers_every_persona_voice(config_dir: Path) -> None:
 def test_personas_resolve_to_distinct_presets(config_dir: Path, tts: str) -> None:
     voices = _registry(config_dir)
     presets = [voices.resolve(ref, tts).id for ref in PERSONA_REFS.values()]
-    # The whole point of M4: each persona gets its own concrete preset on each backend.
+    # The whole point: each persona gets its own concrete preset on each backend.
     assert len(set(presets)) == len(presets)
     assert all("/" not in p for p in presets)  # concrete preset, not a clone-style ref
 
@@ -55,13 +55,13 @@ def test_resolve_sets_emotion_and_backend(config_dir: Path) -> None:
 
 def test_backend_without_a_preset_passes_the_ref_through() -> None:
     # Chatterbox/F5 are clone-only: no preset entry, so the raw ref is returned and the
-    # adapter falls back to its default (until M5 uses `sample`).
+    # adapter falls back to its default (until a clone uses `sample`).
     reg = VoiceRegistry(
         {"hr_warm": VoiceDef(emotion="warm", presets={"kokoro": "af_sarah"}, sample="s.wav")}
     )
     voice = reg.resolve("voices/hr_warm", "chatterbox")
     assert voice.id == "voices/hr_warm"
-    assert voice.sample_path == "s.wav"  # carried for the cloning backend (M5)
+    assert voice.sample_path == "s.wav"  # carried for the cloning backend
     assert voice.emotion == "warm"
     assert reg.has_preset("voices/hr_warm", "kokoro") is True
     assert reg.has_preset("voices/hr_warm", "chatterbox") is False

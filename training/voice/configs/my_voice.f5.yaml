@@ -1,4 +1,4 @@
-# F5-TTS voice fine-tune (M9). Loaded by `personavoice-voice-train run --config ...`.
+# F5-TTS voice fine-tune. Loaded by `personavoice-voice-train run --config ...`.
 # F5's default checkpoint weights are CC-BY-NC: use a fine-tuned F5 voice for dev / personal
 # personas, not commercial redistribution. For an MIT path, fine-tune Chatterbox instead.
 voice_name: my_voice

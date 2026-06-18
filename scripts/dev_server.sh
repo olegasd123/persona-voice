@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Dev convenience wrapper. For M0 it runs the config check; M3 wires up the live server.
+# Dev convenience wrapper. Runs the config check (run the live server with 'personavoice --serve').
 set -euo pipefail
 
 cd "$(dirname "$0")/.."

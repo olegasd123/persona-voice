@@ -1,6 +1,6 @@
 """The LiveKit streaming agent's backend-side logic (no livekit/WebRTC needed).
 
-The WebRTC/VAD glue needs a running LiveKit server (validated live, like M2's on-4080
+The WebRTC/VAD glue needs a running LiveKit server (validated live, like the on-GPU validation
 step); these cover the parts that are pure: barge-in dispatch and the
 VAD-utterance → STT → streaming-reply routing, with a fake AudioSource and fake backend.
 """
@@ -118,7 +118,7 @@ async def test_utterance_transcribes_then_streams_reply(config_dir: Path) -> Non
     assert ag._pipeline.history[0].content == "hello"
 
 
-# --- M10: graceful error recovery + per-turn metrics ---------------------------------
+# --- graceful error recovery + per-turn metrics ---------------------------------
 
 
 class RaisingSTT(FakeSTT):

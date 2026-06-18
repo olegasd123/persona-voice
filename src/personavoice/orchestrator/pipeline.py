@@ -1,7 +1,7 @@
-"""The turn-based STT → LLM → TTS pipeline (M1).
+"""The turn-based STT → LLM → TTS pipeline.
 
 This is the "walking skeleton": one audio turn in, one audio turn out, no streaming and no
-barge-in (those arrive with LiveKit in M3). It depends only on the adapter base classes, so
+barge-in (those arrive with the LiveKit agent). It depends only on the adapter base classes, so
 it runs with the real Mac backend or with fakes in tests.
 
     wav bytes ──▶ STT.transcribe ──▶ LLM.chat ──▶ TTS.synthesize ──▶ wav bytes
@@ -33,7 +33,7 @@ def voice_ref_for(
 ) -> VoiceRef:
     """Build the VoiceRef a persona should speak with on the active backend.
 
-    With a `voices` registry, a clone assigned to this persona (M5) wins on a cloning
+    With a `voices` registry, a clone assigned to this persona wins on a cloning
     backend; otherwise the persona's logical voice ref resolves to a backend-native preset so
     personas sound distinct. Without a registry, the raw ref is passed through (adapters then
     fall back to their default voice).

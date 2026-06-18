@@ -1,4 +1,4 @@
-"""`personavoice-clone`: clone a voice from a short sample and assign it to a persona (M5).
+"""`personavoice-clone`: clone a voice from a short sample and assign it to a persona.
 
     personavoice-clone --sample me.wav  --name my_voice --assign companion
     personavoice-clone --record 10      --name my_voice --assign companion --say "Hi there." --play
@@ -80,7 +80,7 @@ async def _clone(settings: Settings, store: ClonesStore, args: argparse.Namespac
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         prog="personavoice-clone",
-        description="Clone a voice from a short sample and assign it to a persona (M5).",
+        description="Clone a voice from a short sample and assign it to a persona.",
     )
     src = parser.add_mutually_exclusive_group()
     src.add_argument("--sample", type=Path, help="reference wav (~10 s of clear speech)")

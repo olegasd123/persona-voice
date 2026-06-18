@@ -1,6 +1,6 @@
-"""Eval dashboard: gate headline metrics against thresholds (M10 acceptance).
+"""Eval dashboard: gate headline metrics against thresholds.
 
-The M10 acceptance is "sustained multi-turn sessions within latency budget; eval dashboard
+The acceptance bar is "sustained multi-turn sessions within latency budget; eval dashboard
 green". This module is the *green/red* logic: a small set of `Gate`s (metric + threshold +
 which side is good) evaluated against a flat `{metric: value}` dict produced by the eval
 runner (`scripts/run_eval.py`). Pure so the pass/fail rules are unit-tested; the runner

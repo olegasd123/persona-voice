@@ -1,4 +1,4 @@
-"""M7 dataset format: validation, JSONL round-trip, and the trainer converters."""
+"""Dataset format: validation, JSONL round-trip, and the trainer converters."""
 
 from __future__ import annotations
 

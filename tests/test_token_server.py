@@ -263,7 +263,7 @@ def test_http_unknown_persona_400(live_server: tuple[str, TokenService]) -> None
     assert "unknown persona" in body["error"]
 
 
-# --- M10: hardening config + rate limiting --------------------------------------------
+# --- hardening config + rate limiting --------------------------------------------
 
 
 def test_config_from_env_security_flags(monkeypatch: pytest.MonkeyPatch) -> None:

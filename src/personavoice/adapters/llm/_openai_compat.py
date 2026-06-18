@@ -53,7 +53,7 @@ def build_payload(
     extra_body: dict[str, Any] | None = None,
     lora: str | None = None,
 ) -> dict[str, Any]:
-    # On a LoRA-capable backend the request `model` selects the served adapter by name (M7);
+    # On a LoRA-capable backend the request `model` selects the served adapter by name;
     # otherwise it's the base model the stage was configured with.
     payload: dict[str, Any] = {
         "model": lora or model,
@@ -95,7 +95,7 @@ class OpenAICompatLLM(LLMAdapter):
     Subclasses set `name`, `implemented = True`, and `default_base_url`. The active base
     URL can still be overridden per-deployment via the `base_url` adapter option. Backends that
     can hot-load LoRA adapters (vLLM) set `supports_lora = True` so a persona's `llm.lora`
-    routes the request to the served adapter (M7).
+    routes the request to the served adapter.
     """
 
     default_base_url = "http://localhost:8000/v1"

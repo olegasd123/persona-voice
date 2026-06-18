@@ -1,11 +1,11 @@
-"""`personavoice-demo`: the M1 offline voice loop — speak into a wav, hear a reply.
+"""`personavoice-demo`: the offline voice loop — speak into a wav, hear a reply.
 
     personavoice-demo --wav question.wav --persona companion --play
     personavoice-demo --record 5 --persona language_teacher --play   # record from mic
 
 It wires the configured backend (BACKEND=mac by default) to a persona and runs one turn
 through the file-based pipeline, writing the spoken reply to a wav (and optionally playing
-it). This is a developer tool; the live streaming server arrives in M3.
+it). This is a developer tool; the live streaming server is run separately.
 """
 
 from __future__ import annotations
@@ -84,7 +84,7 @@ async def _run(settings: Settings, persona: Persona, audio_in: bytes) -> TurnRes
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         prog="personavoice-demo",
-        description="Offline voice loop: speak into a wav, hear a persona reply (M1).",
+        description="Offline voice loop: speak into a wav, hear a persona reply.",
     )
     src = parser.add_mutually_exclusive_group(required=True)
     src.add_argument("--wav", type=Path, help="input wav file (your spoken question)")
