@@ -224,6 +224,12 @@ Mark a milestone as `[Done]` when it's completed.
     the vLLM/Orpheus Docker prod stack (defaults) and this LM-Studio+Chatterbox dev box (set the
     vars in `.env`). LM Studio: `lms load qwen/qwen2.5-vl-7b` + start the server; swap to a text
     `Qwen2.5-7B-Instruct` later via one env var for a cleaner (vision-free) brain.
+  - **Low-latency TTS (Kokoro) on CUDA:** to hit the sub-900 ms first-audio budget, also
+    `uv pip install kokoro --override constraints-cuda.txt`, then `uv pip install pip` +
+    `python -m spacy download en_core_web_sm` (the uv venv ships no pip, and Kokoro's misaki G2P
+    fetches a spaCy model at runtime). Select it with `PERSONAVOICE_TTS_ADAPTER=kokoro` +
+    `PERSONAVOICE_TTS_MODEL=hexgrad/Kokoro-82M`. Kokoro auto-uses CUDA, voices all four personas
+    distinctly, but can't clone — Chatterbox stays the cloning default.
 
 ### M3 — Real-time orchestration & streaming *(≈ 1.5 weeks)* `[Partial]`
 **Goal:** live, low-latency, turn-based conversation with streaming + barge-in.
@@ -241,21 +247,24 @@ Mark a milestone as `[Done]` when it's completed.
 - [x] `StreamingPipeline` (`orchestrator/streaming.py`) + `personavoice-stream-demo`: a
       runnable Mac streaming loop (no LiveKit needed) that synthesizes/plays the reply
       sentence-by-sentence and reports time-to-first-token / time-to-first-audio.
-- [x] Latency budget measured on CUDA (RTX 5090) with `bench_latency --stream`: warm **e2e
-      first-audio ≈ 1.3 s** = STT 0.105 s + LLM TTFT 0.32 s + first Chatterbox chunk ~0.8 s.
-      STT+LLM sit comfortably under the 900 ms target; Chatterbox's first-sentence synth is the
-      whole gap — a faster first-sentence TTS (Kokoro, or the Orpheus/vLLM prod path) would
-      bring it under budget. The *live-agent* number (adds VAD endpointing + WebRTC RTT) still
-      needs a running LiveKit SFU.
+- [x] **Latency budget hit on CUDA (RTX 5090)** with `bench_latency --stream`. With **Kokoro**
+      (fast, no clone): warm **e2e first-audio ≈ 0.58 s** = STT 0.104 s + LLM TTFT 0.33 s + first
+      Kokoro chunk ~0.14 s, whole reply spoken in ~0.96 s — **under the 900 ms target**. With
+      **Chatterbox** (the cloning backend): ≈ 1.3 s, its first-sentence synth (~0.8 s) being the
+      whole gap. Both TTS are env-selectable (`PERSONAVOICE_TTS_ADAPTER`), so low-latency vs
+      cloning is a one-line config switch; Kokoro covers all four persona presets distinctly.
+      The *live-agent* number (adds VAD endpointing + WebRTC RTT) still needs a running LiveKit
+      SFU.
 - **Acceptance:** ⚠️ *partial.* Streaming verified e2e on the M4 Max: a spoken question →
   Whisper transcript → gpt-oss-20b reply **streamed as 11 sentence wavs** with **warm
   first_token 0.76 s · first_audio 5.44 s · total 8.95 s** — the persona starts speaking at
   5.44 s while the rest of the reply is still being generated (a turn-based loop emits no
   audio until the whole reply is generated *and* synthesized). 90 tests green (5 numpy/
   soundfile tests skip in the light dev env); ruff + mypy clean. The **CUDA latency budget is
-  now measured** (RTX 5090; see the item above — warm e2e first-audio ≈ 1.3 s). **Still
-  pending:** the live browser/LiveKit back-and-forth + barge-in need a running LiveKit server —
-  `personavoice --serve` against a LiveKit instance closes this out.
+  now measured and hit** (RTX 5090; see the item above — warm e2e first-audio ≈ 0.58 s with
+  Kokoro, ≈ 1.3 s with the cloning Chatterbox). **Still pending:** the live browser/LiveKit
+  back-and-forth + barge-in need a running LiveKit server — `personavoice --serve` against a
+  LiveKit instance closes this out.
 
 ### M4 — Persona system *(≈ 1 week)* `[Done]`
 **Goal:** the four personas, selectable at runtime.
