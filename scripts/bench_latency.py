@@ -30,6 +30,7 @@ from pathlib import Path
 
 from personavoice.adapters.factory import build_backend
 from personavoice.audio import read_wav_file
+from personavoice.orchestrator.chunker import chunk_kwargs_from_env
 from personavoice.orchestrator.pipeline import Pipeline
 from personavoice.orchestrator.streaming import StreamingPipeline, StreamMetrics
 from personavoice.persona.registry import PersonaRegistry
@@ -91,6 +92,20 @@ def format_report(
     return "\n".join(lines)
 
 
+def check_budget(
+    stats: dict[str, Stat], *, stage: str, budget_s: float
+) -> tuple[bool, float | None]:
+    """Gate the median of `stage` against `budget_s` (M10 acceptance: within latency budget).
+
+    Returns `(passed, observed_median)`. A missing stage passes vacuously (`observed=None`)
+    so a turn-based run isn't failed for lacking a streaming-only stage.
+    """
+    s = stats.get(stage)
+    if s is None:
+        return True, None
+    return s.median <= budget_s, s.median
+
+
 async def _bench(settings: Settings, persona_id: str, audio: bytes, *, warmup: int, runs: int):
     backend = build_backend(load_backend_config(settings))
     persona = PersonaRegistry(settings.personas_dir).get(persona_id)
@@ -114,12 +129,19 @@ async def _bench(settings: Settings, persona_id: str, audio: bytes, *, warmup: i
 
 
 async def _bench_stream(
-    settings: Settings, persona_id: str, audio: bytes, *, warmup: int, runs: int
+    settings: Settings,
+    persona_id: str,
+    audio: bytes,
+    *,
+    warmup: int,
+    runs: int,
+    chunk_kwargs: dict[str, int | None] | None = None,
 ) -> list[dict[str, float]]:
     """Measure the M3 streaming path: STT finalize → LLM TTFT → first TTS chunk.
 
     Unlike `_bench` (turn-based, whole-reply), this reports *time to first audio* — the
     perceived latency when the persona starts speaking while the rest is still generating.
+    `chunk_kwargs` overrides the TTS chunk-sizing knobs (M10) so a sweep can compare settings.
     """
     backend = build_backend(load_backend_config(settings))
     persona = PersonaRegistry(settings.personas_dir).get(persona_id)
@@ -130,7 +152,7 @@ async def _bench_stream(
         transcript = await backend.stt.transcribe(audio)
         stt = time.perf_counter() - t0
         metrics = StreamMetrics()
-        pipe = StreamingPipeline(backend, persona, voices)
+        pipe = StreamingPipeline(backend, persona, voices, chunk_kwargs=chunk_kwargs)
         async for _ in pipe.stream_response(transcript.text, history=[], metrics=metrics):
             pass
         first_audio = metrics.first_audio or 0.0
@@ -171,6 +193,29 @@ def main(argv: list[str] | None = None) -> int:
         action="store_true",
         help="measure the M3 streaming time-to-first-audio instead of turn-based full-stage",
     )
+    parser.add_argument(
+        "--max-chunk-chars",
+        type=int,
+        default=None,
+        help="TTS run-on chunk cap (M10 sweep); default from PERSONAVOICE_TTS_MAX_CHUNK_CHARS",
+    )
+    parser.add_argument(
+        "--first-chunk-chars",
+        type=int,
+        default=None,
+        help="early first-chunk clause-break length (M10; --stream only) to cut first-audio",
+    )
+    parser.add_argument(
+        "--budget-ms",
+        type=float,
+        default=None,
+        help="gate the median of --budget-stage against this many ms (exit 1 if exceeded)",
+    )
+    parser.add_argument(
+        "--budget-stage",
+        default=None,
+        help="stage the budget applies to (default: e2e_audio for --stream, else total)",
+    )
     parser.add_argument("--json", type=Path, default=None, help="also write the report as JSON")
     args = parser.parse_args(argv)
 
@@ -185,12 +230,30 @@ def main(argv: list[str] | None = None) -> int:
         return 2
 
     audio = read_wav_file(args.wav)
-    bench_fn = _bench_stream if args.stream else _bench
     stages = _STREAM_STAGES if args.stream else _STAGES
     try:
-        timings = asyncio.run(
-            bench_fn(settings, args.persona, audio, warmup=args.warmup, runs=args.runs)
-        )
+        if args.stream:
+            chunk_kwargs: dict[str, int | None] | None = None
+            if args.max_chunk_chars is not None or args.first_chunk_chars is not None:
+                chunk_kwargs = chunk_kwargs_from_env()
+                if args.max_chunk_chars is not None:
+                    chunk_kwargs["max_chunk_chars"] = args.max_chunk_chars
+                if args.first_chunk_chars is not None:
+                    chunk_kwargs["first_chunk_chars"] = args.first_chunk_chars
+            timings = asyncio.run(
+                _bench_stream(
+                    settings,
+                    args.persona,
+                    audio,
+                    warmup=args.warmup,
+                    runs=args.runs,
+                    chunk_kwargs=chunk_kwargs,
+                )
+            )
+        else:
+            timings = asyncio.run(
+                _bench(settings, args.persona, audio, warmup=args.warmup, runs=args.runs)
+            )
     except Exception as exc:  # surface backend/model errors without a traceback wall
         print(f"error: {exc}", file=sys.stderr)
         return 1
@@ -198,6 +261,20 @@ def main(argv: list[str] | None = None) -> int:
     stats = summarize_runs(timings, stages)
     print()
     print(format_report(stats, backend=settings.backend, runs=args.runs, streaming=args.stream))
+
+    budget_failed = False
+    if args.budget_ms is not None:
+        stage = args.budget_stage or ("e2e_audio" if args.stream else "total")
+        passed, observed = check_budget(stats, stage=stage, budget_s=args.budget_ms / 1000.0)
+        budget_failed = not passed
+        if observed is None:
+            print(f"\nbudget: stage {stage!r} not measured — skipped")
+        else:
+            verdict = "PASS" if passed else "FAIL"
+            print(
+                f"\nbudget: {stage} median {observed * 1000:.0f} ms "
+                f"vs {args.budget_ms:.0f} ms -> {verdict}"
+            )
 
     if args.json is not None:
         payload = {
@@ -211,7 +288,7 @@ def main(argv: list[str] | None = None) -> int:
         }
         args.json.write_text(json.dumps(payload, indent=2))
         print(f"\nwrote JSON report -> {args.json}")
-    return 0
+    return 1 if budget_failed else 0
 
 
 if __name__ == "__main__":

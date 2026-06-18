@@ -114,6 +114,10 @@ def main(argv: list[str] | None = None) -> int:
 
     use_color = sys.stdout.isatty() and not args.no_color
 
+    from ..obs import configure_logging
+
+    configure_logging()
+
     try:
         settings = Settings.load(backend=args.backend)
     except ConfigError as exc:

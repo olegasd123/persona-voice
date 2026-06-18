@@ -26,6 +26,7 @@ import logging
 import os
 import re
 import sys
+import time
 import uuid
 from collections.abc import Callable, Coroutine
 from typing import Any
@@ -34,6 +35,7 @@ from ..adapters.factory import Backend, build_backend
 from ..audio import pcm16_to_wav, wav_to_pcm16
 from ..memory import ConversationMemory
 from ..models import Persona
+from ..obs import configure_logging, turn_metrics_from_stream
 from ..persona.registry import PersonaRegistry
 from ..server.config import (
     Settings,
@@ -42,7 +44,8 @@ from ..server.config import (
     load_voice_registry,
 )
 from ..voice.registry import VoiceRegistry
-from .streaming import StreamingPipeline
+from .endpointing import vad_load_kwargs
+from .streaming import StreamingPipeline, StreamMetrics
 from .turn import TurnController
 
 # LiveKit's runtime types (`rtc.AudioSource`, `rtc.Track`, ...) are only present when the
@@ -165,26 +168,45 @@ class PersonaAgent:
                 clear()
 
     async def on_user_utterance(self, utterance_pcm: bytes, sample_rate: int) -> None:
-        """A complete user utterance (VAD-segmented PCM) → transcribe → streamed reply."""
+        """A complete user utterance (VAD-segmented PCM) → transcribe → streamed reply.
+
+        STT failures are caught and logged rather than propagated: one bad utterance must not
+        kill the per-track consumer task (graceful error recovery, M10) — the session stays
+        live for the next turn.
+        """
         wav = pcm16_to_wav(utterance_pcm, sample_rate)
-        transcript = await self._backend.stt.transcribe(wav)
+        t0 = time.perf_counter()
+        try:
+            transcript = await self._backend.stt.transcribe(wav)
+        except Exception:
+            logger.exception("STT failed for an utterance; skipping this turn")
+            return
+        stt_s = time.perf_counter() - t0
         text = transcript.text.strip()
         if not text:
             return
         logger.info("user: %s", text)
-        self._turn.begin(self._speak(text))
+        self._turn.begin(self._speak(text, stt_s))
 
-    async def _speak(self, user_text: str) -> Any:
+    async def _speak(self, user_text: str, stt_s: float | None = None) -> Any:
         """Stream the reply audio while publishing the assistant transcript in step with it.
 
         Each chunked sentence grows a single transcription segment (keyed by `seg_id`) so the
         client updates one bubble in place rather than appending fragments. The final marker
         is published fire-and-forget from the `finally` so a barge-in cancellation — which
         tears this generator down mid-flight — still flips the (partial) line to final.
+
+        A `StreamMetrics` is captured per turn and logged on completion (M10 observability).
+        A non-cancellation error mid-stream is logged and swallowed so the worker survives;
+        a `CancelledError` (barge-in) is recorded as `interrupted` and re-raised so the turn
+        controller's teardown still runs.
         """
         seg_id = uuid.uuid4().hex
         parts: list[str] = []
         publish = self._publish_transcript
+        metrics = StreamMetrics()
+        interrupted = False
+        error: str | None = None
 
         async def _on_sentence(sentence: str) -> None:
             if publish is None:
@@ -195,9 +217,24 @@ class PersonaAgent:
                 await publish(seg_id, " ".join(parts), False)
 
         try:
-            async for audio in self._pipeline.stream_response(user_text, on_sentence=_on_sentence):
+            async for audio in self._pipeline.stream_response(
+                user_text, metrics=metrics, on_sentence=_on_sentence
+            ):
                 yield audio
+        except (asyncio.CancelledError, GeneratorExit):
+            # Barge-in: cancellation arrives either as CancelledError (suspended in the LLM/TTS
+            # stream) or GeneratorExit (suspended in the sink, torn down via aclose). Either way
+            # record it as an interruption and re-raise so the turn controller's teardown runs.
+            interrupted = True
+            raise
+        except Exception as exc:  # graceful recovery: keep the session alive after a failure
+            error = repr(exc)
+            logger.exception("turn failed during streaming")
         finally:
+            turn_metrics_from_stream(
+                self._persona.id, user_text, metrics, stt_s=stt_s,
+                interrupted=interrupted, error=error,
+            ).log(logger)
             if publish is not None and parts:
                 # Fire-and-forget: on barge-in this generator is being cancelled, so awaiting
                 # here would just re-raise — schedule the final marker as its own task.
@@ -217,11 +254,27 @@ class PersonaAgent:
             await self._memory.aclose()
 
 
+def _load_vad(silero: Any) -> Any:
+    """Load Silero VAD with the operator's endpointing knobs (M10), tolerating old SDKs.
+
+    `vad_load_kwargs()` reads `PERSONAVOICE_VAD_*`; if a kwarg isn't accepted by the installed
+    `livekit-plugins-silero`, fall back to the stock defaults rather than crashing the worker.
+    """
+    kwargs = vad_load_kwargs()
+    if not kwargs:
+        return silero.VAD.load()
+    try:
+        return silero.VAD.load(**kwargs)
+    except TypeError:
+        logger.warning("silero VAD rejected tuning kwargs %s; using defaults", sorted(kwargs))
+        return silero.VAD.load()
+
+
 async def _consume_track(agent: PersonaAgent, track: Any, silero: Any) -> None:
     """Run VAD over a participant's audio track and feed utterances to the agent."""
     agents, rtc, _ = _require_livekit()
     vad_event_type = _vad_event_type(agents, rtc)
-    vad = silero.VAD.load()
+    vad = _load_vad(silero)
     vad_stream = vad.stream()
     audio_stream = rtc.AudioStream(track)
 
@@ -455,6 +508,7 @@ def run() -> None:
     LiveKit's CLI takes a subcommand (`start` for prod, `dev` for hot-reload, `connect` to
     join a room); default to `start` when none is given so `personavoice --serve` works.
     """
+    configure_logging()
     agents, _, _ = _require_livekit()
     if len(sys.argv) < 2 or sys.argv[1].startswith("-"):
         sys.argv = [sys.argv[0], "start"]

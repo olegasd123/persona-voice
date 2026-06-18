@@ -12,24 +12,34 @@ See [IMPLEMENTATION_PLAN.md](IMPLEMENTATION_PLAN.md) for the full design and mil
 
 ## Status
 
-Current milestone: **M9 — Voice fine-tuning (done; closed on the RTX 5090)**. When a
-zero-shot clone (M5) isn't faithful enough, `personavoice-voice-train` fine-tunes a high-fidelity
-voice for a target speaker — **build** a `metadata.csv` dataset (auto-transcribed by the STT),
-**train** on CUDA (F5-TTS by default, Chatterbox for the MIT path), **A/B** vs the clone by
-speaker similarity to held-out real clips, and **register** the winner. A fine-tuned voice folds
-into the registry as a non-destructive overlay (`voice/finetuned.py`) that **outranks a clone**
-(fine-tuned ▶ clone ▶ preset); the cloning adapters load its checkpoint via `VoiceRef.model_path`.
-The whole loop mirrors M7's discipline — pure, unit-tested logic with the heavy trainers shelled
-out — so it installs and tests without a GPU. See "Voice fine-tuning (M9)" below.
+Current milestone: **M10 — Hardening, eval & latency optimization (in progress)**. The four
+pillars are implemented as pure, unit-tested logic in the project's established style (heavy /
+hardware-bound work shelled out and documented):
 
-> **407 tests green** (+63 for M9: dataset / config / runner / A/B-eval / finetuned-store +
-> registry precedence + `--check`; 3 skip in `.venv312`); ruff + mypy clean; both
-> `BACKEND=mac|cuda --check` PASS with fine-tuned-voice listing. **Closed on the RTX 5090:** an
-> F5-TTS fine-tune (public-domain LJSpeech, 450 clips / 49 min, 4180 updates in the
-> `Dockerfile.blackwell` trainer image) **clearly beats F5 zero-shot** — speaker-similarity
-> **0.832 vs 0.811, delta +0.0208 over a 0.010 margin** (raw trained weights; F5's lagging EMA
-> needs ~10⁵ steps), with MOS samples saved and the winner registered. The *live LiveKit* path
-> (and a CUDA F5 *cascade* adapter for live use) ride M3's open step.
+- **Latency tuning** — TTS chunk sizing is now configurable (`PERSONAVOICE_TTS_MAX_CHUNK_CHARS`),
+  with an opt-in early **first-chunk** clause break (`…_FIRST_CHUNK_CHARS`) that cuts
+  time-to-first-audio on a long opening sentence; VAD **endpointing** knobs
+  (`PERSONAVOICE_VAD_*`) tune the snappiness/safety trade-off; and `bench_latency --budget-ms`
+  gates a run against the latency budget (exit non-zero if missed).
+- **Automated eval** — STT **WER** (`scripts/eval_stt.py` + `personavoice.eval.wer`), voice
+  **MOS** spot-check aggregation (`eval.mos`), and a unified **dashboard** runner
+  (`scripts/run_eval.py`) that gates latency + WER + persona-adherence + MOS green/red.
+- **Observability** — centralized structured logging (`personavoice.obs`, text or `json`),
+  per-turn latency **metrics** logged by the live agent, **graceful error recovery** (a failed
+  STT/LLM/TTS turn is logged and skipped instead of killing the worker), and a token-server
+  **load test** (`scripts/loadtest.py`).
+- **Security** — token-bucket **rate limiting** (`PERSONAVOICE_RATE_LIMIT_RPS`, 429s),
+  constant-time bearer-token comparison, optional **TLS** (`PERSONAVOICE_TLS_CERT/KEY`), a
+  startup **security audit** that refuses to serve wide-open in strict mode
+  (`PERSONAVOICE_REQUIRE_AUTH=1`).
+
+> M10 adds new unit-test suites (chunking/endpointing, WER/MOS/dashboard, logging/metrics +
+> agent error-recovery, rate-limit/security/token-server) on top of M9's **407 green**; run
+> `pytest` (plus `ruff check` + `mypy`) to verify locally. The *live LiveKit* latency/barge-in
+> numbers and on-GPU quantization sweeps ride the same open M3 step (a running LiveKit server /
+> the 4080). Prior milestone (**M9 — Voice fine-tuning**) is done and closed on the RTX 5090:
+> an F5-TTS fine-tune (public-domain LJSpeech, 450 clips / 49 min) **beat F5 zero-shot**
+> (speaker-similarity **0.832 vs 0.811**), winner registered. See "Voice fine-tuning (M9)" below.
 
 **M8 (done):** the assistant remembers a user across sessions — a **consent-gated** per-user store
 keeps transcripts, an LLM distills them into a rolling **profile** (durable facts + summary), and
@@ -464,6 +474,41 @@ python scripts/bench_latency.py --backend cuda --wav question.wav --runs 5 --jso
 These are full-stage, turn-based wall times. For the streaming "time to first audio", use
 `personavoice-stream-demo` (see **Streaming voice loop (M3)**), which reports it directly.
 
+## Hardening, eval & latency (M10)
+
+**Latency tuning.** TTS chunking and VAD endpointing are now env-tunable (see the M10 block in
+`.env.example`). The most effective lever is the early **first-chunk** clause break — it lets
+the persona start speaking before its opening sentence ends:
+
+```bash
+# sweep first-chunk size and gate against the 900 ms time-to-first-audio budget
+python scripts/bench_latency.py --backend cuda --wav q.wav --stream \
+    --first-chunk-chars 60 --budget-ms 900   # exits non-zero if e2e_audio median > 900 ms
+```
+
+**Automated eval + dashboard.** Score STT word-error-rate, then gate the headline metrics
+green/red (also a CI gate — `run_eval.py` exits non-zero when RED):
+
+```bash
+python scripts/eval_stt.py  --backend cuda --manifest clips.jsonl --json wer.json
+python scripts/run_eval.py --latency-json lat.json --wer-json wer.json \
+    --metrics persona.json --mos-ratings mos.json   # persona.json = {"persona_adherence": 0.92}
+```
+
+**Observability.** Set `PERSONAVOICE_LOG_FORMAT=json` for structured logs; the live agent logs
+a per-turn metrics record (STT / first-token / first-audio / total, plus barge-in and errors). A
+failed turn is logged and skipped — it never crashes the worker.
+
+**Load test & security.** Hammer the token server and confirm rate limiting kicks in:
+
+```bash
+PERSONAVOICE_RATE_LIMIT_RPS=20 personavoice --token-server   # token bucket, 429s over budget
+python scripts/loadtest.py --url http://localhost:8080 --requests 500 --concurrency 20 --token "$TOK"
+```
+
+In prod set `PERSONAVOICE_REQUIRE_AUTH=1` (the server refuses to start wide-open), a strong
+`PERSONAVOICE_API_TOKEN`, and either `PERSONAVOICE_TLS_CERT`/`_KEY` or a TLS-terminating proxy.
+
 ## Layout
 
 ```
@@ -477,15 +522,20 @@ src/personavoice/
   persona/                   # loader, prompt builder, registry
   voice/                     # registry (M4) + zero-shot clones (M5) + fine-tuned voices (M9)
   server/                    # settings, config, `--check`/`--serve`/`--token-server`; tokens.py (M6)
-  orchestrator/              # pipeline (M1) + chunker/streaming/turn/agent (M3 streaming)
+  orchestrator/              # pipeline (M1) + chunker/streaming/turn/agent/endpointing (M3, M10)
   training/                  # persona LoRA (M7) + voice/ fine-tuning: dataset/config/finetune/eval (M9)
   memory/                    # per-user store + profile + RAG + distill (M8)
+  eval/                      # WER + MOS + dashboard gating (M10 automated eval)
+  obs/                       # structured logging + per-turn latency metrics (M10)
 client/                      # Flutter app (iOS + Android), LiveKit SDK (M6)
 training/persona_lora/       # LoRA configs, seed datasets, workflow docs (M7)
 training/voice/              # voice-finetune configs, sample dataset, workflow docs (M9)
 scripts/
   download_models.py         # pinned model manifest + downloader
-  bench_latency.py           # per-stage latency benchmark (mac/cuda)
+  bench_latency.py           # per-stage latency benchmark + --budget gate (mac/cuda; M2, M10)
+  eval_stt.py                # STT word-error-rate over a clip manifest (M10)
+  run_eval.py                # aggregate eval artifacts into a green/red dashboard (M10)
+  loadtest.py                # token-server concurrency load test (M10)
 docker-compose.yml           # 4080 stack: vLLM + persona-voice server
 docker-compose.livekit.yml   # self-hosted LiveKit SFU + token server (M6)
 Dockerfile                   # CUDA server image (STT + TTS)

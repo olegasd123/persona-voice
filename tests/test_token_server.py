@@ -12,6 +12,7 @@ from pathlib import Path
 import pytest
 
 from personavoice.persona.registry import PersonaRegistry
+from personavoice.server.ratelimit import RateLimiter
 from personavoice.server.token_server import (
     BadRequest,
     ServerMisconfigured,
@@ -260,3 +261,61 @@ def test_http_unknown_persona_400(live_server: tuple[str, TokenService]) -> None
     status, body = _post(f"{base}/token", {"persona": "ghost"}, auth)
     assert status == 400
     assert "unknown persona" in body["error"]
+
+
+# --- M10: hardening config + rate limiting --------------------------------------------
+
+
+def test_config_from_env_security_flags(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("PERSONAVOICE_REQUIRE_AUTH", "1")
+    monkeypatch.setenv("PERSONAVOICE_TLS_CERT", "/etc/certs/server.crt")
+    monkeypatch.setenv("PERSONAVOICE_TLS_KEY", "/etc/certs/server.key")
+    cfg = TokenServiceConfig.from_env()
+    assert cfg.require_auth is True
+    assert cfg.tls_enabled is True
+
+
+def test_config_tls_disabled_without_both_cert_and_key(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("PERSONAVOICE_TLS_CERT", "/etc/certs/server.crt")
+    monkeypatch.delenv("PERSONAVOICE_TLS_KEY", raising=False)
+    assert TokenServiceConfig.from_env().tls_enabled is False
+
+
+def test_http_rate_limit_returns_429(registry: PersonaRegistry) -> None:
+    svc = make_service(registry, api_token="sekret")
+    # burst=1, ~no refill within the test window → the second request is throttled.
+    limiter = RateLimiter(rate=0.001, burst=1.0)
+    httpd = make_server(svc, "127.0.0.1", 0, limiter=limiter)
+    thread = threading.Thread(target=httpd.serve_forever, daemon=True)
+    thread.start()
+    host, port = httpd.server_address[0], httpd.server_address[1]
+    base = f"http://{host}:{port}"
+    auth = {"Authorization": "Bearer sekret"}
+    try:
+        first, _ = _post(f"{base}/token", {}, auth)
+        second, body = _post(f"{base}/token", {}, auth)
+    finally:
+        httpd.shutdown()
+        httpd.server_close()
+        thread.join(timeout=2)
+    assert first == 200
+    assert second == 429
+    assert "rate limit" in body["error"]
+
+
+def test_http_healthz_not_rate_limited(registry: PersonaRegistry) -> None:
+    svc = make_service(registry, api_token="sekret")
+    limiter = RateLimiter(rate=0.001, burst=1.0)
+    httpd = make_server(svc, "127.0.0.1", 0, limiter=limiter)
+    thread = threading.Thread(target=httpd.serve_forever, daemon=True)
+    thread.start()
+    host, port = httpd.server_address[0], httpd.server_address[1]
+    base = f"http://{host}:{port}"
+    try:
+        # Health checks must never be throttled (used by orchestration probes).
+        codes = [_get(f"{base}/healthz")[0] for _ in range(3)]
+    finally:
+        httpd.shutdown()
+        httpd.server_close()
+        thread.join(timeout=2)
+    assert codes == [200, 200, 200]

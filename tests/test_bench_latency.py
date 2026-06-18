@@ -87,3 +87,23 @@ def test_format_report_streaming_header() -> None:
     assert "streaming, seconds to first audio" in report
     for stage in ("first_token", "first_audio", "e2e_audio"):
         assert stage in report
+
+
+def test_check_budget_pass_and_fail() -> None:
+    stats = bench.summarize_runs(
+        [{"stt": 0.1, "first_token": 0.3, "first_audio": 0.5, "e2e_audio": 0.6, "total": 1.0}],
+        bench._STREAM_STAGES,
+    )
+    passed, observed = bench.check_budget(stats, stage="e2e_audio", budget_s=0.9)
+    assert passed is True
+    assert observed == pytest.approx(0.6)
+    failed, observed2 = bench.check_budget(stats, stage="e2e_audio", budget_s=0.5)
+    assert failed is False
+    assert observed2 == pytest.approx(0.6)
+
+
+def test_check_budget_missing_stage_passes_vacuously() -> None:
+    stats = bench.summarize_runs([{"stt": 1.0, "total": 3.0}])
+    passed, observed = bench.check_budget(stats, stage="e2e_audio", budget_s=0.9)
+    assert passed is True
+    assert observed is None

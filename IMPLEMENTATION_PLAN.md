@@ -553,13 +553,46 @@ written-but-device-unverified; revisit if/when a device is available.
       `webrtcvad` imports `pkg_resources`, which setuptools ≥81 dropped — the image pins
       `setuptools<81` (verified at build time).
 
-### M10 — Hardening, eval & latency optimization *(≈ 1–1.5 weeks)*
+### M10 — Hardening, eval & latency optimization *(≈ 1–1.5 weeks)* `[Partial]`
 **Goal:** make it robust and fast enough to use daily.
-- [ ] Latency tuning: quantization, KV-cache, TTS chunk sizing, speculative endpointing.
-- [ ] Automated eval: latency, WER (STT), persona adherence, voice MOS spot-checks.
-- [ ] Observability (per-stage timings, logs), graceful error/reconnect, load test.
-- [ ] Security pass: auth on the server API, TLS, rate limiting, secrets handling.
-- **Acceptance:** sustained multi-turn sessions within latency budget; eval dashboard green.
+- [x] **Latency tuning.** TTS **chunk sizing** is configurable (`PERSONAVOICE_TTS_MAX_CHUNK_CHARS`)
+      with an opt-in **first-chunk** clause break (`…_FIRST_CHUNK_CHARS`, `orchestrator/chunker.py`)
+      that emits the opening chunk at a clause boundary once it's long enough — cutting
+      time-to-first-audio on a long first sentence. **Speculative/configurable endpointing** via
+      `PERSONAVOICE_VAD_*` (`orchestrator/endpointing.py`, mapped onto Silero `VAD.load(**kwargs)`
+      with a version-safe fallback). `bench_latency.py` gained `--first-chunk-chars`/`--max-chunk-chars`
+      for sweeps and a `--budget-ms` **gate** (exit non-zero if the median misses budget).
+      Quantization/KV-cache stay vLLM *server* flags (documented in `docker-compose.yml`/`cuda.yaml`);
+      the budget gate is the regression guard.
+- [x] **Automated eval.** STT **WER** (pure word-level Levenshtein + normalization in
+      `eval/wer.py`; `scripts/eval_stt.py` runs it over a `{audio,text}` JSONL manifest), voice
+      **MOS** spot-check aggregation (`eval/mos.py`: mean/stdev/95%-CI per voice from a ratings
+      sheet), **persona adherence** (reuses M7 `training/eval.py`), and a unified **dashboard**
+      (`eval/dashboard.py` + `scripts/run_eval.py`) that gates latency + WER + adherence + MOS
+      green/red and exits non-zero when RED (CI gate).
+- [x] **Observability.** Centralized structured logging (`obs/logging_setup.py`; text or
+      `PERSONAVOICE_LOG_FORMAT=json`, env-driven level), **per-stage/per-turn metrics** — the live
+      agent now captures a `StreamMetrics` per turn and logs a `TurnMetrics` record
+      (`obs/metrics.py`: STT / first-token / first-audio / total + barge-in + error). **Graceful
+      error recovery**: a failed STT or mid-stream LLM/TTS turn is logged and skipped instead of
+      killing the per-track consumer (client-side reconnect already lands from M6). **Load test**:
+      `scripts/loadtest.py` drives the token server concurrently and reports QPS / p50-99 / error
+      rate (pure `summarize_load`).
+- [x] **Security pass.** Token-bucket **rate limiting** (`server/ratelimit.py`,
+      `PERSONAVOICE_RATE_LIMIT_RPS`, 429 on `/token`+`/personas`, `/healthz` exempt),
+      **constant-time** bearer-token comparison (`hmac.compare_digest`), optional **TLS** for the
+      token server (`PERSONAVOICE_TLS_CERT/KEY`, else terminate at a proxy), and a startup
+      **security audit** (`server/security.py`) that in strict mode (`PERSONAVOICE_REQUIRE_AUTH=1`)
+      refuses to serve wide-open. Secrets stay env-only; `.env.example` documents the prod checklist.
+- **Acceptance:** ⚠️ *partial.* The four pillars are code-complete and **unit-tested at the logic
+      level** in the repo's established style — new suites cover chunking/endpointing, the
+      bench budget gate, WER/MOS/dashboard, structured logging + per-turn metrics + agent
+      error-recovery, and rate-limit/security/token-server (ruff + mypy expected clean; both
+      `BACKEND=mac|cuda server --check` unaffected). The latency-budget gate operationalizes
+      "within latency budget" and the dashboard operationalizes "eval dashboard green". **Still
+      pending (same rider as M3):** the *live* LiveKit multi-turn soak (latency budget + barge-in
+      measured end-to-end) needs a running LiveKit SFU, and the on-GPU quantization/KV-cache sweep
+      needs the 4080/5090 — both ride M3's open server step.
 
 ---
 

@@ -25,7 +25,7 @@ from ..memory import ConversationMemory
 from ..models import Msg, Persona, Role
 from ..persona.prompt import build_messages
 from ..voice.registry import VoiceRegistry
-from .chunker import stream_sentences
+from .chunker import chunk_kwargs_from_env, stream_sentences
 from .pipeline import voice_ref_for
 
 
@@ -55,11 +55,15 @@ class StreamingPipeline:
         *,
         memory: ConversationMemory | None = None,
         user_id: str | None = None,
+        chunk_kwargs: dict[str, int | None] | None = None,
     ) -> None:
         self.backend = backend
         self.persona = persona
         self.voices = voices
         self.history: list[Msg] = []
+        # TTS chunk-sizing knobs (M10 latency); resolved from the environment by default so
+        # the live agent and demos pick up `PERSONAVOICE_TTS_*` without extra wiring.
+        self.chunk_kwargs = chunk_kwargs if chunk_kwargs is not None else chunk_kwargs_from_env()
         # Cross-session memory (M8): consent-gated, no-op until a user opts in. The session id
         # ties this run's recorded turns together so recall can exclude the live session.
         self.memory = memory
@@ -113,7 +117,13 @@ class StreamingPipeline:
                         await on_sentence(sentence)
                 yield sentence
 
-        sentences = _tap(stream_sentences(_tokens()))
+        sentences = _tap(
+            stream_sentences(
+                _tokens(),
+                max_chunk_chars=self.chunk_kwargs.get("max_chunk_chars") or 240,
+                first_chunk_chars=self.chunk_kwargs.get("first_chunk_chars"),
+            )
+        )
         try:
             async for audio in self.backend.tts.stream_tts(sentences, voice):
                 if metrics is not None and metrics.first_audio is None:

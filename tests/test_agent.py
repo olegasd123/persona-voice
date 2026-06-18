@@ -8,16 +8,20 @@ VAD-utterance → STT → streaming-reply routing, with a fake AudioSource and f
 from __future__ import annotations
 
 import asyncio
+import logging
+from collections.abc import AsyncIterator
 from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
 
+from personavoice.adapters.factory import Backend
+from personavoice.models import Msg, Persona, Transcript
 from personavoice.orchestrator import agent
 from personavoice.orchestrator.turn import TurnController
 from personavoice.persona import load_persona
 
-from .fakes import make_backend
+from .fakes import FakeLLM, FakeSTT, FakeTTS, make_backend
 
 
 def _companion(config_dir: Path):
@@ -112,6 +116,67 @@ async def test_utterance_transcribes_then_streams_reply(config_dir: Path) -> Non
     # STT text drove the reply, streamed sentence-by-sentence.
     assert spoken == [b"RIFF" + b"Hi there.", b"RIFF" + b"Bye."]
     assert ag._pipeline.history[0].content == "hello"
+
+
+# --- M10: graceful error recovery + per-turn metrics ---------------------------------
+
+
+class RaisingSTT(FakeSTT):
+    async def transcribe(self, audio: bytes) -> Transcript:
+        raise RuntimeError("stt backend exploded")
+
+
+class RaisingLLM(FakeLLM):
+    async def stream_chat(self, messages: list[Msg], persona: Persona) -> AsyncIterator[str]:
+        yield "Hello there. "  # one good sentence, then a failure mid-stream
+        raise RuntimeError("llm stream exploded")
+
+
+async def test_stt_failure_is_swallowed_and_session_survives(config_dir: Path) -> None:
+    pytest.importorskip("numpy")
+    pytest.importorskip("soundfile")
+
+    backend = Backend(name="fake", stt=RaisingSTT(), llm=FakeLLM(), tts=FakeTTS())
+    ag = agent.PersonaAgent(backend, _companion(config_dir), FakeSource())
+
+    spoken: list[bytes] = []
+
+    async def sink(wav: bytes) -> None:
+        spoken.append(wav)
+
+    ag._turn = TurnController(sink)
+
+    # Must not raise — a bad utterance is logged and skipped.
+    await ag.on_user_utterance(b"\x00\x00" * 1600, 16000)
+    await ag._turn.join()
+    assert spoken == []
+    assert ag._pipeline.history == []
+
+
+async def test_streaming_failure_is_recovered_and_logs_metrics(
+    config_dir: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    pytest.importorskip("numpy")
+    pytest.importorskip("soundfile")
+
+    backend = Backend(name="fake", stt=FakeSTT("hi"), llm=RaisingLLM(), tts=FakeTTS())
+    ag = agent.PersonaAgent(backend, _companion(config_dir), FakeSource())
+
+    spoken: list[bytes] = []
+
+    async def sink(wav: bytes) -> None:
+        spoken.append(wav)
+
+    ag._turn = TurnController(sink)
+    with caplog.at_level(logging.WARNING, logger="personavoice.agent"):
+        await ag.on_user_utterance(b"\x00\x00" * 1600, 16000)
+        await ag._turn.join()
+
+    # The good first sentence was spoken before the failure; the worker did not crash.
+    assert spoken == [b"RIFF" + b"Hello there."]
+    # A turn-metrics record was logged at WARNING (it carries the error).
+    metric_logs = [r for r in caplog.records if getattr(r, "turn", None) is not None]
+    assert metric_logs and metric_logs[-1].turn["error"] is not None
 
 
 async def test_empty_utterance_is_ignored(config_dir: Path) -> None:

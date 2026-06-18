@@ -26,9 +26,11 @@ to send. If `PERSONAVOICE_API_TOKEN` is set, requests must carry `Authorization:
 
 from __future__ import annotations
 
+import hmac
 import json
 import logging
 import os
+import ssl
 import uuid
 from dataclasses import dataclass
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -37,6 +39,8 @@ from urllib.parse import parse_qs, urlparse
 
 from ..persona.registry import PersonaRegistry
 from .config import Settings
+from .ratelimit import RateLimiter, rate_limiter_from_env
+from .security import audit_security, has_errors
 from .tokens import mint_access_token
 
 logger = logging.getLogger("personavoice.token_server")
@@ -65,6 +69,10 @@ class ServerMisconfigured(TokenServiceError):
     status = 500
 
 
+class TooManyRequests(TokenServiceError):
+    status = 429
+
+
 @dataclass
 class TokenServiceConfig:
     """LiveKit credentials + token policy, resolved from the environment."""
@@ -75,6 +83,14 @@ class TokenServiceConfig:
     # If set, requests must present `Authorization: Bearer <api_token>`. Empty = open (dev).
     api_token: str | None = None
     token_ttl: int = 3600
+    # Prod hardening (M10): refuse to start wide-open, and optional TLS for the HTTP server.
+    require_auth: bool = False
+    tls_cert: str | None = None
+    tls_key: str | None = None
+
+    @property
+    def tls_enabled(self) -> bool:
+        return bool(self.tls_cert and self.tls_key)
 
     @classmethod
     def from_env(cls) -> TokenServiceConfig:
@@ -86,12 +102,21 @@ class TokenServiceConfig:
                 f"PERSONAVOICE_TOKEN_TTL must be an integer, got {ttl_raw!r}"
             ) from exc
         api_token = (os.getenv("PERSONAVOICE_API_TOKEN") or "").strip() or None
+        require_auth = (os.getenv("PERSONAVOICE_REQUIRE_AUTH") or "").strip().lower() in (
+            "1",
+            "true",
+            "yes",
+            "on",
+        )
         return cls(
             livekit_url=(os.getenv("LIVEKIT_URL") or "").strip(),
             api_key=(os.getenv("LIVEKIT_API_KEY") or "").strip(),
             api_secret=(os.getenv("LIVEKIT_API_SECRET") or "").strip(),
             api_token=api_token,
             token_ttl=ttl,
+            require_auth=require_auth,
+            tls_cert=(os.getenv("PERSONAVOICE_TLS_CERT") or "").strip() or None,
+            tls_key=(os.getenv("PERSONAVOICE_TLS_KEY") or "").strip() or None,
         )
 
 
@@ -127,7 +152,8 @@ class TokenService:
         prefix = "Bearer "
         if not authorization or not authorization.startswith(prefix):
             raise Unauthorized("missing or malformed Authorization header")
-        if authorization[len(prefix) :].strip() != expected:
+        # Constant-time comparison so a timing side-channel can't leak the token.
+        if not hmac.compare_digest(authorization[len(prefix) :].strip(), expected):
             raise Unauthorized("invalid API token")
 
     def personas(self) -> dict[str, Any]:
@@ -206,7 +232,11 @@ def build_service(settings: Settings | None = None) -> TokenService:
 # --------------------------------------------------------------------------------------
 
 
-def _make_handler(service: TokenService) -> type[BaseHTTPRequestHandler]:
+def _make_handler(
+    service: TokenService, limiter: RateLimiter | None = None
+) -> type[BaseHTTPRequestHandler]:
+    limiter = limiter or RateLimiter(rate=0.0, burst=0.0)  # disabled by default
+
     class Handler(BaseHTTPRequestHandler):
         server_version = "personavoice-token/0.1"
 
@@ -249,6 +279,10 @@ def _make_handler(service: TokenService) -> type[BaseHTTPRequestHandler]:
                 if path == "/healthz" and method == "GET":
                     self._send_json(200, {"status": "ok", "backend": service._backend})
                     return
+                # Rate-limit everything else (before auth, to throttle unauthenticated floods)
+                # keyed by client IP.
+                if not limiter.allow(self.client_address[0]):
+                    raise TooManyRequests("rate limit exceeded")
                 # Everything below is protected by the optional bearer token.
                 service.check_auth(self.headers.get("Authorization"))
                 if path == "/personas" and method == "GET":
@@ -282,27 +316,65 @@ def _make_handler(service: TokenService) -> type[BaseHTTPRequestHandler]:
 
 
 def make_server(
-    service: TokenService, host: str = "0.0.0.0", port: int = 8080
+    service: TokenService,
+    host: str = "0.0.0.0",
+    port: int = 8080,
+    *,
+    limiter: RateLimiter | None = None,
 ) -> ThreadingHTTPServer:
-    """Create (but don't start) a threaded HTTP server bound to host:port."""
-    return ThreadingHTTPServer((host, port), _make_handler(service))
+    """Create (but don't start) a threaded HTTP server, with TLS if the config provides certs."""
+    httpd = ThreadingHTTPServer((host, port), _make_handler(service, limiter))
+    cfg = service._config
+    if cfg.tls_enabled:
+        context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+        context.load_cert_chain(certfile=cfg.tls_cert, keyfile=cfg.tls_key)  # type: ignore[arg-type]
+        httpd.socket = context.wrap_socket(httpd.socket, server_side=True)
+    return httpd
 
 
 def run(settings: Settings | None = None) -> None:
-    """Build the service from env and serve forever (blocking). Used by `--token-server`."""
+    """Build the service from env and serve forever (blocking). Used by `--token-server`.
+
+    Runs a security audit first (M10): in strict mode (`PERSONAVOICE_REQUIRE_AUTH=1`) an
+    `error`-level finding — e.g. no API token — refuses to start rather than serve wide open.
+    """
     settings = settings or Settings.load()
     service = build_service(settings)
+    cfg = service._config
+    limiter = rate_limiter_from_env()
     host = os.getenv("PERSONAVOICE_HOST", "0.0.0.0").strip() or "0.0.0.0"
     port = int(os.getenv("PERSONAVOICE_PORT", "8080").strip() or "8080")
-    httpd = make_server(service, host, port)
-    cfg = service._config
+
+    findings = audit_security(
+        api_token=cfg.api_token,
+        livekit_url=cfg.livekit_url,
+        tls_enabled=cfg.tls_enabled,
+        rate_limited=limiter.enabled,
+        require_auth=cfg.require_auth,
+        bind_host=host,
+    )
+    for f in findings:
+        if f.level == "error":
+            logger.error("security: %s", f.message)
+        elif f.level == "warning":
+            logger.warning("security: %s", f.message)
+    if cfg.require_auth and has_errors(findings):
+        raise ServerMisconfigured(
+            "refusing to start: PERSONAVOICE_REQUIRE_AUTH is set but the security audit found "
+            "blocking issues (see the security errors above)"
+        )
+
     if not (cfg.livekit_url and cfg.api_key and cfg.api_secret):
         logger.warning(
             "LiveKit credentials are not fully set; /token will 500 until LIVEKIT_URL, "
             "LIVEKIT_API_KEY and LIVEKIT_API_SECRET are provided"
         )
+
+    httpd = make_server(service, host, port, limiter=limiter)
+    scheme = "https" if cfg.tls_enabled else "http"
     auth = "on" if cfg.api_token else "off (open)"
-    print(f"Token server listening on http://{host}:{port}  (auth: {auth})")
+    rl = f"{limiter.rate:g} rps" if limiter.enabled else "off"
+    print(f"Token server listening on {scheme}://{host}:{port}  (auth: {auth}, rate-limit: {rl})")
     print(f"  LiveKit URL: {cfg.livekit_url or '(unset)'}")
     try:
         httpd.serve_forever()
@@ -313,7 +385,9 @@ def run(settings: Settings | None = None) -> None:
 
 
 def main(argv: list[str] | None = None) -> int:  # pragma: no cover - thin CLI shim
-    logging.basicConfig(level=logging.INFO)
+    from ..obs import configure_logging
+
+    configure_logging()
     run()
     return 0
 
