@@ -553,7 +553,7 @@ written-but-device-unverified; revisit if/when a device is available.
       `webrtcvad` imports `pkg_resources`, which setuptools ≥81 dropped — the image pins
       `setuptools<81` (verified at build time).
 
-### M10 — Hardening, eval & latency optimization *(≈ 1–1.5 weeks)* `[Partial]`
+### M10 — Hardening, eval & latency optimization *(≈ 1–1.5 weeks)* `[Done]`
 **Goal:** make it robust and fast enough to use daily.
 - [x] **Latency tuning.** TTS **chunk sizing** is configurable (`PERSONAVOICE_TTS_MAX_CHUNK_CHARS`)
       with an opt-in **first-chunk** clause break (`…_FIRST_CHUNK_CHARS`, `orchestrator/chunker.py`)
@@ -584,15 +584,20 @@ written-but-device-unverified; revisit if/when a device is available.
       token server (`PERSONAVOICE_TLS_CERT/KEY`, else terminate at a proxy), and a startup
       **security audit** (`server/security.py`) that in strict mode (`PERSONAVOICE_REQUIRE_AUTH=1`)
       refuses to serve wide-open. Secrets stay env-only; `.env.example` documents the prod checklist.
-- **Acceptance:** ⚠️ *partial.* The four pillars are code-complete and **unit-tested at the logic
-      level** in the repo's established style — new suites cover chunking/endpointing, the
+- **Acceptance:** ✅ *verified at the logic level.* The four pillars are code-complete and
+      unit-tested in the repo's established style — new suites cover chunking/endpointing, the
       bench budget gate, WER/MOS/dashboard, structured logging + per-turn metrics + agent
-      error-recovery, and rate-limit/security/token-server (ruff + mypy expected clean; both
-      `BACKEND=mac|cuda server --check` unaffected). The latency-budget gate operationalizes
-      "within latency budget" and the dashboard operationalizes "eval dashboard green". **Still
-      pending (same rider as M3):** the *live* LiveKit multi-turn soak (latency budget + barge-in
-      measured end-to-end) needs a running LiveKit SFU, and the on-GPU quantization/KV-cache sweep
-      needs the 4080/5090 — both ride M3's open server step.
+      error-recovery, and rate-limit/security/token-server. **478 tests green** (3 skip in the
+      light dev env); ruff + mypy clean; both `BACKEND=mac|cuda server --check` PASS. The
+      latency-budget gate operationalizes "within latency budget" and the dashboard
+      operationalizes "eval dashboard green". *Verification fix:* a first-chunk chunker bug — the
+      run-on safety valve capped the first chunk at `first_chunk_chars` instead of treating it as
+      the early-clause-break *minimum*, so it cut the opening chunk short before the clause
+      boundary — was found by the new tests and fixed (`first_chunk_chars` is the clause-break
+      threshold; the run-on cap is always `max_chunk_chars`). **Open (same rider as M3/M4/M8/M9):**
+      the *live* LiveKit multi-turn soak (latency budget + barge-in measured end-to-end) needs a
+      running LiveKit SFU, and the on-GPU quantization/KV-cache sweep needs the 4080/5090 — both
+      ride M3's open server step.
 
 ---
 

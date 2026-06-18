@@ -20,7 +20,7 @@ full sentence boundaries up to ``max_chunk_chars``.
 from __future__ import annotations
 
 import os
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Mapping
 
 # Sentence-ending punctuation and the closers (quotes/brackets) that may trail it.
 _END = ".!?…"
@@ -73,8 +73,8 @@ class SentenceAggregator:
 
         # Safety valve: force a break on a run-on passage with no punctuation so a single
         # giant sentence can't stall the first audio chunk. Break at the last space below
-        # the limit to avoid splitting a word. The first (not-yet-voiced) chunk uses the
-        # tighter `first_chunk_chars` cap when set.
+        # the limit to avoid splitting a word. (The first chunk's early exit is the clause
+        # break above; `first_chunk_chars` is only its minimum length, not a hard cap.)
         while len(self._buf) > self._cap():
             cap = self._cap()
             cut = self._buf.rfind(" ", 0, cap)
@@ -93,9 +93,12 @@ class SentenceAggregator:
             self._emitted += 1
 
     def _cap(self) -> int:
-        """Run-on character cap for the chunk currently being built."""
-        if self._emitted == 0 and self.first_chunk_chars is not None:
-            return self.first_chunk_chars
+        """Run-on character cap before forcing a mid-passage break.
+
+        Always ``max_chunk_chars`` — including for the first chunk: ``first_chunk_chars`` is
+        the *minimum* length before an early clause break (see ``_first_clause_break``), not a
+        hard ceiling, so the first chunk can still extend to a clause boundary past it.
+        """
         return self.max_chunk_chars
 
     def _first_clause_break(self) -> int | None:
@@ -188,7 +191,7 @@ async def stream_sentences(
 # --------------------------------------------------------------------------------------
 
 
-def _int_env(env: dict[str, str], name: str, default: int | None) -> int | None:
+def _int_env(env: Mapping[str, str], name: str, default: int | None) -> int | None:
     """Parse an optional positive-int env var, falling back to `default` on unset/invalid."""
     raw = (env.get(name) or "").strip()
     if not raw:
@@ -200,7 +203,7 @@ def _int_env(env: dict[str, str], name: str, default: int | None) -> int | None:
     return value if value >= 1 else default
 
 
-def chunk_kwargs_from_env(env: dict[str, str] | None = None) -> dict[str, int | None]:
+def chunk_kwargs_from_env(env: Mapping[str, str] | None = None) -> dict[str, int | None]:
     """Resolve `stream_sentences` chunk-sizing kwargs from the environment (M10 latency).
 
     ``PERSONAVOICE_TTS_MAX_CHUNK_CHARS`` caps a run-on sentence; ``…_FIRST_CHUNK_CHARS``

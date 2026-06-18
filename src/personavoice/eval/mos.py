@@ -2,7 +2,7 @@
 
 There's no reliable, license-clean objective MOS model we want to depend on, so voice quality
 is spot-checked the standard way: synthesize a handful of probe lines per voice, have a human
-rate each 1–5, and aggregate. `scripts/run_eval.py` generates the probe wavs and a ratings
+rate each 1-5, and aggregate. `scripts/run_eval.py` generates the probe wavs and a ratings
 sheet (one row per clip); this module is the pure aggregation — read the filled-in ratings
 back and report mean / spread / a rough 95% confidence interval per voice.
 """

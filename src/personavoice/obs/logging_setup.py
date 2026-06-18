@@ -15,6 +15,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+from collections.abc import Mapping
 
 _VALID_LEVELS = {"CRITICAL", "ERROR", "WARNING", "INFO", "DEBUG", "NOTSET"}
 
@@ -43,7 +44,7 @@ class JsonFormatter(logging.Formatter):
         return json.dumps(payload, default=str)
 
 
-def log_level_from_env(env: dict[str, str] | None = None) -> int:
+def log_level_from_env(env: Mapping[str, str] | None = None) -> int:
     """Resolve the numeric log level from `PERSONAVOICE_LOG_LEVEL` (default INFO)."""
     env = os.environ if env is None else env
     name = (env.get("PERSONAVOICE_LOG_LEVEL") or "INFO").strip().upper()
@@ -53,7 +54,10 @@ def log_level_from_env(env: dict[str, str] | None = None) -> int:
 
 
 def configure_logging(
-    *, level: int | None = None, json_format: bool | None = None, env: dict[str, str] | None = None
+    *,
+    level: int | None = None,
+    json_format: bool | None = None,
+    env: Mapping[str, str] | None = None,
 ) -> None:
     """Install a single root logging handler. Idempotent (replaces our previous handler).
 

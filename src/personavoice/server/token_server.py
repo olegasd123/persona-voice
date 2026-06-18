@@ -235,7 +235,7 @@ def build_service(settings: Settings | None = None) -> TokenService:
 def _make_handler(
     service: TokenService, limiter: RateLimiter | None = None
 ) -> type[BaseHTTPRequestHandler]:
-    limiter = limiter or RateLimiter(rate=0.0, burst=0.0)  # disabled by default
+    rl: RateLimiter = limiter or RateLimiter(rate=0.0, burst=0.0)  # disabled by default
 
     class Handler(BaseHTTPRequestHandler):
         server_version = "personavoice-token/0.1"
@@ -281,7 +281,7 @@ def _make_handler(
                     return
                 # Rate-limit everything else (before auth, to throttle unauthenticated floods)
                 # keyed by client IP.
-                if not limiter.allow(self.client_address[0]):
+                if not rl.allow(self.client_address[0]):
                     raise TooManyRequests("rate limit exceeded")
                 # Everything below is protected by the optional bearer token.
                 service.check_auth(self.headers.get("Authorization"))

@@ -14,6 +14,7 @@ The parsing is pure (no LiveKit import) so it's unit-testable offline; `agent.py
 from __future__ import annotations
 
 import os
+from collections.abc import Mapping
 from dataclasses import dataclass
 
 
@@ -27,7 +28,7 @@ class VadTuning:
     activation_threshold: float | None = None
 
 
-def _int_env(env: dict[str, str], name: str) -> int | None:
+def _int_env(env: Mapping[str, str], name: str) -> int | None:
     raw = (env.get(name) or "").strip()
     if not raw:
         return None
@@ -38,7 +39,7 @@ def _int_env(env: dict[str, str], name: str) -> int | None:
     return value if value >= 0 else None
 
 
-def _float_env(env: dict[str, str], name: str) -> float | None:
+def _float_env(env: Mapping[str, str], name: str) -> float | None:
     raw = (env.get(name) or "").strip()
     if not raw:
         return None
@@ -49,7 +50,7 @@ def _float_env(env: dict[str, str], name: str) -> float | None:
     return value if 0.0 <= value <= 1.0 else None
 
 
-def vad_tuning_from_env(env: dict[str, str] | None = None) -> VadTuning:
+def vad_tuning_from_env(env: Mapping[str, str] | None = None) -> VadTuning:
     """Resolve the VAD endpointing knobs from the environment."""
     env = os.environ if env is None else env
     return VadTuning(

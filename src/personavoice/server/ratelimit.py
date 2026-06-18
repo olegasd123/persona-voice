@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import os
 import time
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 
 
@@ -41,7 +42,7 @@ class RateLimiter:
         return False
 
 
-def rate_limiter_from_env(env: dict[str, str] | None = None) -> RateLimiter:
+def rate_limiter_from_env(env: Mapping[str, str] | None = None) -> RateLimiter:
     """Build a `RateLimiter` from `PERSONAVOICE_RATE_LIMIT_RPS` / `..._BURST` (disabled by default)."""
     env = os.environ if env is None else env
 

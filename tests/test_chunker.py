@@ -114,7 +114,7 @@ def test_first_chunk_chars_does_not_split_short_first_sentence() -> None:
 def test_first_chunk_chars_waits_when_no_clause_boundary_yet() -> None:
     # No clause punctuation: it must not break mid-word; falls through to the run-on valve.
     out = _feed("one two three four five six", chunk=1, first_chunk_chars=10)
-    assert " ".join(out).split() == "one two three four five six".split()
+    assert " ".join(out).split() == ["one", "two", "three", "four", "five", "six"]
     assert all(c == c.strip() for c in out)
 
 
