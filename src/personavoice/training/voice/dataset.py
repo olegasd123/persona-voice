@@ -102,8 +102,7 @@ def validate_clip(
     if clip.duration is not None:
         if min_seconds is not None and clip.duration < min_seconds:
             raise DatasetError(
-                f"clip {clip.audio_path!r} too short ({clip.duration:.1f}s; "
-                f"min {min_seconds:.0f}s)"
+                f"clip {clip.audio_path!r} too short ({clip.duration:.1f}s; min {min_seconds:.0f}s)"
             )
         if max_seconds is not None and clip.duration > max_seconds:
             raise DatasetError(
@@ -152,7 +151,9 @@ def validate_dataset(
     return stats
 
 
-def probe_durations(clips: Sequence[SpeakerClip], *, root: str | Path | None = None) -> list[SpeakerClip]:
+def probe_durations(
+    clips: Sequence[SpeakerClip], *, root: str | Path | None = None
+) -> list[SpeakerClip]:
     """Return copies of `clips` with `duration` filled in by decoding each WAV.
 
     Needs an audio extra (numpy/soundfile). `root` is prepended to relative audio paths.

@@ -25,7 +25,11 @@ async def test_streaming_pipeline_injects_and_records_memory(tmp_path: Path) -> 
     store.set_consent("alice", granted=True)
     store.save_profile_raw(
         "alice",
-        {"user_id": "alice", "summary": "Alice has a dog named Rex.", "facts": [{"text": "has a dog named Rex"}]},
+        {
+            "user_id": "alice",
+            "summary": "Alice has a dog named Rex.",
+            "facts": [{"text": "has a dog named Rex"}],
+        },
     )
     memory = ConversationMemory(store, summarize_every=0)
     backend = make_backend(llm_reply="Rex sounds lovely.")

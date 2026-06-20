@@ -226,9 +226,7 @@ class VoiceCloner:
         reference-text backends), records the clone, and assigns it when `assign_to` is set.
         """
         if not name or not _NAME_RE.fullmatch(name):
-            raise CloneError(
-                f"invalid clone name {name!r}; use letters, digits, '-' or '_' only"
-            )
+            raise CloneError(f"invalid clone name {name!r}; use letters, digits, '-' or '_' only")
         tts = self._backend.tts  # type: ignore[attr-defined]
         if not getattr(tts, "supports_cloning", False):
             raise CloneError(

@@ -53,7 +53,9 @@ def test_keyword_retriever_ignores_stopwords() -> None:
 
 def test_recall_context_includes_profile_and_turns() -> None:
     profile = UserProfile(
-        user_id="alice", summary="Alice loves jazz.", facts=[ProfileFact(text="has a dog named Rex")]
+        user_id="alice",
+        summary="Alice loves jazz.",
+        facts=[ProfileFact(text="has a dog named Rex")],
     )
     turns = [_turn("I'm worried about my dog Rex's vet visit")]
     block = recall_context(profile, turns, "how is Rex doing?", k=3)

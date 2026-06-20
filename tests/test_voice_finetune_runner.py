@@ -46,9 +46,7 @@ def test_dry_run_launches_nothing(tmp_path: Path) -> None:
     assert calls == []
 
 
-def test_run_prepares_then_trains_in_order(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_run_prepares_then_trains_in_order(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(ft_mod, "_tool_available", lambda plan: True)
     calls: list[list[str]] = []
     run_finetune(_cfg(tmp_path, engine="f5"), runner=lambda c: calls.append(c) or 0)
@@ -57,9 +55,7 @@ def test_run_prepares_then_trains_in_order(
     assert calls[1][0] == "f5-tts_finetune-cli"
 
 
-def test_skip_prepare_runs_only_trainer(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_skip_prepare_runs_only_trainer(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(ft_mod, "_tool_available", lambda plan: True)
     calls: list[list[str]] = []
     run_finetune(

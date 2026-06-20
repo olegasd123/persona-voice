@@ -80,9 +80,7 @@ class VoiceRegistry:
         """Strip the `voices/` prefix personas use, leaving the registry key."""
         return ref[len(_VOICE_PREFIX) :] if ref.startswith(_VOICE_PREFIX) else ref
 
-    def resolve(
-        self, ref: str, tts_name: str, *, default_emotion: str | None = None
-    ) -> VoiceRef:
+    def resolve(self, ref: str, tts_name: str, *, default_emotion: str | None = None) -> VoiceRef:
         """Resolve a persona's voice `ref` to the voice it should speak with on `tts_name`.
 
         Falls back to passing `ref` through unchanged when the voice is unknown or has no
@@ -123,14 +121,10 @@ class VoiceRegistry:
             if self._clones is not None:
                 assigned = self._clones.assignment_for(persona.id)
                 if assigned:
-                    ref = self._clones.voice_ref(
-                        assigned, tts_name, emotion=persona.voice.emotion
-                    )
+                    ref = self._clones.voice_ref(assigned, tts_name, emotion=persona.voice.emotion)
                     if ref is not None:
                         return ref
-        return self.resolve(
-            persona.voice.ref, tts_name, default_emotion=persona.voice.emotion
-        )
+        return self.resolve(persona.voice.ref, tts_name, default_emotion=persona.voice.emotion)
 
     def has_preset(self, ref: str, tts_name: str) -> bool:
         """True when this voice maps to a concrete preset for `tts_name`."""
@@ -151,9 +145,7 @@ class VoiceRegistry:
 
     def finetuned_for_persona(self, persona_id: str) -> str | None:
         """Name of the fine-tuned voice assigned to `persona_id`, if any."""
-        return (
-            self._finetuned.assignment_for(persona_id) if self._finetuned is not None else None
-        )
+        return self._finetuned.assignment_for(persona_id) if self._finetuned is not None else None
 
     def ids(self) -> list[str]:
         return sorted(self._voices)

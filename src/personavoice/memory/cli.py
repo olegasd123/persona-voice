@@ -84,7 +84,9 @@ def _cmd_show(store: MemoryStore, user_id: str, *, limit: int) -> int:
     return 0
 
 
-def _cmd_distill(settings: Settings, store: MemoryStore, user_id: str, args: argparse.Namespace) -> int:
+def _cmd_distill(
+    settings: Settings, store: MemoryStore, user_id: str, args: argparse.Namespace
+) -> int:
     personas = load_personas(settings.personas_dir)
     system_prompts = {pid: render_system_prompt(p) for pid, p in personas.items()}
     examples = distill_user(store, user_id, system_prompts=system_prompts, persona_id=args.persona)
@@ -126,17 +128,27 @@ def _build_parser() -> argparse.ArgumentParser:
     action.add_argument("--show", metavar="USER", help="show a user's profile + recent turns")
     action.add_argument("--grant", metavar="USER", help="grant recording consent for a user")
     action.add_argument("--revoke", metavar="USER", help="withdraw a user's consent")
-    action.add_argument("--consolidate", metavar="USER", help="(re)distill a user's profile via LLM")
-    action.add_argument("--export", metavar="USER", help="export everything stored for a user (JSON)")
+    action.add_argument(
+        "--consolidate", metavar="USER", help="(re)distill a user's profile via LLM"
+    )
+    action.add_argument(
+        "--export", metavar="USER", help="export everything stored for a user (JSON)"
+    )
     action.add_argument("--delete", metavar="USER", help="wipe everything stored for a user")
-    action.add_argument("--distill", metavar="USER", help="export a user's transcripts as LoRA data")
+    action.add_argument(
+        "--distill", metavar="USER", help="export a user's transcripts as LoRA data"
+    )
     action.add_argument("--gen-key", action="store_true", help="generate a Fernet memory key")
 
-    parser.add_argument("--training", action="store_true", help="with --grant: also opt into training use")
+    parser.add_argument(
+        "--training", action="store_true", help="with --grant: also opt into training use"
+    )
     parser.add_argument("--out", type=Path, help="output file (--export / --distill)")
     parser.add_argument("--persona", metavar="ID", help="with --distill: only this persona's turns")
     parser.add_argument("--limit", type=int, default=20, help="with --show: number of recent turns")
-    parser.add_argument("--max-turns", type=int, default=40, help="with --consolidate: turns to distill")
+    parser.add_argument(
+        "--max-turns", type=int, default=40, help="with --consolidate: turns to distill"
+    )
     parser.add_argument("--yes", action="store_true", help="with --delete: skip the confirmation")
     parser.add_argument("--backend", choices=("mac", "cuda"), default=None, help="override BACKEND")
     return parser
@@ -171,7 +183,9 @@ def main(argv: list[str] | None = None) -> int:
             return 0
         if args.revoke:
             store.set_consent(args.revoke, granted=False, allow_training=False)
-            print(f"revoked consent for {args.revoke!r} (existing data is kept; use --delete to wipe)")
+            print(
+                f"revoked consent for {args.revoke!r} (existing data is kept; use --delete to wipe)"
+            )
             return 0
         if args.consolidate:
             return asyncio.run(_cmd_consolidate(settings, args.consolidate, args))

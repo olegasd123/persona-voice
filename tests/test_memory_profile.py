@@ -49,7 +49,9 @@ def test_merge_facts_caps_total() -> None:
 
 
 def test_build_profile_prompt_includes_known_and_turns() -> None:
-    profile = UserProfile(user_id="alice", summary="A musician.", facts=[ProfileFact(text="plays piano")])
+    profile = UserProfile(
+        user_id="alice", summary="A musician.", facts=[ProfileFact(text="plays piano")]
+    )
     msgs = build_profile_prompt(profile, [_turn("I just adopted a cat")])
     assert msgs[0].role is Role.system
     body = msgs[1].content
@@ -132,7 +134,9 @@ class _ReplyLLM:
 async def test_builder_extracts_facts() -> None:
     llm = _ReplyLLM('{"facts": ["name is Sam", "loves hiking"], "summary": "An outdoorsy person."}')
     builder = ProfileBuilder(llm, make_persona())
-    updated = await builder.update(UserProfile(user_id="alice"), [_turn("Hi, I'm Sam and I love hiking")])
+    updated = await builder.update(
+        UserProfile(user_id="alice"), [_turn("Hi, I'm Sam and I love hiking")]
+    )
     assert updated.fact_texts() == ["name is Sam", "loves hiking"]
     assert updated.summary == "An outdoorsy person."
 

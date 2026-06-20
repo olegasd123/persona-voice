@@ -122,9 +122,7 @@ class ConversationMemory:
                 self._pending[key] = 0
                 self._schedule_consolidation(user_id, persona, session_id)
 
-    def _schedule_consolidation(
-        self, user_id: str, persona: Persona, session_id: str
-    ) -> None:
+    def _schedule_consolidation(self, user_id: str, persona: Persona, session_id: str) -> None:
         task = asyncio.create_task(
             self.consolidate(user_id, persona=persona, session_id=session_id)
         )
@@ -188,7 +186,9 @@ class ConversationMemory:
             return profile
         if updated is not profile:
             self._store.save_profile_raw(user_id, updated.model_dump())
-            logger.info("memory profile updated for user %r (%d facts)", user_id, len(updated.facts))
+            logger.info(
+                "memory profile updated for user %r (%d facts)", user_id, len(updated.facts)
+            )
         return updated
 
     def _load_profile(self, user_id: str) -> UserProfile:

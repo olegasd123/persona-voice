@@ -32,9 +32,15 @@ def test_durations_are_converted_ms_to_seconds() -> None:
 
 
 def test_activation_threshold_in_unit_range() -> None:
-    assert vad_tuning_from_env({"PERSONAVOICE_VAD_ACTIVATION_THRESHOLD": "0.6"}).activation_threshold == 0.6
+    assert (
+        vad_tuning_from_env({"PERSONAVOICE_VAD_ACTIVATION_THRESHOLD": "0.6"}).activation_threshold
+        == 0.6
+    )
     # Out of [0, 1] is ignored (treated as unset).
-    assert vad_tuning_from_env({"PERSONAVOICE_VAD_ACTIVATION_THRESHOLD": "1.5"}).activation_threshold is None
+    assert (
+        vad_tuning_from_env({"PERSONAVOICE_VAD_ACTIVATION_THRESHOLD": "1.5"}).activation_threshold
+        is None
+    )
 
 
 def test_invalid_values_are_ignored() -> None:

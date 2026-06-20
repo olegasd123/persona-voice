@@ -189,7 +189,9 @@ def test_to_spoken_strips_markdown_and_passes_is_spoken_clean() -> None:
 
 
 def test_to_spoken_keeps_plain_text() -> None:
-    assert to_spoken("Tell me about a time you led a team.") == "Tell me about a time you led a team."
+    assert (
+        to_spoken("Tell me about a time you led a team.") == "Tell me about a time you led a team."
+    )
 
 
 def test_clean_example_cleans_turns_but_not_system() -> None:

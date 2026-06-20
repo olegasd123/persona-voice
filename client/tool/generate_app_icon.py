@@ -30,10 +30,10 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 CLIENT = os.path.dirname(HERE)
 
 # ---- palette ---------------------------------------------------------------
-GRAD_TL = (139, 121, 230)   # #8B79E6  light violet (top-left)
-GRAD_BR = (67, 51, 143)     # #43338F  deep indigo (bottom-right)
-VOICE_L = (255, 255, 255)   # white   - left voice
-VOICE_R = (197, 184, 255)   # #C5B8FF lavender - right voice
+GRAD_TL = (139, 121, 230)  # #8B79E6  light violet (top-left)
+GRAD_BR = (67, 51, 143)  # #43338F  deep indigo (bottom-right)
+VOICE_L = (255, 255, 255)  # white   - left voice
+VOICE_R = (197, 184, 255)  # #C5B8FF lavender - right voice
 
 # ---- glyph geometry (in 1024-px design space, scaled to any canvas) --------
 BASE = 1024
@@ -43,16 +43,16 @@ BASE = 1024
 SRC_BARS_L = ((40, 62, 78), (56, 50, 90), (72, 40, 100))
 SRC_BARS_R = ((94, 58, 110), (110, 48, 100), (126, 70, 88))
 SRC_BAR_W = 8.0
-GLYPH_WIDTH_FRAC = 0.66     # glyph width as a fraction of the canvas (at GLYPH_SCALE = 1.0)
-GLYPH_SCALE = 1.00          # overall size multiplier; lower for more padding
-SS = 4                      # supersampling factor for crisp anti-aliasing
+GLYPH_WIDTH_FRAC = 0.66  # glyph width as a fraction of the canvas (at GLYPH_SCALE = 1.0)
+GLYPH_SCALE = 1.00  # overall size multiplier; lower for more padding
+SS = 4  # supersampling factor for crisp anti-aliasing
 
 
 def make_gradient(size: int) -> Image.Image:
     """Diagonal top-left → bottom-right linear gradient, opaque RGB."""
     axis = np.linspace(0.0, 1.0, size, dtype=np.float32)
     gx, gy = np.meshgrid(axis, axis)
-    t = (gx + gy) * 0.5                      # 0 at TL, 1 at BR
+    t = (gx + gy) * 0.5  # 0 at TL, 1 at BR
     c0 = np.array(GRAD_TL, dtype=np.float32)
     c1 = np.array(GRAD_BR, dtype=np.float32)
     grad = c0[None, None, :] * (1.0 - t)[..., None] + c1[None, None, :] * t[..., None]
@@ -69,12 +69,12 @@ def draw_glyph(size: int, scale: float, mono: bool = False) -> Image.Image:
     y_min = min(t for _, t, _, _ in bars) - r
     y_max = max(b for _, _, b, _ in bars) + r
     bbox_w = x_max - x_min
-    bcx, bcy = (x_min + x_max) / 2, (y_min + y_max) / 2      # bbox centre → canvas centre
+    bcx, bcy = (x_min + x_max) / 2, (y_min + y_max) / 2  # bbox centre → canvas centre
 
     big = size * SS
     img = Image.new("RGBA", (big, big), (0, 0, 0, 0))
     d = ImageDraw.Draw(img)
-    s = (big * GLYPH_WIDTH_FRAC * scale) / bbox_w            # 150-space → supersampled px
+    s = (big * GLYPH_WIDTH_FRAC * scale) / bbox_w  # 150-space → supersampled px
     cx = cy = big / 2
     bar_w = SRC_BAR_W * s
     radius = bar_w / 2
@@ -112,18 +112,27 @@ def save(img: Image.Image, path: str) -> None:
 
 
 def main() -> None:
-    master = build_master()                  # RGBA, full-bleed
+    master = build_master()  # RGBA, full-bleed
 
     # ---- iOS: opaque, full-bleed, no alpha (system rounds corners) ----
     ios_dir = os.path.join(CLIENT, "ios/Runner/Assets.xcassets/AppIcon.appiconset")
     ios_master = master.convert("RGB")
     ios_sizes = {
-        "Icon-App-20x20@1x.png": 20, "Icon-App-20x20@2x.png": 40, "Icon-App-20x20@3x.png": 60,
-        "Icon-App-29x29@1x.png": 29, "Icon-App-29x29@2x.png": 58, "Icon-App-29x29@3x.png": 87,
-        "Icon-App-40x40@1x.png": 40, "Icon-App-40x40@2x.png": 80, "Icon-App-40x40@3x.png": 120,
-        "Icon-App-60x60@2x.png": 120, "Icon-App-60x60@3x.png": 180,
-        "Icon-App-76x76@1x.png": 76, "Icon-App-76x76@2x.png": 152,
-        "Icon-App-83.5x83.5@2x.png": 167, "Icon-App-1024x1024@1x.png": 1024,
+        "Icon-App-20x20@1x.png": 20,
+        "Icon-App-20x20@2x.png": 40,
+        "Icon-App-20x20@3x.png": 60,
+        "Icon-App-29x29@1x.png": 29,
+        "Icon-App-29x29@2x.png": 58,
+        "Icon-App-29x29@3x.png": 87,
+        "Icon-App-40x40@1x.png": 40,
+        "Icon-App-40x40@2x.png": 80,
+        "Icon-App-40x40@3x.png": 120,
+        "Icon-App-60x60@2x.png": 120,
+        "Icon-App-60x60@3x.png": 180,
+        "Icon-App-76x76@1x.png": 76,
+        "Icon-App-76x76@2x.png": 152,
+        "Icon-App-83.5x83.5@2x.png": 167,
+        "Icon-App-1024x1024@1x.png": 1024,
     }
     print("iOS:")
     for name, px in ios_sizes.items():
@@ -138,21 +147,27 @@ def main() -> None:
     print("Android legacy (ic_launcher.png):")
     for d, mult in densities.items():
         px = int(48 * mult)
-        save(legacy_master.resize((px, px), Image.LANCZOS),
-             os.path.join(res, f"mipmap-{d}", "ic_launcher.png"))
+        save(
+            legacy_master.resize((px, px), Image.LANCZOS),
+            os.path.join(res, f"mipmap-{d}", "ic_launcher.png"),
+        )
 
     # ---- Android adaptive foreground + monochrome (108dp canvas, 72dp safe zone) ----
     fg_master = Image.new("RGBA", (BASE, BASE), (0, 0, 0, 0))
-    fg_master.alpha_composite(draw_glyph(BASE, GLYPH_SCALE))     # glyph inside safe zone
+    fg_master.alpha_composite(draw_glyph(BASE, GLYPH_SCALE))  # glyph inside safe zone
     mono_master = Image.new("RGBA", (BASE, BASE), (0, 0, 0, 0))
     mono_master.alpha_composite(draw_glyph(BASE, GLYPH_SCALE, mono=True))
     print("Android adaptive (foreground + monochrome):")
     for d, mult in densities.items():
         px = int(108 * mult)
-        save(fg_master.resize((px, px), Image.LANCZOS),
-             os.path.join(res, f"mipmap-{d}", "ic_launcher_foreground.png"))
-        save(mono_master.resize((px, px), Image.LANCZOS),
-             os.path.join(res, f"mipmap-{d}", "ic_launcher_monochrome.png"))
+        save(
+            fg_master.resize((px, px), Image.LANCZOS),
+            os.path.join(res, f"mipmap-{d}", "ic_launcher_foreground.png"),
+        )
+        save(
+            mono_master.resize((px, px), Image.LANCZOS),
+            os.path.join(res, f"mipmap-{d}", "ic_launcher_monochrome.png"),
+        )
 
     # ---- master source ----
     print("Master:")

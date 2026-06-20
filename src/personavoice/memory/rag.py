@@ -108,7 +108,10 @@ class EmbeddingRetriever:
         texts = [t.content for t in turns]
         embeddings = model.encode([query, *texts], normalize_embeddings=True)  # type: ignore[attr-defined]
         q_vec = np.asarray(embeddings[0])
-        sims = [(float(np.dot(q_vec, np.asarray(embeddings[i + 1]))), turns[i]) for i in range(len(turns))]
+        sims = [
+            (float(np.dot(q_vec, np.asarray(embeddings[i + 1]))), turns[i])
+            for i in range(len(turns))
+        ]
         sims.sort(key=lambda st: st[0], reverse=True)
         return sims[:k]
 

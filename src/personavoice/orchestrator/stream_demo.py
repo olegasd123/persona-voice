@@ -98,7 +98,9 @@ async def _run(
 
     print(f"{persona.id} : ", end="", flush=True)
 
-    pipe = StreamingPipeline(backend, persona, load_voice_registry(settings), memory=memory, user_id=user_id)
+    pipe = StreamingPipeline(
+        backend, persona, load_voice_registry(settings), memory=memory, user_id=user_id
+    )
     metrics = StreamMetrics()
 
     idx = 0
@@ -182,9 +184,7 @@ def main(argv: list[str] | None = None) -> int:
 
     args.out_dir.mkdir(parents=True, exist_ok=True)
     try:
-        metrics = asyncio.run(
-            _run(settings, persona, audio_in, args.out_dir, args.play, args.user)
-        )
+        metrics = asyncio.run(_run(settings, persona, audio_in, args.out_dir, args.play, args.user))
     except Exception as exc:  # surface backend/model errors without a traceback wall
         print(f"error: {exc}", file=sys.stderr)
         return 1

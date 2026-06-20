@@ -61,8 +61,7 @@ def _print_report(report: CheckReport, settings: Settings, *, use_color: bool) -
     if report.finetuned:
         by_voice = {name: pid for pid, name in report.finetuned_assignments.items()}
         listed = ", ".join(
-            f"{name} -> {by_voice[name]}" if name in by_voice else name
-            for name in report.finetuned
+            f"{name} -> {by_voice[name]}" if name in by_voice else name for name in report.finetuned
         )
         print(f"Fine-tuned voices ({len(report.finetuned)}): {listed}")
         print()

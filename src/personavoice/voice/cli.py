@@ -84,13 +84,17 @@ def main(argv: list[str] | None = None) -> int:
     )
     src = parser.add_mutually_exclusive_group()
     src.add_argument("--sample", type=Path, help="reference wav (~10 s of clear speech)")
-    src.add_argument("--record", type=float, metavar="SECONDS", help="record the sample from the mic")
+    src.add_argument(
+        "--record", type=float, metavar="SECONDS", help="record the sample from the mic"
+    )
     parser.add_argument("--name", help="name for the cloned voice (letters/digits/-/_)")
     parser.add_argument("--assign", metavar="PERSONA", help="assign the clone to this persona id")
     parser.add_argument("--list", action="store_true", help="list cloned voices and assignments")
     parser.add_argument("--unassign", metavar="PERSONA", help="remove a persona's clone assignment")
     parser.add_argument("--say", help="after cloning, synthesize this line in the cloned voice")
-    parser.add_argument("--out", type=Path, default=Path("clone_sample.wav"), help="--say output wav")
+    parser.add_argument(
+        "--out", type=Path, default=Path("clone_sample.wav"), help="--say output wav"
+    )
     parser.add_argument("--play", action="store_true", help="play the --say output")
     parser.add_argument("--backend", choices=("mac", "cuda"), default=None, help="override BACKEND")
     args = parser.parse_args(argv)

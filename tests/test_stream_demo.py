@@ -54,9 +54,7 @@ def test_stream_demo_writes_one_wav_per_sentence(
     assert "Hello there. How are you?" in out
 
 
-def test_stream_demo_missing_wav_returns_2(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-) -> None:
+def test_stream_demo_missing_wav_returns_2(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     monkeypatch.setattr(stream_demo, "build_backend", lambda cfg: make_backend())
     rc = stream_demo.main(["--wav", str(tmp_path / "nope.wav"), "--persona", "companion"])
     assert rc == 2

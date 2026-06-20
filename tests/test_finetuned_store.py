@@ -31,9 +31,7 @@ def test_store_missing_manifest_is_empty(tmp_path: Path) -> None:
 
 def test_store_record_assign_and_reload(tmp_path: Path) -> None:
     store = FinetunedVoicesStore.load(tmp_path)
-    store.record(
-        FinetunedVoice(name="my_voice", checkpoint_path="/ckpt/my_voice", engine="f5")
-    )
+    store.record(FinetunedVoice(name="my_voice", checkpoint_path="/ckpt/my_voice", engine="f5"))
     store.assign("companion", "my_voice")
 
     reloaded = FinetunedVoicesStore.load(tmp_path)
@@ -110,9 +108,7 @@ def _registry_with(
     if with_finetuned:
         finetuned.record(FinetunedVoice(name="trained", checkpoint_path="/ckpt/trained"))
         finetuned.assign("companion", "trained")
-    return VoiceRegistry.load(
-        config_dir / "voices.yaml", clones=clones, finetuned=finetuned
-    )
+    return VoiceRegistry.load(config_dir / "voices.yaml", clones=clones, finetuned=finetuned)
 
 
 def test_finetuned_outranks_clone_on_cloning_backend(config_dir: Path, tmp_path: Path) -> None:

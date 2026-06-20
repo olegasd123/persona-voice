@@ -215,7 +215,9 @@ async def _eval(settings: Settings, args: argparse.Namespace) -> int:
     print(f"\n  fine-tuned similarity : {scores.finetuned_similarity:.3f}")
     print(f"  clone similarity      : {scores.clone_similarity:.3f}")
     print(f"  delta (ft - clone)    : {scores.delta:+.3f}  (margin {scores.margin:.3f})")
-    verdict = "PASS — fine-tune is clearly closer to the target" if scores.passes else "no clear win"
+    verdict = (
+        "PASS — fine-tune is clearly closer to the target" if scores.passes else "no clear win"
+    )
     print(f"  verdict               : {verdict}")
 
     if args.register and scores.passes:
@@ -309,10 +311,14 @@ def _build_parser() -> argparse.ArgumentParser:
     d.add_argument("--voice", required=True)
     d.add_argument("--audio-dir", help="dir of target-speaker .wav clips (auto-transcribed)")
     d.add_argument("--transcripts", help="existing metadata.csv (audio_path|text) to use instead")
-    d.add_argument("--data-dir", default=None, help="output dir (default training/voice/datasets/<voice>)")
+    d.add_argument(
+        "--data-dir", default=None, help="output dir (default training/voice/datasets/<voice>)"
+    )
     d.add_argument("--probe-durations", action="store_true", help="decode clips to fill durations")
     d.add_argument("--min-clips", type=int, default=10)
-    d.add_argument("--min-seconds", type=float, default=120.0, help="min total audio (with --probe-durations)")
+    d.add_argument(
+        "--min-seconds", type=float, default=120.0, help="min total audio (with --probe-durations)"
+    )
 
     r = sub.add_parser("run", help="run the voice trainer (f5-tts / chatterbox; CUDA)")
     r.add_argument("--voice", required=True)
@@ -322,20 +328,28 @@ def _build_parser() -> argparse.ArgumentParser:
     r.add_argument("--output", default=None, help="checkpoint output dir")
     r.add_argument("--base-model", default=None, help="override the base model / exp_name")
     r.add_argument("--skip-prepare", action="store_true", help="skip the dataset-prep step")
-    r.add_argument("--dry-run", action="store_true", help="write config + print commands, don't launch")
+    r.add_argument(
+        "--dry-run", action="store_true", help="write config + print commands, don't launch"
+    )
 
     e = sub.add_parser("eval", help="A/B speaker similarity: fine-tuned voice vs zero-shot clone")
     e.add_argument("--voice", required=True, help="fine-tuned voice name (in the store)")
     e.add_argument("--checkpoint", default=None, help="checkpoint dir (if not registered yet)")
     e.add_argument("--clone", required=True, help="clone name to compare against")
-    e.add_argument("--target-dir", required=True, help="dir of held-out real target-speaker .wav clips")
+    e.add_argument(
+        "--target-dir", required=True, help="dir of held-out real target-speaker .wav clips"
+    )
     e.add_argument("--probes", default=None, help="probe lines (JSON array or one per line)")
     e.add_argument("--margin", type=float, default=0.0, help="delta a clear win must clear")
-    e.add_argument("--register", action="store_true", help="on PASS, store the verdict on the voice")
+    e.add_argument(
+        "--register", action="store_true", help="on PASS, store the verdict on the voice"
+    )
 
     rg = sub.add_parser("register", help="fold a trained checkpoint into the voice registry")
     rg.add_argument("--voice", required=True)
-    rg.add_argument("--checkpoint", default=None, help="checkpoint dir (default <models>/finetuned/<voice>)")
+    rg.add_argument(
+        "--checkpoint", default=None, help="checkpoint dir (default <models>/finetuned/<voice>)"
+    )
     rg.add_argument("--engine", choices=("f5", "chatterbox"), default="f5")
     rg.add_argument("--base-model", default=None)
     rg.add_argument("--speaker", default=None, help="target speaker label (provenance)")
@@ -343,7 +357,9 @@ def _build_parser() -> argparse.ArgumentParser:
     rg.add_argument("--assign", metavar="PERSONA", help="assign the voice to this persona id")
 
     li = sub.add_parser("list", help="list fine-tuned voices and assignments")
-    li.add_argument("--unassign", metavar="PERSONA", help="remove a persona's fine-tuned-voice assignment")
+    li.add_argument(
+        "--unassign", metavar="PERSONA", help="remove a persona's fine-tuned-voice assignment"
+    )
 
     return parser
 

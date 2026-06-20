@@ -190,7 +190,11 @@ async def _run_eval(settings: Settings, args: argparse.Namespace) -> int:
         lora_persona = persona.model_copy(deep=True)
         lora_persona.llm.lora = args.lora or persona.id
         lora = await eval_mod.evaluate(
-            backend.llm, lora_persona, probes=probes, keywords=keywords, bare_prompt=args.bare_prompt
+            backend.llm,
+            lora_persona,
+            probes=probes,
+            keywords=keywords,
+            bare_prompt=args.bare_prompt,
         )
         _print_scores(f"LoRA ({lora_persona.llm.lora})", lora)
         print("\ndelta (lora - prompt-only):")

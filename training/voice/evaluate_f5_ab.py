@@ -85,20 +85,31 @@ def main() -> int:
 
     use_ema = not args.no_ema
     print(f"  use_ema={use_ema}")
-    ft = F5TTS(model="F5TTS_v1_Base", ckpt_file=str(ft_ckpt), vocab_file=str(vocab),
-               use_ema=use_ema, device="cuda")
+    ft = F5TTS(
+        model="F5TTS_v1_Base",
+        ckpt_file=str(ft_ckpt),
+        vocab_file=str(vocab),
+        use_ema=use_ema,
+        device="cuda",
+    )
     # Zero-shot baseline = the exact base the fine-tune started from (the copied pretrained_*),
     # so the A/B isolates the fine-tune; fall back to the Hub default if it's absent.
     base_ckpt = next(ckpt_dir.glob("pretrained_*.safetensors"), None)
     if base_ckpt is not None:
-        base = F5TTS(model="F5TTS_v1_Base", ckpt_file=str(base_ckpt), vocab_file=str(vocab), device="cuda")
+        base = F5TTS(
+            model="F5TTS_v1_Base", ckpt_file=str(base_ckpt), vocab_file=str(vocab), device="cuda"
+        )
     else:
         base = F5TTS(model="F5TTS_v1_Base", device="cuda")
 
     def synth(model: object, probe: str, path: Path) -> bytes:
         model.infer(  # type: ignore[attr-defined]
-            ref_file=str(ref_wav), ref_text=ref_text, gen_text=probe,
-            file_wave=str(path), seed=42, remove_silence=False,
+            ref_file=str(ref_wav),
+            ref_text=ref_text,
+            gen_text=probe,
+            file_wave=str(path),
+            seed=42,
+            remove_silence=False,
         )
         return read_wav_file(path)
 
@@ -118,7 +129,9 @@ def main() -> int:
     print(f"  fine-tuned similarity : {scores.finetuned_similarity:.4f}")
     print(f"  zero-shot similarity  : {scores.clone_similarity:.4f}")
     print(f"  delta (ft - zeroshot) : {scores.delta:+.4f}   (margin {scores.margin:.3f})")
-    print(f"  verdict               : {'PASS — fine-tune clearly closer' if scores.passes else 'no clear win'}")
+    print(
+        f"  verdict               : {'PASS — fine-tune clearly closer' if scores.passes else 'no clear win'}"
+    )
     print(f"  MOS samples           : {out_dir}")
 
     (ckpt_dir / "ab_result.json").write_text(scores.model_dump_json(indent=2), encoding="utf-8")

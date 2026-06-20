@@ -14,7 +14,9 @@ from .fakes import make_persona
 def _persona(*, enabled: bool = True, scope: str = "per_user", summarize_every: int = 6) -> Persona:
     base = make_persona("companion")
     return base.model_copy(
-        update={"memory": MemorySettings(enabled=enabled, scope=scope, summarize_every=summarize_every)}
+        update={
+            "memory": MemorySettings(enabled=enabled, scope=scope, summarize_every=summarize_every)
+        }
     )
 
 
@@ -78,7 +80,9 @@ async def test_recalls_prior_session_facts(tmp_path: Path) -> None:
     persona = _persona(summarize_every=0)
 
     # --- session 1: the user shares facts, then we consolidate the profile.
-    llm = _ReplyLLM('{"facts": ["name is Sam", "has a dog named Rex"], "summary": "Sam, a dog owner."}')
+    llm = _ReplyLLM(
+        '{"facts": ["name is Sam", "has a dog named Rex"], "summary": "Sam, a dog owner."}'
+    )
     mem1 = ConversationMemory(store, llm=llm, summarize_every=0)
     s1 = mem1.start_session("alice", persona.id)
     await mem1.record_user("alice", s1, persona, "Hi, I'm Sam and I have a dog named Rex")
@@ -100,7 +104,9 @@ async def test_recall_excludes_current_session(tmp_path: Path) -> None:
     mem = ConversationMemory(store, summarize_every=0)
     await mem.record_user("alice", "live", persona, "my favorite color is teal")
     # Querying within the same live session should not echo it back as a "relevant moment".
-    block = await mem.recall("alice", "what is my favorite color", persona=persona, session_id="live")
+    block = await mem.recall(
+        "alice", "what is my favorite color", persona=persona, session_id="live"
+    )
     assert "teal" not in block
 
 
@@ -120,7 +126,9 @@ async def test_per_user_persona_scope_filters_turns(tmp_path: Path) -> None:
     await mem.record_user("alice", "s2", hr, "I managed a team of five engineers")
 
     # Recall scoped to the companion persona must not surface the HR-session turn.
-    block = await mem.recall("alice", "tell me about engineers and painting", persona=companion, session_id="x")
+    block = await mem.recall(
+        "alice", "tell me about engineers and painting", persona=companion, session_id="x"
+    )
     assert "painting" in block
     assert "engineers" not in block
 
@@ -139,7 +147,9 @@ async def test_auto_consolidation_runs_in_background(tmp_path: Path) -> None:
 
     s = mem.start_session("alice", persona.id)
     await mem.record_user("alice", s, persona, "I spent all weekend cooking")  # pending -> 1
-    await mem.record_assistant("alice", s, persona, "That sounds delicious!")  # pending -> 2 -> schedule
+    await mem.record_assistant(
+        "alice", s, persona, "That sounds delicious!"
+    )  # pending -> 2 -> schedule
     await mem.aclose()  # flush the background distillation
 
     assert llm.calls == 1

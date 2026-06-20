@@ -17,7 +17,9 @@ from personavoice.memory import (
 from personavoice.models import Role
 
 
-def _turn(content: str, *, session: str = "s1", persona: str = "companion", role: Role = Role.user) -> MemoryTurn:
+def _turn(
+    content: str, *, session: str = "s1", persona: str = "companion", role: Role = Role.user
+) -> MemoryTurn:
     return MemoryTurn(session_id=session, persona_id=persona, role=role, content=content)
 
 

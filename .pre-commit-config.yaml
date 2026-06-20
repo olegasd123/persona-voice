@@ -1,6 +1,8 @@
 repos:
   - repo: https://github.com/astral-sh/ruff-pre-commit
-    rev: v0.5.7
+    # Keep in lockstep with the `ruff` pin in pyproject.toml's `dev` extra so local
+    # formatting matches what CI's `ruff format --check` enforces.
+    rev: v0.15.18
     hooks:
       - id: ruff
         args: [--fix]

@@ -101,7 +101,9 @@ def test_store_record_assign_and_reload(tmp_path: Path) -> None:
 
 def test_store_voice_ref_carries_sample_and_ref_text(tmp_path: Path) -> None:
     store = ClonesStore.load(tmp_path)
-    store.record(ClonedVoice(name="v", sample_path="/s/v.wav", ref_text="hello", backend="chatterbox"))
+    store.record(
+        ClonedVoice(name="v", sample_path="/s/v.wav", ref_text="hello", backend="chatterbox")
+    )
     ref = store.voice_ref("v", "chatterbox", emotion="warm")
     assert ref is not None
     assert ref.id == "v"
@@ -160,9 +162,7 @@ def test_f5_kwargs_with_and_without_sample() -> None:
     bare = _f5_kwargs("hi", VoiceRef(id="x"), model="m")
     assert bare == {"generation_text": "hi", "model_name": "m"}  # F5's built-in default voice
 
-    cloned = _f5_kwargs(
-        "hi", VoiceRef(id="v", sample_path="/s/v.wav", ref_text="ref"), model="m"
-    )
+    cloned = _f5_kwargs("hi", VoiceRef(id="v", sample_path="/s/v.wav", ref_text="ref"), model="m")
     assert cloned["ref_audio_path"] == "/s/v.wav"
     assert cloned["ref_audio_text"] == "ref"  # f5_tts_mlx names it ref_audio_text
 
@@ -227,9 +227,7 @@ async def test_cloner_rejects_bad_name(tmp_path: Path) -> None:
 
 async def test_cloner_explicit_ref_text_skips_transcription(tmp_path: Path) -> None:
     cloner = VoiceCloner(_cloning_backend(stt_text="WRONG"), ClonesStore.load(tmp_path))
-    voice = await cloner.clone(
-        b"x", "v", ref_text="given text", min_seconds=None, max_seconds=None
-    )
+    voice = await cloner.clone(b"x", "v", ref_text="given text", min_seconds=None, max_seconds=None)
     assert voice.ref_text == "given text"
 
 

@@ -85,12 +85,20 @@ memory-embeddings = [
 ]
 # --- Tooling --------------------------------------------------------------------------
 dev = [
-    "ruff>=0.5",
+    # Pinned to a single minor so CI's `ruff format --check` and the local pre-commit hook
+    # agree (the formatter's output drifts across minors). Bump here and in .pre-commit-config
+    # together.
+    "ruff>=0.15,<0.16",
     "pytest>=8.0",
     "pytest-asyncio>=0.23",
     "pre-commit>=3.7",
     "mypy>=1.10",
     "types-PyYAML>=6.0",
+    # The audio helpers + STT warmup use numpy/soundfile (otherwise backend-extra deps), so the
+    # test suite needs them on a bare install. They're light wheels — kept out of the core deps
+    # but part of the dev/test environment so `pytest` passes without a mac/cuda extra.
+    "numpy>=1.26",
+    "soundfile>=0.12",
 ]
 
 [project.scripts]

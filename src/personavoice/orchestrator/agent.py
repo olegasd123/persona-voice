@@ -77,8 +77,7 @@ def _require_livekit() -> tuple[Any, Any, Any]:
         from livekit.plugins import silero
     except ImportError as exc:  # pragma: no cover - exercised only without the extra
         raise RuntimeError(
-            "livekit is not installed; install the streaming extra: "
-            "`pip install -e '.[livekit]'`"
+            "livekit is not installed; install the streaming extra: `pip install -e '.[livekit]'`"
         ) from exc
     return agents, rtc, silero
 
@@ -115,9 +114,7 @@ class PersonaAgent:
         self._persona = persona
         self._source = source
         self._memory = memory
-        self._pipeline = StreamingPipeline(
-            backend, persona, voices, memory=memory, user_id=user_id
-        )
+        self._pipeline = StreamingPipeline(backend, persona, voices, memory=memory, user_id=user_id)
         self._turn = TurnController(self._capture_wav)
         self._frame_samples = max(1, _OUT_SAMPLE_RATE * _FRAME_MS // 1000)
         # Publishes the assistant's spoken words back as a live transcript (the client renders
@@ -234,8 +231,12 @@ class PersonaAgent:
             logger.exception("turn failed during streaming")
         finally:
             turn_metrics_from_stream(
-                self._persona.id, user_text, metrics, stt_s=stt_s,
-                interrupted=interrupted, error=error,
+                self._persona.id,
+                user_text,
+                metrics,
+                stt_s=stt_s,
+                interrupted=interrupted,
+                error=error,
             ).log(logger)
             if publish is not None and parts:
                 # Fire-and-forget: on barge-in this generator is being cancelled, so awaiting
@@ -502,7 +503,9 @@ async def _warmup_backend(
             # Expected when e.g. vLLM never came up — log one concise line, not a stack trace.
             logger.warning(
                 "prewarm: %s warm-up failed after %.1fs; its first turn will pay the load (%s)",
-                name, time.perf_counter() - t0, exc,
+                name,
+                time.perf_counter() - t0,
+                exc,
             )
 
 
@@ -542,7 +545,9 @@ async def entrypoint(ctx: Any, *, persona_id: str | None = None) -> None:
     user_id = resolve_user_id([job_meta, room_meta]) or (remote_ids[0] if remote_ids else None)
     memory = build_conversation_memory(settings, backend, persona) if user_id else None
     if memory is not None:
-        logger.info("memory enabled for user %r (persona memory=%s)", user_id, persona.memory.enabled)
+        logger.info(
+            "memory enabled for user %r (persona memory=%s)", user_id, persona.memory.enabled
+        )
 
     source = rtc.AudioSource(_OUT_SAMPLE_RATE, 1)
     track = rtc.LocalAudioTrack.create_audio_track("assistant-voice", source)

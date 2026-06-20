@@ -20,9 +20,7 @@ from collections.abc import Mapping
 _VALID_LEVELS = {"CRITICAL", "ERROR", "WARNING", "INFO", "DEBUG", "NOTSET"}
 
 # Attributes the stdlib sets on every LogRecord; anything else is a caller-supplied `extra`.
-_RESERVED = set(
-    vars(logging.makeLogRecord({})).keys()
-) | {"message", "asctime", "taskName"}
+_RESERVED = set(vars(logging.makeLogRecord({})).keys()) | {"message", "asctime", "taskName"}
 
 
 class JsonFormatter(logging.Formatter):
@@ -82,7 +80,5 @@ def configure_logging(
     if json_format:
         handler.setFormatter(JsonFormatter())
     else:
-        handler.setFormatter(
-            logging.Formatter("%(asctime)s %(levelname)-7s %(name)s: %(message)s")
-        )
+        handler.setFormatter(logging.Formatter("%(asctime)s %(levelname)-7s %(name)s: %(message)s"))
     root.addHandler(handler)

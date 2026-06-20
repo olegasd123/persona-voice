@@ -83,7 +83,9 @@ def merge_facts(existing: list[ProfileFact], new_texts: Iterable[str]) -> list[P
 
 def _turns_block(turns: list[MemoryTurn]) -> str:
     """Render turns as a readable `Role: content` block for the distillation prompt."""
-    lines = [f"{t.role.value.capitalize()}: {t.content.strip()}" for t in turns if t.content.strip()]
+    lines = [
+        f"{t.role.value.capitalize()}: {t.content.strip()}" for t in turns if t.content.strip()
+    ]
     return "\n".join(lines)
 
 

@@ -45,8 +45,13 @@ def test_revoke(mem_env: Path) -> None:
 def test_show(mem_env: Path, capsys: pytest.CaptureFixture[str]) -> None:
     store = _store(mem_env)
     store.set_consent("alice", granted=True)
-    store.record_turn("alice", MemoryTurn(session_id="s1", persona_id="companion", role=Role.user, content="hi friend"))
-    store.save_profile_raw("alice", {"user_id": "alice", "summary": "A friend.", "facts": [{"text": "likes tea"}]})
+    store.record_turn(
+        "alice",
+        MemoryTurn(session_id="s1", persona_id="companion", role=Role.user, content="hi friend"),
+    )
+    store.save_profile_raw(
+        "alice", {"user_id": "alice", "summary": "A friend.", "facts": [{"text": "likes tea"}]}
+    )
 
     assert main(["--show", "alice", "--backend", "mac"]) == 0
     out = capsys.readouterr().out
@@ -62,7 +67,10 @@ def test_show_unknown_user(mem_env: Path) -> None:
 def test_export_to_file(mem_env: Path, tmp_path: Path) -> None:
     store = _store(mem_env)
     store.set_consent("alice", granted=True)
-    store.record_turn("alice", MemoryTurn(session_id="s1", persona_id="companion", role=Role.user, content="hello"))
+    store.record_turn(
+        "alice",
+        MemoryTurn(session_id="s1", persona_id="companion", role=Role.user, content="hello"),
+    )
     out = tmp_path / "dump.json"
     assert main(["--export", "alice", "--out", str(out), "--backend", "mac"]) == 0
     assert "hello" in out.read_text(encoding="utf-8")
@@ -71,7 +79,9 @@ def test_export_to_file(mem_env: Path, tmp_path: Path) -> None:
 def test_delete_with_yes(mem_env: Path) -> None:
     store = _store(mem_env)
     store.set_consent("alice", granted=True)
-    store.record_turn("alice", MemoryTurn(session_id="s1", persona_id="companion", role=Role.user, content="x"))
+    store.record_turn(
+        "alice", MemoryTurn(session_id="s1", persona_id="companion", role=Role.user, content="x")
+    )
     assert store.has_user("alice")
     assert main(["--delete", "alice", "--yes", "--backend", "mac"]) == 0
     assert not _store(mem_env).has_user("alice")
@@ -84,8 +94,13 @@ def test_delete_unknown_user_is_noop(mem_env: Path) -> None:
 def test_distill_requires_optin(mem_env: Path, capsys: pytest.CaptureFixture[str]) -> None:
     store = _store(mem_env)
     store.set_consent("alice", granted=True, allow_training=False)
-    store.record_turn("alice", MemoryTurn(session_id="s1", persona_id="companion", role=Role.user, content="hi"))
-    store.record_turn("alice", MemoryTurn(session_id="s1", persona_id="companion", role=Role.assistant, content="hello"))
+    store.record_turn(
+        "alice", MemoryTurn(session_id="s1", persona_id="companion", role=Role.user, content="hi")
+    )
+    store.record_turn(
+        "alice",
+        MemoryTurn(session_id="s1", persona_id="companion", role=Role.assistant, content="hello"),
+    )
     rc = main(["--distill", "alice", "--backend", "mac"])
     assert rc == 2
     assert "opted in to training" in capsys.readouterr().err
@@ -94,8 +109,13 @@ def test_distill_requires_optin(mem_env: Path, capsys: pytest.CaptureFixture[str
 def test_distill_writes_dataset(mem_env: Path, tmp_path: Path) -> None:
     store = _store(mem_env)
     store.set_consent("alice", granted=True, allow_training=True)
-    store.record_turn("alice", MemoryTurn(session_id="s1", persona_id="companion", role=Role.user, content="hi"))
-    store.record_turn("alice", MemoryTurn(session_id="s1", persona_id="companion", role=Role.assistant, content="hello"))
+    store.record_turn(
+        "alice", MemoryTurn(session_id="s1", persona_id="companion", role=Role.user, content="hi")
+    )
+    store.record_turn(
+        "alice",
+        MemoryTurn(session_id="s1", persona_id="companion", role=Role.assistant, content="hello"),
+    )
     out = tmp_path / "alice.jsonl"
     assert main(["--distill", "alice", "--out", str(out), "--backend", "mac"]) == 0
     assert out.is_file()

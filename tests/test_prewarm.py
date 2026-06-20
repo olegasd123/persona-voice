@@ -73,9 +73,7 @@ def test_llm_warmup_retries_until_server_ready(monkeypatch: pytest.MonkeyPatch) 
             super().__init__()
             self.attempts = 0
 
-        async def stream_chat(
-            self, messages: list[Msg], persona: Persona
-        ) -> AsyncIterator[str]:
+        async def stream_chat(self, messages: list[Msg], persona: Persona) -> AsyncIterator[str]:
             self.attempts += 1
             if self.attempts < 3:  # "server not ready yet" on the first two tries
                 raise ConnectionError("server disconnected")
@@ -94,9 +92,7 @@ def test_llm_warmup_gives_up_after_budget(monkeypatch: pytest.MonkeyPatch) -> No
     monkeypatch.setenv("PERSONAVOICE_LLM_WARMUP_WAIT", "0")  # no budget → raise immediately
 
     class DeadLLM(WarmLLM):
-        async def stream_chat(
-            self, messages: list[Msg], persona: Persona
-        ) -> AsyncIterator[str]:
+        async def stream_chat(self, messages: list[Msg], persona: Persona) -> AsyncIterator[str]:
             if persona.id == "__never__":
                 yield ""
             raise ConnectionError("server down")

@@ -30,8 +30,22 @@ _CLAUSE = ",;:—–"  # noqa: RUF001 - en/em dashes are intentional clause sepa
 # Common abbreviations whose trailing dot must NOT end a sentence.
 _ABBREV = frozenset(
     {
-        "mr.", "mrs.", "ms.", "dr.", "prof.", "sr.", "jr.", "st.",
-        "vs.", "etc.", "e.g.", "i.e.", "no.", "fig.", "approx.", "dept.",
+        "mr.",
+        "mrs.",
+        "ms.",
+        "dr.",
+        "prof.",
+        "sr.",
+        "jr.",
+        "st.",
+        "vs.",
+        "etc.",
+        "e.g.",
+        "i.e.",
+        "no.",
+        "fig.",
+        "approx.",
+        "dept.",
     }
 )
 

@@ -12,7 +12,9 @@ from personavoice.models import Role
 from personavoice.training.dataset import validate_example
 
 
-def _turn(content: str, role: Role, *, session: str = "s1", persona: str = "companion") -> MemoryTurn:
+def _turn(
+    content: str, role: Role, *, session: str = "s1", persona: str = "companion"
+) -> MemoryTurn:
     return MemoryTurn(session_id=session, persona_id=persona, role=role, content=content)
 
 
