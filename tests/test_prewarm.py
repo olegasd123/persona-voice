@@ -97,8 +97,9 @@ def test_llm_warmup_gives_up_after_budget(monkeypatch: pytest.MonkeyPatch) -> No
         async def stream_chat(
             self, messages: list[Msg], persona: Persona
         ) -> AsyncIterator[str]:
+            if persona.id == "__never__":
+                yield ""
             raise ConnectionError("server down")
-            yield  # pragma: no cover - makes this an async generator
 
     with pytest.raises(ConnectionError):
         asyncio.run(DeadLLM().warmup(make_persona()))

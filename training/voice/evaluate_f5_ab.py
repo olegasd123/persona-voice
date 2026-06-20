@@ -24,8 +24,8 @@ from pathlib import Path
 
 sys.path.insert(0, "/workspace/src")
 
-from personavoice.audio import read_wav_file  # noqa: E402
-from personavoice.training.voice.evaluate import ResemblyzerEmbedder, score_ab  # noqa: E402
+from personavoice.audio import read_wav_file
+from personavoice.training.voice.evaluate import ResemblyzerEmbedder, score_ab
 
 # The CLI's neutral probes, inlined to avoid the cli module's heavy import chain (server.config
 # → dotenv) inside the trainer image. Kept in sync with cli.DEFAULT_VOICE_PROBES.
