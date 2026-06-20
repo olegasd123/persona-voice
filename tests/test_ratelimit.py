@@ -33,6 +33,45 @@ def test_per_key_isolation() -> None:
     assert limiter.allow("a", now=0.0) is False
 
 
+def test_idle_buckets_are_evicted() -> None:
+    # Many one-shot keys leave a bucket each; once they've refilled, a sweep forgets them.
+    limiter = RateLimiter(rate=1.0, burst=1.0, sweep_interval=10.0)
+    for i in range(50):
+        assert limiter.allow(f"ip-{i}", now=0.0) is True
+    assert len(limiter._buckets) == 50
+    # Advance past the sweep interval: every bucket has fully refilled, so all are dropped and
+    # only the triggering call's own (still-draining) bucket remains.
+    assert limiter.allow("trigger", now=20.0) is True
+    assert set(limiter._buckets) == {"trigger"}
+
+
+def test_active_bucket_survives_sweep() -> None:
+    # Slow refill relative to the sweep interval, so a recently-busy key isn't full at sweep time.
+    limiter = RateLimiter(rate=1.0, burst=100.0, sweep_interval=10.0)
+    for _ in range(100):
+        limiter.allow("busy", now=0.0)  # drain to 0 tokens
+    assert limiter.allow("busy", now=0.0) is False  # throttled
+    # A sweep fires while another key is checked at t=10; "busy" has refilled only ~10/100 tokens,
+    # so it's still throttled and must be kept — evicting it would reset the abuser to a full bucket.
+    limiter.allow("other", now=10.0)
+    assert "busy" in limiter._buckets
+    assert limiter.allow("busy", now=10.0) is True  # its preserved ~10 tokens still let one through
+
+
+def test_memory_bounded_under_key_churn() -> None:
+    # Regression: per-key state must not grow with the *total* number of keys ever seen, only
+    # with those active within one sweep interval. Without eviction this map would reach 2000.
+    limiter = RateLimiter(rate=1.0, burst=1.0, sweep_interval=10.0)
+    peak = 0
+    for window in range(100):
+        base = window * 100.0  # each window is well past the previous one's refill
+        for k in range(20):
+            limiter.allow(f"ip-{window}-{k}", now=base)
+        peak = max(peak, len(limiter._buckets))
+    assert peak <= 40  # ~one window's worth, not the 2000 distinct keys seen over time
+    assert len(limiter._buckets) <= 40
+
+
 def test_from_env_default_disabled() -> None:
     assert rate_limiter_from_env({}).enabled is False
 

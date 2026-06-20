@@ -5,12 +5,19 @@ runaway/abusive client. A classic per-key token bucket: each key (client IP by d
 refills `rate` tokens/second up to `burst`; a request is allowed if a token is available.
 Disabled (allow-all) when `rate <= 0`, which is the dev default.
 
-Pure and time-injectable (`now=`), so the throttle behavior is unit-tested without sleeping.
+Per-key state is bounded: idle buckets are forgotten in a periodic sweep so a flood of
+distinct keys (e.g. spoofed/rotating source IPs) can't grow the map without limit — important
+since this is the very component meant to blunt abuse.
+
+`allow` is guarded by a lock because the token server dispatches requests on multiple threads
+(`ThreadingHTTPServer`). The throttle math stays pure and time-injectable (`now=`), so the
+behavior is unit-tested without sleeping.
 """
 
 from __future__ import annotations
 
 import os
+import threading
 import time
 from collections.abc import Mapping
 from dataclasses import dataclass, field
@@ -22,7 +29,12 @@ class RateLimiter:
 
     rate: float  # tokens refilled per second (<= 0 disables limiting)
     burst: float  # bucket capacity (max tokens)
+    # Drop fully-refilled (idle) buckets at most this often. Memory is then bounded by the
+    # number of distinct keys seen within one interval, not for all time.
+    sweep_interval: float = 60.0
     _buckets: dict[str, tuple[float, float]] = field(default_factory=dict)  # key -> (tokens, ts)
+    _last_sweep: float = field(default=0.0, repr=False)
+    _lock: threading.Lock = field(default_factory=threading.Lock, repr=False, compare=False)
 
     @property
     def enabled(self) -> bool:
@@ -32,14 +44,33 @@ class RateLimiter:
         if not self.enabled:
             return True
         ts = time.monotonic() if now is None else now
-        tokens, last = self._buckets.get(key, (self.burst, ts))
-        # Refill since the last request, capped at the bucket size.
-        tokens = min(self.burst, tokens + (ts - last) * self.rate)
-        if tokens >= 1.0:
-            self._buckets[key] = (tokens - 1.0, ts)
-            return True
-        self._buckets[key] = (tokens, ts)
-        return False
+        with self._lock:
+            self._sweep(ts)
+            tokens, last = self._buckets.get(key, (self.burst, ts))
+            # Refill since the last request, capped at the bucket size.
+            tokens = min(self.burst, tokens + (ts - last) * self.rate)
+            if tokens >= 1.0:
+                self._buckets[key] = (tokens - 1.0, ts)
+                return True
+            self._buckets[key] = (tokens, ts)
+            return False
+
+    def _sweep(self, now: float) -> None:
+        """Forget idle buckets that have refilled to capacity (caller holds the lock).
+
+        Runs at most once per `sweep_interval`. A bucket back at full `burst` is
+        indistinguishable from a never-seen key — both materialize as `(burst, now)` on the
+        next access — so dropping it changes no decision; it just bounds the map. Cost is
+        amortized over the keys seen in one interval.
+        """
+        if now - self._last_sweep < self.sweep_interval:
+            return
+        self._last_sweep = now
+        self._buckets = {
+            key: (tokens, last)
+            for key, (tokens, last) in self._buckets.items()
+            if min(self.burst, tokens + (now - last) * self.rate) < self.burst
+        }
 
 
 def rate_limiter_from_env(env: Mapping[str, str] | None = None) -> RateLimiter:
