@@ -61,6 +61,35 @@ void main() {
         'Connecting…',
       );
     });
+
+    test('connected reads as still connecting until the assistant is ready', () {
+      expect(
+        sessionStatusLabel(SessionStatus.connected, agentSpeaking: false, agentReady: false),
+        'Connecting to assistant…',
+      );
+      // Not-ready wins over agentSpeaking — the agent hasn't really joined yet.
+      expect(
+        sessionStatusLabel(SessionStatus.connected, agentSpeaking: true, agentReady: false),
+        'Connecting to assistant…',
+      );
+      // Once ready, the normal connected labels apply.
+      expect(
+        sessionStatusLabel(SessionStatus.connected, agentSpeaking: false, agentReady: true),
+        'Listening',
+      );
+    });
+
+    test('interruption overrides even before the assistant is ready', () {
+      expect(
+        sessionStatusLabel(
+          SessionStatus.connected,
+          agentSpeaking: false,
+          agentReady: false,
+          interrupted: true,
+        ),
+        'Paused (interrupted)',
+      );
+    });
   });
 
   group('VoiceSession audio interruptions (no room)', () {
@@ -134,6 +163,52 @@ void main() {
 
       await s.onAudioEvent(const RouteChanged(AudioRoute.bluetooth));
       expect(notifications, 1); // same route → no extra notify
+    });
+  });
+
+  group('VoiceSession agent readiness (no room)', () {
+    test('a fresh session is not ready until the assistant joins', () {
+      expect(VoiceSession().agentReady, false);
+    });
+
+    test('becoming ready brings the (muted-during-warmup) open mic live', () {
+      final s = VoiceSession();
+      expect(s.micEnabled, false); // held muted while the server warms up
+      s.setAgentReady(true);
+      expect(s.agentReady, true);
+      expect(s.micEnabled, true);
+    });
+
+    test('push-to-talk stays muted when the assistant becomes ready', () async {
+      final s = VoiceSession();
+      await s.setMicMode(MicMode.pushToTalk);
+      s.setAgentReady(true);
+      expect(s.agentReady, true);
+      expect(s.micEnabled, false); // the user re-engages by holding to talk
+    });
+
+    test('does not unmute while an OS interruption is active', () async {
+      final s = VoiceSession();
+      await s.onAudioEvent(const InterruptionBegan());
+      s.setAgentReady(true);
+      expect(s.agentReady, true);
+      expect(s.micEnabled, false);
+    });
+
+    test('setting the same readiness twice is a no-op', () {
+      final s = VoiceSession();
+      s.setAgentReady(true);
+      var notifications = 0;
+      s.addListener(() => notifications++);
+      s.setAgentReady(true);
+      expect(notifications, 0);
+    });
+
+    test('losing the assistant flips it back to not ready', () {
+      final s = VoiceSession();
+      s.setAgentReady(true);
+      s.setAgentReady(false);
+      expect(s.agentReady, false);
     });
   });
 

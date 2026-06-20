@@ -53,7 +53,12 @@ class _CallScreenState extends State<CallScreen> {
         _session.status,
         agentSpeaking: _session.agentSpeaking,
         interrupted: _session.interrupted,
+        agentReady: _session.agentReady,
       );
+
+  // The room is connected but the assistant hasn't joined yet — the server is still warming up.
+  bool get _waitingForAgent =>
+      _session.status == SessionStatus.connected && !_session.agentReady;
 
   @override
   Widget build(BuildContext context) {
@@ -78,8 +83,10 @@ class _CallScreenState extends State<CallScreen> {
           _StatusBar(
             label: _statusLabel,
             speaking: _session.agentSpeaking,
+            waiting: _waitingForAgent,
             route: _session.route,
           ),
+          if (_waitingForAgent) const _WarmingUpBanner(),
           if (_session.errorMessage != null)
             Padding(
               padding: const EdgeInsets.all(12),
@@ -112,9 +119,15 @@ class _CallScreenState extends State<CallScreen> {
 }
 
 class _StatusBar extends StatelessWidget {
-  const _StatusBar({required this.label, required this.speaking, required this.route});
+  const _StatusBar({
+    required this.label,
+    required this.speaking,
+    required this.waiting,
+    required this.route,
+  });
   final String label;
   final bool speaking;
+  final bool waiting;
   final AudioRoute route;
 
   @override
@@ -126,7 +139,15 @@ class _StatusBar extends StatelessWidget {
       padding: const EdgeInsets.symmetric(vertical: 10, horizontal: 16),
       child: Row(
         children: [
-          Icon(speaking ? Icons.graphic_eq : Icons.hearing, size: 18),
+          // While the assistant is still joining, show a spinner instead of the listening icon.
+          if (waiting)
+            const SizedBox(
+              width: 18,
+              height: 18,
+              child: CircularProgressIndicator(strokeWidth: 2),
+            )
+          else
+            Icon(speaking ? Icons.graphic_eq : Icons.hearing, size: 18),
           const SizedBox(width: 8),
           Text(label),
           const Spacer(),
@@ -144,6 +165,35 @@ class _StatusBar extends StatelessWidget {
         AudioRoute.receiver => Icons.phone_in_talk,
         AudioRoute.speaker || AudioRoute.unknown => null,
       };
+}
+
+/// Shown while the room is connected but the assistant hasn't joined yet: the server is loading
+/// its models (and/or waiting for the LLM). Tells the user to hold off speaking for a moment —
+/// the mic stays muted until the assistant is ready (see [VoiceSession.setAgentReady]).
+class _WarmingUpBanner extends StatelessWidget {
+  const _WarmingUpBanner();
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    return Container(
+      width: double.infinity,
+      color: scheme.tertiaryContainer,
+      padding: const EdgeInsets.symmetric(vertical: 10, horizontal: 16),
+      child: Row(
+        children: [
+          Icon(Icons.hourglass_top, size: 16, color: scheme.onTertiaryContainer),
+          const SizedBox(width: 8),
+          Expanded(
+            child: Text(
+              'The assistant is warming up — one moment before you speak.',
+              style: TextStyle(color: scheme.onTertiaryContainer),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
 }
 
 class _TranscriptBubble extends StatelessWidget {

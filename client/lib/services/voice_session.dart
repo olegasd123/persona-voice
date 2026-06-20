@@ -20,16 +20,23 @@ enum MicMode { openMic, pushToTalk }
 /// Human-readable status text. Pure (no [VoiceSession] needed) so it's unit-tested directly.
 /// When [interrupted] (an incoming call / Siri grabbed the audio session), that takes
 /// precedence over the normal connected labels since the mic is muted until it clears.
+///
+/// [agentReady] distinguishes "the LiveKit room connected" from "the assistant has actually
+/// joined and is ready to respond". The agent only joins (publishing its audio track) once the
+/// server worker has finished warming up its models — so until then we say the assistant is
+/// still connecting, rather than the misleading "Listening".
 String sessionStatusLabel(
   SessionStatus status, {
   required bool agentSpeaking,
   bool interrupted = false,
+  bool agentReady = true,
 }) {
   if (interrupted && status == SessionStatus.connected) return 'Paused (interrupted)';
   return switch (status) {
     SessionStatus.connecting => 'Connecting…',
     SessionStatus.reconnecting => 'Reconnecting…',
-    SessionStatus.connected => agentSpeaking ? 'Speaking…' : 'Listening',
+    SessionStatus.connected =>
+      agentReady ? (agentSpeaking ? 'Speaking…' : 'Listening') : 'Connecting to assistant…',
     SessionStatus.disconnected => 'Disconnected',
     SessionStatus.error => 'Error',
     SessionStatus.idle => 'Idle',
@@ -81,6 +88,12 @@ class VoiceSession extends ChangeNotifier {
   String? errorMessage;
   bool micEnabled = false;
   bool agentSpeaking = false;
+
+  /// Whether the assistant has joined the room and published its audio track — i.e. the server
+  /// finished warming up and is ready to respond. The room can be [SessionStatus.connected]
+  /// while this is still false (the worker is loading models / waiting for vLLM); the UI shows
+  /// "Connecting to assistant…" and the open mic is held muted until this flips true.
+  bool agentReady = false;
   String persona = '';
   MicMode micMode = MicMode.openMic;
   bool talking = false; // push-to-talk: true while the talk button is held
@@ -106,6 +119,7 @@ class VoiceSession extends ChangeNotifier {
     if (status == SessionStatus.connecting || status == SessionStatus.connected) return;
     _setStatus(SessionStatus.connecting);
     persona = grant.persona;
+    agentReady = false;
     try {
       final room = Room(
         roomOptions: const RoomOptions(
@@ -116,12 +130,27 @@ class VoiceSession extends ChangeNotifier {
           defaultAudioOutputOptions: AudioOutputOptions(speakerOn: true),
         ),
       );
+      // The agent joins as a remote participant and publishes its "assistant-voice" track only
+      // once the server worker is warm (see orchestrator/agent.py). We treat that track
+      // subscription as "assistant ready"; losing the track / participant flips it back.
       final listener = room.createListener()
         ..on<RoomConnectedEvent>((_) => _setStatus(SessionStatus.connected))
-        ..on<RoomReconnectingEvent>((_) => _setStatus(SessionStatus.reconnecting))
-        ..on<RoomResumingEvent>((_) => _setStatus(SessionStatus.reconnecting))
+        ..on<RoomReconnectingEvent>((_) {
+          setAgentReady(false);
+          _setStatus(SessionStatus.reconnecting);
+        })
+        ..on<RoomResumingEvent>((_) {
+          setAgentReady(false);
+          _setStatus(SessionStatus.reconnecting);
+        })
         ..on<RoomReconnectedEvent>((_) => _setStatus(SessionStatus.connected))
-        ..on<RoomDisconnectedEvent>((_) => _setStatus(SessionStatus.disconnected))
+        ..on<RoomDisconnectedEvent>((_) {
+          setAgentReady(false);
+          _setStatus(SessionStatus.disconnected);
+        })
+        ..on<TrackSubscribedEvent>((_) => setAgentReady(true))
+        ..on<TrackUnsubscribedEvent>((_) => setAgentReady(false))
+        ..on<ParticipantDisconnectedEvent>((_) => setAgentReady(false))
         ..on<TranscriptionEvent>(_onTranscription)
         ..on<ActiveSpeakersChangedEvent>(_onActiveSpeakers);
 
@@ -147,9 +176,11 @@ class VoiceSession extends ChangeNotifier {
       );
 
       await room.connect(grant.url, grant.token);
-      // Open-mic starts live; push-to-talk starts muted until the user holds to talk.
-      micEnabled = micMode == MicMode.openMic;
-      await room.localParticipant?.setMicrophoneEnabled(micEnabled);
+      // Hold the mic muted until the assistant is actually ready (see [setAgentReady]). Open-mic
+      // would otherwise go live before the agent joins, so the user's first words would be lost
+      // while the server is still warming up. Push-to-talk is muted until the user holds anyway.
+      micEnabled = false;
+      await room.localParticipant?.setMicrophoneEnabled(false);
       // The agent selects its persona from a data message on connect.
       await _sendPersona(grant.persona);
       await systemCall.reportConnected(callId);
@@ -284,6 +315,21 @@ class VoiceSession extends ChangeNotifier {
     notifyListeners();
   }
 
+  /// Record whether the assistant is present and ready (its audio track is live). Public for
+  /// unit testing (the room's track/participant events funnel here). On the transition to
+  /// ready, an open mic that was held muted during warm-up is brought live so the user can
+  /// start talking — but not while an OS interruption is active, and never in push-to-talk
+  /// (which stays muted until the user holds). Idempotent.
+  @visibleForTesting
+  void setAgentReady(bool ready) {
+    if (ready == agentReady) return;
+    agentReady = ready;
+    if (ready && micMode == MicMode.openMic && !interrupted && !micEnabled) {
+      unawaited(_setMicEnabled(true));
+    }
+    notifyListeners();
+  }
+
   void _onActiveSpeakers(ActiveSpeakersChangedEvent event) {
     final localId = _room?.localParticipant?.identity;
     final speaking = event.speakers.any((p) => p.identity != localId);
@@ -320,6 +366,7 @@ class VoiceSession extends ChangeNotifier {
       _room = null;
       micEnabled = false;
       agentSpeaking = false;
+      agentReady = false;
       talking = false;
       interrupted = false;
     }
