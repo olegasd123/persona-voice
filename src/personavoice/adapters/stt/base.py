@@ -13,6 +13,9 @@ from typing import Any
 
 from ...models import CheckResult, Transcript
 
+# Whisper-family rate; warm-up synthesizes a short silent clip at this rate.
+_WARMUP_SR = 16000
+
 
 class STTAdapter:
     """Speech-to-text. `stream` consumes audio chunks and yields (partial/final) transcripts."""
@@ -33,6 +36,22 @@ class STTAdapter:
     async def transcribe(self, audio: bytes) -> Transcript:
         """Convenience one-shot transcription (used by the file-based pipeline)."""
         raise NotImplementedError(f"{self.name}.transcribe is not implemented yet")
+
+    async def warmup(self) -> None:
+        """Load the model (and run one inference) so the first real turn is fast.
+
+        Transcribes a short silent clip so the weights and CUDA kernels are resident before a
+        caller speaks — the worker calls this once at startup (see the agent's prewarm). It's a
+        no-op for stub adapters; real backends may override if a cheaper warm path exists.
+        """
+        if not self.implemented:
+            return
+        import numpy as np  # local: numpy/soundfile are backend-extra deps
+
+        from ...audio import encode_wav
+
+        silence = np.zeros(_WARMUP_SR // 10, dtype=np.float32)  # 0.1 s
+        await self.transcribe(encode_wav(silence, _WARMUP_SR))
 
     def check(self) -> CheckResult:
         """Lightweight validation that does NOT load model weights."""

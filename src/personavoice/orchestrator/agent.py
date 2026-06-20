@@ -26,6 +26,7 @@ import logging
 import os
 import re
 import sys
+import threading
 import time
 import uuid
 from collections.abc import Callable, Coroutine
@@ -45,6 +46,7 @@ from ..server.config import (
 )
 from ..voice.registry import VoiceRegistry
 from .endpointing import vad_load_kwargs
+from .pipeline import voice_ref_for
 from .streaming import StreamingPipeline, StreamMetrics
 from .turn import TurnController
 
@@ -270,11 +272,18 @@ def _load_vad(silero: Any) -> Any:
         return silero.VAD.load()
 
 
-async def _consume_track(agent: PersonaAgent, track: Any, silero: Any) -> None:
-    """Run VAD over a participant's audio track and feed utterances to the agent."""
+async def _consume_track(
+    agent: PersonaAgent, track: Any, silero: Any, vad: Any | None = None
+) -> None:
+    """Run VAD over a participant's audio track and feed utterances to the agent.
+
+    Reuses a prewarmed Silero VAD when one is passed (loaded once at worker startup); falls
+    back to loading one on demand so the function still works outside the worker (e.g. tests).
+    """
     agents, rtc, _ = _require_livekit()
     vad_event_type = _vad_event_type(agents, rtc)
-    vad = _load_vad(silero)
+    if vad is None:
+        vad = _load_vad(silero)
     vad_stream = vad.stream()
     audio_stream = rtc.AudioStream(track)
 
@@ -425,6 +434,78 @@ def _select_persona(ctx: Any, registry: PersonaRegistry, override: str | None) -
     return registry.get(persona_id)
 
 
+# Process-global cache of the warmed backend + registries. On Windows the LiveKit worker uses a
+# THREAD executor, so every job runner lives in *this* process; caching here means the heavy
+# models load exactly once even when the idle pool spawns a replacement runner (which would
+# otherwise prewarm a second copy and double GPU memory — fatal on a 16 GB card). The lock
+# serializes the two runners that can initialize at once (the boot idle runner + its refill).
+_WARM_LOCK = threading.Lock()
+_WARMED: dict[str, Any] = {}
+
+
+def prewarm(proc: Any) -> None:
+    """LiveKit worker prewarm hook: load every heavy model once, before any job is dispatched.
+
+    The first turn was dominated by lazy model loading (STT/TTS weights, CUDA kernels, the LLM
+    server's first prefill) happening *during* the turn. This runs at worker startup instead:
+    it builds the backend + registries and runs a tiny dummy inference through each stage so
+    everything is warm by the time a caller speaks — moving the cold start off the first turn
+    (and off every later session this process serves). The warmed objects are cached in
+    `proc.userdata` (for `entrypoint` to reuse) and process-globally (so the idle pool's refill
+    runner reuses them instead of loading a second copy). Warm-up failures are logged, never
+    raised: a miss only means that one stage pays its load on its first turn, as it did before.
+    """
+    configure_logging()
+    proc.userdata.update(_ensure_warm())
+
+
+def _ensure_warm() -> dict[str, Any]:
+    """Build + warm the backend once per process; later runners reuse the cached objects."""
+    with _WARM_LOCK:
+        if _WARMED:
+            logger.info("prewarm: reusing models already loaded in this process")
+            return _WARMED
+        _, _, silero = _require_livekit()
+        settings = Settings.load()
+        backend = build_backend(load_backend_config(settings))
+        voices = load_voice_registry(settings)
+        registry = PersonaRegistry(settings.personas_dir)
+        vad = _load_vad(silero)
+        logger.info("prewarm: loading models (backend=%s)…", backend.name)
+        # No event loop is running during prewarm, so drive the async warm-ups with asyncio.run.
+        asyncio.run(_warmup_backend(backend, voices, registry))
+        _WARMED.update(backend=backend, voices=voices, registry=registry, vad=vad)
+        return _WARMED
+
+
+async def _warmup_backend(
+    backend: Backend, voices: VoiceRegistry, registry: PersonaRegistry
+) -> None:
+    """Run one tiny inference through each stage to force model load (best-effort, timed)."""
+    try:
+        persona = registry.get(_default_persona_id(registry))
+        voice = voice_ref_for(persona, backend, voices)
+    except Exception as exc:
+        logger.warning("prewarm: no persona/voice to warm with; skipping (%s)", exc)
+        return
+    stages: list[tuple[str, Callable[[], Any]]] = [
+        ("stt", lambda: backend.stt.warmup()),
+        ("llm", lambda: backend.llm.warmup(persona)),
+        ("tts", lambda: backend.tts.warmup(voice)),
+    ]
+    for name, start in stages:
+        t0 = time.perf_counter()
+        try:
+            await start()
+            logger.info("prewarm: %s warm (%.1fs)", name, time.perf_counter() - t0)
+        except Exception as exc:
+            # Expected when e.g. vLLM never came up — log one concise line, not a stack trace.
+            logger.warning(
+                "prewarm: %s warm-up failed after %.1fs; its first turn will pay the load (%s)",
+                name, time.perf_counter() - t0, exc,
+            )
+
+
 async def entrypoint(ctx: Any, *, persona_id: str | None = None) -> None:
     """LiveKit Agents job entrypoint: connect, publish a track, converse until disconnect.
 
@@ -436,9 +517,17 @@ async def entrypoint(ctx: Any, *, persona_id: str | None = None) -> None:
     agents, rtc, silero = _require_livekit()
 
     settings = Settings.load()
-    backend = build_backend(load_backend_config(settings))
-    voices = load_voice_registry(settings)
-    registry = PersonaRegistry(settings.personas_dir)
+    # Reuse the models loaded by `prewarm` (proc.userdata, else the process-global cache) so the
+    # first turn is warm; fall back to building them here when nothing was prewarmed (e.g. tests).
+    proc_data = getattr(getattr(ctx, "proc", None), "userdata", None) or _WARMED or {}
+    backend = proc_data.get("backend") or build_backend(load_backend_config(settings))
+    voices = proc_data.get("voices")
+    if voices is None:
+        voices = load_voice_registry(settings)
+    registry = proc_data.get("registry")
+    if registry is None:
+        registry = PersonaRegistry(settings.personas_dir)
+    vad = proc_data.get("vad")
     persona = _select_persona(ctx, registry, persona_id)
     logger.info("agent starting (backend=%s persona=%s)", backend.name, persona.id)
 
@@ -478,7 +567,7 @@ async def entrypoint(ctx: Any, *, persona_id: str | None = None) -> None:
     @ctx.room.on("track_subscribed")
     def _on_track(track: Any, *_: Any) -> None:
         if track.kind == rtc.TrackKind.KIND_AUDIO:
-            task = asyncio.create_task(_consume_track(agent, track, silero))
+            task = asyncio.create_task(_consume_track(agent, track, silero, vad))
             consumers.add(task)
             task.add_done_callback(consumers.discard)
 
@@ -512,7 +601,19 @@ def run() -> None:
     agents, _, _ = _require_livekit()
     if len(sys.argv) < 2 or sys.argv[1].startswith("-"):
         sys.argv = [sys.argv[0], "start"]
-    agents.cli.run_app(agents.WorkerOptions(entrypoint_fnc=entrypoint))
+    agents.cli.run_app(
+        agents.WorkerOptions(
+            entrypoint_fnc=entrypoint,
+            prewarm_fnc=prewarm,
+            # Single shared GPU: keep exactly one warm runner so the models load once. The prod
+            # default (one per CPU, up to 4) would prewarm several runners and multiply VRAM —
+            # an OOM on a 16 GB card (each runner holds its own STT+TTS copy).
+            num_idle_processes=1,
+            # Loading weights — and downloading them on first run — far exceeds the 10 s default;
+            # allow generously (override with PERSONAVOICE_PREWARM_TIMEOUT).
+            initialize_process_timeout=float(os.getenv("PERSONAVOICE_PREWARM_TIMEOUT", "600")),
+        )
+    )
 
 
 if __name__ == "__main__":  # pragma: no cover - launched as a worker, not in tests

@@ -49,6 +49,18 @@ class TTSAdapter:
         """Convenience one-shot synthesis (used by the file-based pipeline)."""
         raise NotImplementedError(f"{self.name}.synthesize is not implemented yet")
 
+    async def warmup(self, voice: VoiceRef) -> None:
+        """Load the voice model so the first spoken sentence is fast.
+
+        Synthesizes a tiny phrase with the persona's actual `voice` so the weights (and, for a
+        cloning backend, the reference conditioning the first turn will use) are resident
+        before a caller speaks. No-op for stub adapters; the worker calls this once at startup
+        (see the agent's prewarm).
+        """
+        if not self.implemented:
+            return
+        await self.synthesize("Ready.", voice)
+
     async def clone_voice(self, sample_wav: bytes, name: str) -> VoiceRef:
         """Create a zero-shot voice clone from a short sample.
 
