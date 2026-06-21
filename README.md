@@ -1,0 +1,563 @@
+# Persona-Voice
+
+A real-time, open-source **speech-to-speech persona system**. You talk, and a chosen
+character talks back — in its own voice and style. It is built as a **modular cascade**:
+
+```
+speech in  →  STT  →  LLM brain (+ persona)  →  TTS  →  speech out
+```
+
+Three swappable stages give you voice cloning, per-persona fine-tuning, and a clear training
+path — things that end-to-end speech models do not do well today.
+
+Four personas ship out of the box:
+
+- **PM interviewer** and **HR interviewer** — practice for job interviews.
+- **Language teacher** — conversation practice (English first).
+- **Companion** — casual, friendly chat.
+
+The system runs as a **server on a CUDA GPU** in production (designed for a 16 GB card such as
+an RTX 4080; verified on an RTX 5090). The same code is fully developable on a **Mac (M-series)**
+through Mac-native backends. The client is thin: a single **Flutter** app for iOS and Android
+that only captures and plays audio. All the models run on the server.
+
+## What it can do
+
+- **Hold a real-time spoken conversation.** The reply **streams** sentence by sentence, so the
+  persona starts speaking before the full answer is ready. You can **interrupt it** (barge-in)
+  and it stops and listens.
+- **Switch personas at runtime** — by config, by API metadata, or mid-call from the client.
+  Each persona has its own prompt, behavior knobs, and a distinct voice.
+- **Clone a voice** from a short (~10 s) sample and make a persona speak in it.
+- **Fine-tune a persona "brain"** with a LoRA adapter when prompting is not enough.
+- **Fine-tune a high-fidelity voice** for a target speaker, beyond a zero-shot clone.
+- **Remember a user across sessions** — a consent-gated, per-user memory that recalls earlier
+  facts in later calls.
+- **Run the same code on two very different machines** (a Mac for development, a CUDA GPU for
+  production) by flipping one `BACKEND` switch.
+
+## How it works
+
+```
+┌─────────────┐   WebRTC (Opus)   ┌──────────────────────────────────────────────┐
+│ Flutter app │  ───────────────▶ │            Server (CUDA GPU / Mac)           │
+│  mic + spkr │  ◀─────────────── │                                              │
+└─────────────┘   audio stream    │  LiveKit Agent (transport, VAD, turn-taking) │
+                                   │      │                                       │
+                                   │      ▼                                       │
+                                   │  ┌───────┐   ┌────────────┐   ┌──────────┐   │
+                                   │  │  STT  │──▶│ LLM (brain)│──▶│   TTS    │   │
+                                   │  │adapter│   │  + persona │   │ adapter  │   │
+                                   │  └───────┘   │  LoRA      │   │ + voice  │   │
+                                   │              └─────┬──────┘   └──────────┘   │
+                                   │                    │                          │
+                                   │              ┌─────▼──────┐                   │
+                                   │              │   Memory   │ (RAG + profile)   │
+                                   │              └────────────┘                   │
+                                   └──────────────────────────────────────────────┘
+```
+
+Five design ideas hold it together:
+
+1. **A cascade, not one big model.** Three separate stages (STT, LLM, TTS) are easy to swap,
+   clone, and train.
+2. **Backends sit behind an interface.** Every stage has a base class and a `BACKEND=mac|cuda`
+   switch. The persona logic, the orchestration, and the client never change between machines.
+3. **Stream everything.** Transcribe while the user talks; feed LLM tokens into the TTS sentence
+   by sentence. This is what keeps the perceived latency low.
+4. **Thin client, fat server.** The client only moves audio over WebRTC. All models run on the
+   server.
+5. **Personas are config plus adapters.** A persona is a system prompt, optional LoRA adapter,
+   a voice, and a few behavior knobs — written in YAML and hot-swappable.
+
+### Backends (which model runs where)
+
+| Stage | Mac (dev) | CUDA (prod) | VRAM (CUDA) |
+|-------|-----------|-------------|-------------|
+| **STT** | `whisper_mlx` | `faster_whisper` / `parakeet` | ~2 GB |
+| **LLM** | `lmstudio` / `ollama` / `mlx_lm` | `vllm` | ~5–6 GB |
+| **TTS** | `kokoro` (fast, no clone) / `f5_mlx` (clone) | `orpheus` (presets) / `chatterbox` (clone) | ~3–4 GB |
+| **Glue** | LiveKit Agents | LiveKit Agents (identical) | — |
+| **Train** | `mlx-lm` LoRA | LLaMA-Factory QLoRA / F5-TTS | — |
+
+Select a backend with `BACKEND=mac|cuda`. Each backend's `config/backends/<backend>.yaml` names
+the adapter, the model, and the per-adapter options. Environment interpolation
+(`${VAR:-default}`) is supported, so one file can drive both the production stack and a dev box.
+
+### Latency budget (CUDA, time to first audio)
+
+| Step | Target |
+|------|--------|
+| Endpointing (VAD silence) | ~200 ms |
+| STT finalize | ~150 ms |
+| LLM time-to-first-token | ~200 ms |
+| TTS first audio chunk | ~200 ms |
+| WebRTC round-trip (local) | ~50 ms |
+| **Total to first audio** | **~600–900 ms** |
+
+On CUDA (RTX 5090) the streaming path hits this: with **Kokoro** (fast, no clone) the warm
+time-to-first-audio is about **0.58 s**; with **Chatterbox** (the cloning backend) about
+**1.3 s**. Both are selected by one environment variable, so "low latency" vs "cloning" is a
+one-line switch. A Mac is slower (TTS is the bottleneck) — use Kokoro for fast dev iterations.
+
+## Project status
+
+The system is feature-complete across the whole cascade: offline loop, streaming, the live
+LiveKit agent, four personas, voice cloning, persona LoRA training, cross-session memory, voice
+fine-tuning, and a hardening pass (eval, observability, security). It is verified at the logic
+level by the test suite (`pytest`, plus `ruff` and `mypy`), and the heavy or hardware-bound steps
+are verified on real hardware (a Mac M4 Max for dev, an RTX 5090 for CUDA).
+
+One thing needs a running **LiveKit server** to exercise live: the browser/phone back-and-forth
+with barge-in over WebRTC. That path is **verified on a real iPhone** (a full spoken conversation
+over the LAN against a self-hosted LiveKit SFU). The **Android** client code is written and
+analyzed, but it is **not verified on a device** (no Android hardware on hand).
+
+## Quickstart
+
+Requires Python 3.11+ (use **Python 3.12** for the Mac model libraries — see the note below).
+
+```bash
+# 1. Create a virtualenv and install the core package plus dev tools.
+python3 -m venv .venv
+source .venv/bin/activate
+pip install -e '.[dev]'
+
+# 2. Configure.
+cp .env.example .env        # defaults to BACKEND=mac
+
+# 3. Validate the config and load the adapters.
+python -m personavoice.server --check
+#   ...or: BACKEND=cuda python -m personavoice.server --check
+#   ...or: ./scripts/dev_server.sh
+
+# 4. Run the tests.
+pytest
+```
+
+The core install is intentionally light, so `--check` and the tests run on any machine without
+heavy ML wheels. To install the backend model libraries:
+
+```bash
+pip install -e '.[mac]'     # Mac: mlx-whisper, mlx-lm, kokoro, ...
+pip install -e '.[cuda]'    # CUDA: faster-whisper, ...
+```
+
+> **Use Python 3.12 for the `mac` extra.** Kokoro pulls in spaCy/`blis`, which has no wheels for
+> Python 3.13/3.14. With [uv](https://docs.astral.sh/uv/):
+> ```bash
+> uv venv --python 3.12 .venv312 && source .venv312/bin/activate
+> uv pip install -e '.[mac]'
+> ```
+
+## Usage
+
+### Offline voice loop (one machine, no LiveKit)
+
+Run a single turn through the cascade: a spoken `.wav` question in, a synthesized reply out.
+Needs the `mac` extra and a local LLM server.
+
+```bash
+# LLM: start LM Studio's local server and load a model (the default config expects
+# openai/gpt-oss-20b). Check it is up:  curl http://localhost:1234/v1/models
+# (Prefer Ollama? set adapter: ollama in config/backends/mac.yaml, then `ollama serve`.)
+
+# Speak into a prerecorded wav and hear the reply:
+personavoice-demo --wav question.wav --persona companion --play
+
+# ...or record from the mic (needs sounddevice + a mic):
+personavoice-demo --record 5 --persona language_teacher --play
+```
+
+It prints the transcript, the persona's reply, and per-stage timings, and writes the spoken reply
+to `reply.wav` (override with `--out`).
+
+> **Reasoning models:** local models like Qwen3 / gpt-oss emit a hidden thinking trace
+> (`reasoning_content`) that the adapter never speaks. Keep it short with
+> `extra_body: {reasoning_effort: low}` (already set in `mac.yaml`) so replies start fast and do
+> not spend `max_tokens` on thinking.
+
+### Streaming voice loop (one machine, no LiveKit)
+
+Same cascade, but the reply is **streamed sentence by sentence** instead of waiting for the whole
+answer. The persona starts speaking sooner.
+
+```bash
+# Hear each sentence as soon as it is synthesized.
+personavoice-stream-demo --wav question.wav --persona companion --play
+personavoice-stream-demo --record 5 --persona language_teacher --play
+```
+
+It writes one wav per sentence to `reply_stream/` and prints **time-to-first-token** and
+**time-to-first-audio** (the moment speech starts), which is well below the turn-based total
+because TTS overlaps LLM generation.
+
+### Live LiveKit agent (real-time, with barge-in)
+
+For a live conversation over WebRTC, run the LiveKit Agents worker. It needs the `livekit` extra
+and a LiveKit server (cloud or self-hosted):
+
+```bash
+pip install -e '.[livekit]'          # livekit-agents + Silero VAD plugin
+# Set LIVEKIT_URL / LIVEKIT_API_KEY / LIVEKIT_API_SECRET in .env, then:
+personavoice --serve                 # production worker (BACKEND from env)
+personavoice-agent dev               # hot-reload dev worker
+```
+
+The agent uses Silero VAD to find the end of each utterance, transcribes it, and streams the
+reply onto the published audio track. When VAD detects the user starting to speak, the
+`TurnController` cancels the in-flight LLM + TTS and clears the output queue (**barge-in**).
+Connect any LiveKit client — the [Agents Playground](https://agents-playground.livekit.io/) or
+the Flutter app — to talk.
+
+### Token server and self-hosted LiveKit
+
+A real client cannot join a room without a token, and it must never see the LiveKit secret. The
+**token server** mints short-lived join tokens and tells the client where to connect ("fat
+server, thin client"). It is pure standard library (no extra needed):
+
+```bash
+# Set LIVEKIT_URL / LIVEKIT_API_KEY / LIVEKIT_API_SECRET in .env, then:
+personavoice --token-server          # HTTP on PERSONAVOICE_HOST:PERSONAVOICE_PORT (default :8080)
+```
+
+| Route | Purpose |
+|-------|---------|
+| `GET /healthz` | liveness |
+| `GET /personas` | `{"personas": [{"id","name"}], "default": <id>}` |
+| `POST /token` | body `{"room"?, "identity"?, "persona"?}` → `{"url","token","room","identity","persona"}` |
+
+`room`/`identity` are generated when omitted. The persona is validated against the registry,
+embedded in the token metadata, and echoed back, so the client can select it with a data message
+after connecting. If `PERSONAVOICE_API_TOKEN` is set, requests need `Authorization: Bearer …`.
+Tokens are standard HS256 JWTs in LiveKit's documented format (`server/tokens.py`).
+
+**Self-host the SFU.** `docker-compose.livekit.yml` brings up a LiveKit server (dev keys
+`devkey`/`secret`) plus the token server:
+
+```bash
+docker compose -f docker-compose.livekit.yml up --build       # LiveKit SFU + token server
+LIVEKIT_URL=ws://localhost:7880 LIVEKIT_API_KEY=devkey \
+  LIVEKIT_API_SECRET=secret BACKEND=mac personavoice --serve   # the conversation agent
+```
+
+`LIVEKIT_URL` is the address the **client** dials, so from a phone use the machine's LAN IP
+(`ws://192.168.x.y:7880`) and open UDP 7882. Use TLS (`wss://`) and a real key/secret in
+production.
+
+### Flutter client (iOS + Android)
+
+`client/` is the cross-platform app. It fetches the persona list, asks for a token, connects,
+publishes the mic, shows a live transcript, and switches persona mid-call. The mic runs in
+**open-mic** mode (the server's VAD decides turns) or **push-to-talk** (hold to talk); audio goes
+to the loudspeaker by default; the status line shows LiveKit reconnects. The agent also publishes
+its spoken reply as a transcript, so the assistant's words appear in the client view.
+
+The **live voice loop is verified on a real iPhone** against the self-hosted LiveKit stack. The
+Android code is written and analyzed but **not verified on a device**. See
+[client/README.md](client/README.md) for the full setup, the native audio-session and telephony
+plumbing, and the iOS build notes.
+
+### Personas and voices
+
+A persona is a YAML file (`config/personas/*.yaml`): a system prompt plus knobs for the LLM
+(`temperature`, `max_tokens`), behavior (`turn_style`, `follow_up_probability`), and a logical
+`voice.ref`. The four shipped personas are `pm_interviewer`, `hr_interviewer`,
+`language_teacher`, and `companion`. Any demo or the live agent takes `--persona <id>`.
+
+Each persona points at a **logical voice** (for example `voices/companion_soft`). The **voice
+registry** (`config/voices.yaml`) maps that to a concrete preset per TTS backend, so the personas
+sound distinct on whichever backend is active:
+
+```yaml
+# config/voices.yaml
+companion_soft:
+  emotion: warm
+  presets: { kokoro: af_heart, orpheus: tara }   # Mac / CUDA
+pm_calm:
+  presets: { kokoro: am_michael, orpheus: leo }
+```
+
+A cloning backend (Chatterbox / F5) has no preset and falls back to its default voice, unless a
+**clone is assigned** to the persona (see below). `python -m personavoice.server --check` lists
+the loaded personas, voices, and clones, and warns if a persona will not sound distinct on the
+active backend.
+
+**Selecting a persona on the live agent.** The agent picks the persona in this order: the
+dispatch's job metadata, the room metadata (`{"persona": "hr_interviewer"}`), then the
+`PERSONAVOICE_PERSONA` environment variable (otherwise the first registered persona). A connected
+client can also **switch persona mid-call** by publishing a data message — a bare id
+(`hr_interviewer`) or `{"persona": "hr_interviewer"}`. The swap keeps the conversation history,
+and the registry reloads from disk first, so editing a persona file takes effect without a
+restart.
+
+### Voice cloning (zero-shot)
+
+Clone a voice from a short sample and make a persona speak in it. Cloning needs a cloning TTS
+backend — `f5_mlx` on Mac or `chatterbox` on CUDA (Kokoro and Orpheus are preset-only):
+
+```bash
+# Install a cloning backend (one-time):
+pip install -e '.[clone-mac]'        # F5-TTS-mlx (Apple Silicon; CC-BY-NC weights)
+#   ...or, cross-platform / CUDA:  pip install -e '.[clone]'   # Chatterbox (MIT)
+# Then set the TTS adapter to the cloning backend in config/backends/<backend>.yaml
+# (mac: adapter: f5_mlx;  cuda: adapter: chatterbox).
+
+# Clone from a wav (or --record 10 from the mic) and assign it to a persona:
+personavoice-clone --sample me.wav --name my_voice --assign companion
+personavoice-clone --record 10 --name my_voice --assign companion --say "Hello!" --play
+
+personavoice-clone --list             # cloned voices + their assignments
+personavoice-clone --unassign companion
+```
+
+A clone is a stored reference sample plus, for reference-text models (F5), its transcript
+(auto-filled by the cascade's STT). It lands under the clones directory
+(`PERSONAVOICE_CLONES_DIR`, default `<models>/clones`) with a `clones.json` manifest, so it
+**survives restarts** and the live agent picks it up at startup. Assigning a clone is
+non-destructive: it overlays the voice registry at resolve time and is only honored on a backend
+that can clone. Switching back to Kokoro/Orpheus simply restores the persona's preset voice.
+
+> **Licensing:** F5's default checkpoint has **CC-BY-NC** weights (non-commercial) — fine for Mac
+> dev. For anything you redistribute, clone with **Chatterbox** (MIT) on CUDA. See
+> **Models and licenses**.
+
+### Persona fine-tuning (LoRA)
+
+Train a per-persona LoRA when prompting is not enough. One CLI, `personavoice-train`, drives the
+whole loop (the heavy trainers are shelled out to, so the repo installs and tests without a GPU):
+
+```bash
+pip install -e '.[train]'        # Mac: mlx-lm (also in '.[mac]')
+
+# 1. Curate in-character data by self-chat (the persona LLM vs a user simulator).
+personavoice-train curate --persona hr_interviewer --num 20 --exchanges 4
+
+# 2. Train (mlx-lm on Mac; LLaMA-Factory QLoRA on CUDA with BACKEND=cuda).
+personavoice-train run --persona hr_interviewer --dry-run    # preview config + command
+personavoice-train run --persona hr_interviewer              # launch
+
+# 3a. Serve it: hot-swap with vLLM, then set the persona's llm.lora to the adapter name.
+#     docker compose -f docker-compose.yml -f docker-compose.lora.yml up -d vllm
+# 3b. ...or merge it into a standalone checkpoint.
+personavoice-train merge --persona hr_interviewer --adapter models/adapters/hr_interviewer
+
+# 4. Score persona adherence (prompt-only vs LoRA).
+personavoice-train eval --persona hr_interviewer --compare [--bare-prompt]
+```
+
+The dataset is the cascade's **messages-JSONL** shape, so curated data trains unchanged (and
+converts to ShareGPT for LLaMA-Factory). For the format, the CUDA dataset registration, the
+Blackwell trainer image, and the hyperparameters, see
+[training/persona_lora/README.md](training/persona_lora/README.md).
+
+A strong instruct base with the **full** persona prompt is already near its ceiling on the
+proxies, so the LoRA shows up as parity. With `--bare-prompt` (which drops the derived
+spoken-clean and turn-style directives) the LoRA measurably wins — it *internalizes* the persona's
+behavior beyond prompting.
+
+### Memory across sessions
+
+The assistant can remember a user across calls. Each turn it injects a compact **memory block**:
+an LLM-distilled profile (durable facts plus a rolling summary) and the most relevant prior turns
+for what was just said. It is **consent-gated** — nothing is stored or recalled until a user opts
+in — and keyed per user (`{"user": "..."}` room/job metadata, or the LiveKit participant
+identity). The core memory (store, profile, keyword recall, distill) needs **no extra**.
+
+```bash
+# Try it offline (no LiveKit). --user opts that id in and keys their memory:
+personavoice-stream-demo --wav intro.wav --persona companion --user sam   # records + distills
+personavoice-stream-demo --wav later.wav --persona companion --user sam   # recalls prior facts
+
+# Manage and inspect memory (the privacy surface):
+personavoice-memory --list                       # users, consent, turn/session counts
+personavoice-memory --show sam                    # profile (facts + summary) + recent turns
+personavoice-memory --grant sam [--training]      # opt in (recording / training use)
+personavoice-memory --consolidate sam             # (re)distill the profile via the LLM
+personavoice-memory --export sam --out sam.json   # portable dump   (privacy)
+personavoice-memory --delete sam                  # wipe everything (privacy)
+personavoice-memory --distill sam --out sam.jsonl # transcripts -> a persona-LoRA dataset (opt-in)
+```
+
+**Encryption at rest** is optional: set `PERSONAVOICE_MEMORY_KEY` (generate one with
+`pip install -e '.[memory]'` then `personavoice-memory --gen-key`) and stored conversations are
+Fernet-encrypted; leaving it unset stores plaintext (the dev default, flagged by `--check`).
+**Semantic recall** is an optional upgrade (`pip install -e '.[memory-embeddings]'`); the default
+keyword retriever needs nothing. Per-user `--export` and `--delete` satisfy the data
+portability/wipe controls, and transcripts can also **distill** into the persona-LoRA dataset
+(strictly opt-in via `--training`).
+
+### Voice fine-tuning (high fidelity)
+
+When a zero-shot clone is not faithful enough, **fine-tune** a high-fidelity voice for a target
+speaker. Where a clone is reference conditioning, a fine-tune adapts the TTS model itself to the
+speaker on a small dataset. One CLI, `personavoice-voice-train`, drives the loop. It is
+**CUDA-only** (the heavy trainers live in the CUDA training image, so the repo installs and tests
+without a GPU):
+
+```bash
+pip install -e '.[voice-eval]'        # speaker-similarity A/B (Resemblyzer)
+
+# 1. Build the target-speaker dataset (metadata.csv of audio|text; auto-transcribe with the STT).
+personavoice-voice-train dataset --voice my_voice --audio-dir clips/ --probe-durations
+
+# 2. Fine-tune (F5-TTS by default; Chatterbox for the MIT path). Preview, then launch on the GPU.
+personavoice-voice-train run --voice my_voice --engine f5 --dry-run
+personavoice-voice-train run --voice my_voice --engine f5 --config training/voice/configs/my_voice.f5.yaml
+
+# 3. A/B vs the zero-shot clone — speaker similarity to held-out real target clips.
+personavoice-voice-train eval --voice my_voice --clone my_clone --target-dir held_out/ --margin 0.02 --register
+
+# 4. Fold the winner into the registry and assign it (it outranks a clone for that persona).
+personavoice-voice-train register --voice my_voice --checkpoint models/finetuned/my_voice --assign companion
+personavoice-voice-train list
+```
+
+A fine-tuned voice lands under `<models>/finetuned` with a `finetuned.json` manifest. Once
+assigned, it takes precedence in the registry — **fine-tuned ▶ clone ▶ preset** — and the cloning
+adapters (Chatterbox / F5) load the trained checkpoint via `VoiceRef.model_path`. For the
+engines, the dataset format, the verified F5 runner, and the licensing trade-off, see
+[training/voice/README.md](training/voice/README.md).
+
+> **Licensing:** a voice fine-tuned with F5 inherits **CC-BY-NC** weights — fine for dev /
+> personal personas, not commercial redistribution. Fine-tune **Chatterbox** (MIT) for anything
+> you ship, and only fine-tune voices you are authorized to use. See **Models and licenses**.
+
+### Run on CUDA (production)
+
+The `cuda` backend mirrors the Mac cascade: `faster_whisper`/`parakeet` (STT), `vllm` (LLM),
+`orpheus`/`chatterbox` (TTS). The LLM is served by a separate **vLLM** process so the app image
+stays light; the STT and TTS models run in the persona-voice container.
+
+```bash
+# Bring up vLLM (Qwen2.5-7B-AWQ) + the persona-voice server on the GPU box.
+docker compose up --build
+#   vllm:         http://localhost:8000/v1   (OpenAI-compatible)
+#   personavoice: validates the cuda config against vLLM
+```
+
+Both services share one GPU. The compose file documents the VRAM budget (about 10–12 GB: vLLM
+4-bit ~6–7 GB + STT ~2 GB + Chatterbox ~2–3 GB, within 16 GB) and caps vLLM's
+`--gpu-memory-utilization` so STT/TTS fit. Orpheus is more expressive but runs its own in-process
+vLLM (tight on one card) — prefer **Chatterbox** (MIT) for the single-GPU stack by setting
+`adapter: chatterbox` in `config/backends/cuda.yaml`.
+
+Without Docker, run the pieces directly: `vllm serve Qwen/Qwen2.5-7B-Instruct-AWQ --quantization
+awq`, then `BACKEND=cuda personavoice-demo --wav question.wav` (needs the `cuda` extra plus
+`chatterbox-tts`).
+
+### Benchmarking latency
+
+`scripts/bench_latency.py` runs the turn-based pipeline N times and reports per-stage
+min/median/mean/max — use it to compare machines and to catch regressions:
+
+```bash
+python scripts/bench_latency.py --backend mac  --wav question.wav --runs 5
+python scripts/bench_latency.py --backend cuda --wav question.wav --runs 5 --json cuda.json
+```
+
+For the streaming "time to first audio", add `--stream`. You can sweep the TTS chunk sizes
+(`--first-chunk-chars` / `--max-chunk-chars`) and gate a run against the latency budget with
+`--budget-ms` (it exits non-zero if the median misses the budget):
+
+```bash
+# Sweep the first-chunk size and gate against the 900 ms time-to-first-audio budget.
+python scripts/bench_latency.py --backend cuda --wav q.wav --stream \
+    --first-chunk-chars 60 --budget-ms 900
+```
+
+The most effective latency lever is the early **first-chunk** clause break: it lets the persona
+start speaking before its opening sentence ends.
+
+### Eval, observability, and security
+
+**Automated eval and a dashboard.** Score STT word-error-rate, then gate the headline metrics
+green/red. `run_eval.py` exits non-zero when any metric is red, so it works as a CI gate:
+
+```bash
+python scripts/eval_stt.py --backend cuda --manifest clips.jsonl --json wer.json
+python scripts/run_eval.py --latency-json lat.json --wer-json wer.json \
+    --metrics persona.json --mos-ratings mos.json   # persona.json = {"persona_adherence": 0.92}
+```
+
+**Observability.** Set `PERSONAVOICE_LOG_FORMAT=json` for structured logs. The live agent logs a
+per-turn metrics record (STT / first-token / first-audio / total, plus barge-in and errors). A
+failed turn is logged and skipped — it never crashes the worker.
+
+**Load test and security.** Hammer the token server and confirm rate limiting kicks in:
+
+```bash
+PERSONAVOICE_RATE_LIMIT_RPS=20 personavoice --token-server   # token bucket, 429s over budget
+python scripts/loadtest.py --url http://localhost:8080 --requests 500 --concurrency 20 --token "$TOK"
+```
+
+In production, set `PERSONAVOICE_REQUIRE_AUTH=1` (the server then refuses to start wide-open), a
+strong `PERSONAVOICE_API_TOKEN`, and either `PERSONAVOICE_TLS_CERT`/`_KEY` or a TLS-terminating
+proxy. The token comparison is constant-time. See the hardening block in `.env.example` for the
+full production checklist.
+
+## Repository layout
+
+```
+config/
+  backends/{mac,cuda}.yaml   # which adapter + model per stage; the BACKEND switch
+  personas/*.yaml            # the four personas (prompt + voice + behavior)
+  voices.yaml                # voice registry: logical voice -> per-backend preset
+src/personavoice/
+  models.py                  # Persona, VoiceRef, VoiceDef, Transcript, Msg, configs
+  adapters/                  # stt/ llm/ tts/ — base classes + per-backend impls + factory
+  persona/                   # loader, prompt builder, registry
+  voice/                     # registry + zero-shot clones + fine-tuned voices
+  server/                    # settings, config, --check/--serve/--token-server; tokens.py
+  orchestrator/              # turn-based pipeline + chunker/streaming/turn/agent/endpointing
+  training/                  # persona LoRA + voice/ fine-tuning: dataset/config/finetune/eval
+  memory/                    # per-user store + profile + RAG + distill
+  eval/                      # WER + MOS + dashboard gating
+  obs/                       # structured logging + per-turn latency metrics
+client/                      # Flutter app (iOS + Android), LiveKit SDK
+training/persona_lora/       # LoRA configs, seed datasets, workflow docs
+training/voice/              # voice fine-tune configs, sample dataset, workflow docs
+scripts/
+  download_models.py         # pinned model manifest + downloader
+  bench_latency.py           # per-stage latency benchmark + budget gate (mac/cuda)
+  eval_stt.py                # STT word-error-rate over a clip manifest
+  run_eval.py                # aggregate eval artifacts into a green/red dashboard
+  loadtest.py                # token-server concurrency load test
+docker-compose.yml           # CUDA stack: vLLM + persona-voice server
+docker-compose.livekit.yml   # self-hosted LiveKit SFU + token server
+Dockerfile                   # CUDA server image (STT + TTS)
+tests/
+```
+
+## Models and licenses
+
+`python scripts/download_models.py --backend <mac|cuda> --list` prints the pinned manifest.
+
+| Stage | Mac | CUDA | License |
+|-------|-----|------|---------|
+| STT | `mlx-community/whisper-large-v3-turbo` | `Systran/faster-whisper-large-v3` | MIT |
+| LLM | LM Studio / Ollama (any loaded model) | `Qwen/Qwen2.5-7B-Instruct` (vLLM) | model-dependent |
+| TTS | `hexgrad/Kokoro-82M` | `canopylabs/orpheus-3b-0.1-ft` | Apache-2.0 (see caveats) |
+
+Licenses were verified against each model card (2026-06). Two caveats affect redistribution and
+commercial use:
+
+- **Orpheus-3b-0.1-ft** is tagged Apache-2.0, but its weights are fine-tuned from
+  **Llama-3.2-3B**, so Meta's Llama 3.2 Community License also applies. **Chatterbox**
+  (`ResembleAI/chatterbox`, MIT) is the clean-license CUDA alternative.
+- **F5-TTS** weights (the Mac cloning option and the default fine-tune engine) are **CC-BY-NC**
+  (non-commercial) because of the Emilia training set, even though the F5 *code* is MIT. So a
+  voice **fine-tuned** with F5 inherits CC-BY-NC too. For commercial cloning or fine-tuning, use
+  **Chatterbox** (MIT) on CUDA, or an Apache-licensed OpenF5 checkpoint.
+
+> Licenses drift — **re-verify before any redistribution.**
+
+## Development
+
+```bash
+pip install -e '.[dev]'
+pre-commit install      # ruff lint + format on commit
+ruff check . && ruff format --check .
+mypy src
+pytest
+```

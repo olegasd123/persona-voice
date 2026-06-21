@@ -1,0 +1,64 @@
+# Self-hosted LiveKit SFU + token server. Lightweight, no GPU — runs on the Mac for
+# dev and on the 4080 alongside the prod stack.
+#
+#   docker compose -f docker-compose.livekit.yml up --build
+#
+# Brings up:
+#   livekit       the WebRTC SFU. Dev mode uses API key `devkey` / secret `secret`.
+#   token-server  mints LiveKit join tokens for clients (Flutter app / Agents Playground).
+#
+# Then run the conversation agent on the host (it auto-joins rooms clients create):
+#
+#   LIVEKIT_URL=ws://localhost:7880 LIVEKIT_API_KEY=devkey LIVEKIT_API_SECRET=secret \
+#     BACKEND=mac personavoice --serve
+#
+# The Flutter client points at the token server (http://<host>:8080); it gets back the
+# LiveKit URL + a token and connects there. IMPORTANT: `LIVEKIT_URL` is the address the
+# *client* dials, so from a phone set it to the machine's LAN IP, e.g.
+#   LIVEKIT_URL=ws://192.168.1.50:7880 docker compose -f docker-compose.livekit.yml up
+#
+# WebRTC media needs UDP. Dev mode muxes RTC over UDP 7882; on a LAN you may also need to
+# open that port (and use the LAN IP above). For production, run LiveKit with TLS (wss://)
+# and a real key/secret instead of dev mode.
+
+# Separate project name from the main stack (so running both doesn't trigger orphan-container
+# warnings) but kept on the `persona-voice` prefix so they sort together in Docker Desktop.
+name: persona-voice-livekit
+
+services:
+  livekit:
+    image: livekit/livekit-server:latest
+    command: ["--dev", "--bind", "0.0.0.0"]
+    ports:
+      - "7880:7880"        # WebSocket signaling (ws://)
+      - "7881:7881"        # TCP fallback for WebRTC
+      - "7882:7882/udp"    # UDP media (RTC mux)
+    restart: unless-stopped
+
+  token-server:
+    # Same image as the prod server (different command) — keeps one image, not two.
+    image: personavoice/server:${TAG:-prod}
+    build:
+      context: .
+      dockerfile: Dockerfile
+    depends_on:
+      - livekit
+    environment:
+      - BACKEND=${BACKEND:-mac}
+      # The URL handed to clients — override with the LAN IP for phones (see header).
+      - LIVEKIT_URL=${LIVEKIT_URL:-ws://localhost:7880}
+      - LIVEKIT_API_KEY=${LIVEKIT_API_KEY:-devkey}
+      - LIVEKIT_API_SECRET=${LIVEKIT_API_SECRET:-secret}
+      - PERSONAVOICE_API_TOKEN=${PERSONAVOICE_API_TOKEN:-}
+      - PERSONAVOICE_PERSONA=${PERSONAVOICE_PERSONA:-companion}
+      - PERSONAVOICE_HOST=0.0.0.0
+      - PERSONAVOICE_PORT=8080
+    ports:
+      - "8080:8080"
+    command:
+      - python3.12
+      - -m
+      - personavoice.server
+      - --token-server
+      - --no-color
+    restart: unless-stopped

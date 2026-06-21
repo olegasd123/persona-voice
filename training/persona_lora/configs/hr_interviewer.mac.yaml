@@ -1,0 +1,18 @@
+# mlx-lm light LoRA for the HR interviewer persona (Mac / M4 Max).
+#   personavoice-train run --persona hr_interviewer --config training/persona_lora/configs/hr_interviewer.mac.yaml
+persona_id: hr_interviewer
+base_model: mlx-community/Qwen2.5-7B-Instruct-4bit
+backend: mac
+data_dir: training/persona_lora/datasets/hr_interviewer
+adapter_dir: models/adapters/hr_interviewer
+rank: 8
+alpha: 16.0
+dropout: 0.05
+num_layers: 16
+learning_rate: 1.0e-4
+batch_size: 4
+iters: 600
+max_seq_len: 2048
+steps_per_report: 10
+save_every: 100
+seed: 0

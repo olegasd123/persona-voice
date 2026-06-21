@@ -1,0 +1,95 @@
+# RTX 4080 (16 GB) production stack for Persona-Voice.
+#
+#   docker compose up --build      # start vLLM (LLM) + the persona-voice server
+#
+# Both services share the single GPU. Target VRAM budget (within 16 GB):
+#
+#   vLLM   Qwen2.5-7B-Instruct-AWQ (4-bit) + KV cache  : ~6-7 GB  (gpu_mem_util 0.45)
+#   STT    faster-whisper large-v3 (float16)           : ~2 GB
+#   TTS    Chatterbox (torch)                          : ~2-3 GB
+#                                                  total ≈ 10-12 GB, with headroom.
+#
+# Orpheus TTS runs its OWN in-process vLLM (+~6 GB) and is too tight alongside the LLM vLLM
+# on a single 4080 — prefer Chatterbox here (set `adapter: chatterbox` in
+# config/backends/cuda.yaml), or give Orpheus a second GPU.
+
+# `name:` pins the Compose project so Docker Desktop's Containers view always groups this
+# stack under "persona-voice" (independent of the directory name).
+name: persona-voice
+
+services:
+  vllm:
+    image: vllm/vllm-openai:latest
+    # Model / VRAM are env-interpolated; committed defaults fit a 16 GB 4080. A bigger card
+    # serves the unquantized 7B with `VLLM_MODEL=Qwen/Qwen2.5-7B-Instruct VLLM_GPU_UTIL=0.6`.
+    # `--quantization` is omitted on purpose: vLLM auto-detects AWQ from the model config, so the
+    # SAME command serves the AWQ build or the unquantized one with no flag change.
+    command:
+      - --model=${VLLM_MODEL:-Qwen/Qwen2.5-7B-Instruct-AWQ}
+      - --max-model-len=${VLLM_MAX_LEN:-8192}
+      - --gpu-memory-utilization=${VLLM_GPU_UTIL:-0.45}   # leave room for STT + TTS on the card
+      - --port=8000
+    ports:
+      - "8000:8000"
+    volumes:
+      - hf-cache:/root/.cache/huggingface
+      # Persona LoRA adapters — hot-load with docker-compose.lora.yml (--lora-modules).
+      - ./models:/models
+    environment:
+      - HUGGING_FACE_HUB_TOKEN=${HF_TOKEN:-}
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+    healthcheck:
+      # vllm/vllm-openai ships python3 (no `python`) but does ship curl; hit vLLM's /health.
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 20
+      start_period: 120s   # first run downloads the model
+    restart: unless-stopped
+
+  personavoice:
+    # Name the built image into the personavoice/ namespace (else Compose auto-names it
+    # `persona-voice-personavoice`). Build once; the livekit token-server reuses the same image.
+    image: personavoice/server:${TAG:-prod}
+    build:
+      context: .
+      dockerfile: Dockerfile
+    depends_on:
+      vllm:
+        condition: service_healthy
+    environment:
+      - BACKEND=cuda
+      # cuda.yaml's LLM base_url reads PERSONAVOICE_LLM_BASE_URL (defaults to localhost:8000);
+      # inside compose the vLLM server is reachable at the `vllm` service hostname.
+      - PERSONAVOICE_LLM_BASE_URL=http://vllm:8000/v1
+      - PERSONAVOICE_API_TOKEN=${PERSONAVOICE_API_TOKEN:-}
+      - HF_TOKEN=${HF_TOKEN:-}
+    ports:
+      - "8080:8080"
+    volumes:
+      - hf-cache:/models/hf      # share the HF cache so STT/TTS weights download once
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+    # Validate the cuda config against the running vLLM; the live
+    # streaming server (`personavoice serve`).
+    command:
+      - python3.12
+      - -m
+      - personavoice.server
+      - --check
+      - --no-color
+    restart: "no"
+
+volumes:
+  hf-cache:

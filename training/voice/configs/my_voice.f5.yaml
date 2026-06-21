@@ -1,0 +1,19 @@
+# F5-TTS voice fine-tune. Loaded by `personavoice-voice-train run --config ...`.
+# F5's default checkpoint weights are CC-BY-NC: use a fine-tuned F5 voice for dev / personal
+# personas, not commercial redistribution. For an MIT path, fine-tune Chatterbox instead.
+voice_name: my_voice
+engine: f5
+# The F5 base experiment to fine-tune from (F5TTS_v1_Base / F5TTS_Base / E2TTS_Base).
+base_model: F5TTS_v1_Base
+data_dir: training/voice/datasets/my_voice     # holds metadata.csv (+ wavs)
+output_dir: models/finetuned/my_voice
+dataset_name: my_voice
+speaker: my_voice
+# Hyperparameters (a short fine-tune on a small single-speaker set).
+epochs: 50
+learning_rate: 1.0e-5
+batch_size: 4
+grad_accum: 1
+warmup_updates: 200
+save_every: 1000
+tokenizer: pinyin                              # handles English; use char/custom otherwise

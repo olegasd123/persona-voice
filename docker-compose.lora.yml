@@ -1,0 +1,25 @@
+# Served-LoRA overlay for vLLM.
+#
+# Hot-loads a trained persona adapter so the prompt-only-vs-LoRA A/B
+# (`personavoice-train eval --persona <p> --compare`) routes to the served adapter. The persona's
+# `llm.lora` basename must match the served module name (left of the `=`).
+#
+#   docker compose -f docker-compose.yml -f docker-compose.lora.yml up -d vllm
+#
+# LoRA on a quantized (AWQ) base is fragile in vLLM — serve the unquantized base for the A/B:
+#   VLLM_MODEL=Qwen/Qwen2.5-7B-Instruct \
+#   docker compose -f docker-compose.yml -f docker-compose.lora.yml up -d vllm
+#
+# Point at a different adapter with VLLM_LORA_MODULES=<name>=/models/adapters/<name> (the
+# ./models bind mount in docker-compose.yml exposes models/adapters/<name> at /models/...).
+services:
+  vllm:
+    command:
+      - --model=${VLLM_MODEL:-Qwen/Qwen2.5-7B-Instruct-AWQ}
+      - --max-model-len=${VLLM_MAX_LEN:-8192}
+      - --gpu-memory-utilization=${VLLM_GPU_UTIL:-0.45}
+      - --enable-lora
+      - --max-lora-rank=${VLLM_MAX_LORA_RANK:-16}
+      - --lora-modules
+      - ${VLLM_LORA_MODULES:-hr_interviewer=/models/adapters/hr_interviewer}
+      - --port=8000

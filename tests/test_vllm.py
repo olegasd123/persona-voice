@@ -1,0 +1,70 @@
+"""vLLM adapter: shares OpenAI-compatible streaming with LM Studio, differs in base URL."""
+
+from __future__ import annotations
+
+import json
+from pathlib import Path
+
+import pytest
+
+from personavoice.adapters.llm._openai_compat import chat_url
+from personavoice.adapters.llm.vllm import VLLMAdapter
+from personavoice.models import Msg, Role
+from personavoice.persona import load_persona
+
+
+def _companion(config_dir: Path):
+    return load_persona(config_dir / "personas" / "companion.yaml")
+
+
+def _sse(obj: dict) -> str:
+    return f"data: {json.dumps(obj)}"
+
+
+def test_vllm_defaults() -> None:
+    adapter = VLLMAdapter(model="Qwen/Qwen2.5-7B-Instruct-AWQ")
+    assert adapter.name == "vllm"
+    assert adapter.implemented is True
+    assert adapter.default_base_url == "http://localhost:8000/v1"
+    assert adapter.check().ok
+    assert adapter.check().warnings == []  # implemented -> no stub warning
+
+
+async def test_vllm_streams_content_against_configured_url(
+    monkeypatch: pytest.MonkeyPatch, config_dir: Path
+) -> None:
+    httpx = pytest.importorskip("httpx")
+
+    lines = [
+        _sse({"choices": [{"delta": {"reasoning_content": "thinking"}}]}),  # must be skipped
+        _sse({"choices": [{"delta": {"content": "Sure"}}]}),
+        _sse({"choices": [{"delta": {"content": ", done."}}]}),
+        "data: [DONE]",
+    ]
+    body = ("\n\n".join(lines) + "\n\n").encode()
+    seen: dict[str, str] = {}
+
+    def handler(request: object) -> object:
+        seen["url"] = str(request.url)  # type: ignore[attr-defined]
+        return httpx.Response(200, content=body)
+
+    transport = httpx.MockTransport(handler)
+    real_async_client = httpx.AsyncClient
+
+    def patched_client(*args: object, **kwargs: object) -> object:
+        kwargs["transport"] = transport
+        return real_async_client(*args, **kwargs)
+
+    monkeypatch.setattr(httpx, "AsyncClient", patched_client)
+
+    # Override the default base URL via options, as cuda.yaml does with ${PERSONAVOICE_LLM_BASE_URL}.
+    adapter = VLLMAdapter(
+        model="Qwen/Qwen2.5-7B-Instruct-AWQ",
+        options={"base_url": "http://vllm:8000/v1"},
+    )
+    persona = _companion(config_dir)
+    messages = [Msg(role=Role.user, content="hi")]
+
+    tokens = [tok async for tok in adapter.stream_chat(messages, persona)]
+    assert tokens == ["Sure", ", done."]
+    assert seen["url"] == chat_url("http://vllm:8000/v1")
