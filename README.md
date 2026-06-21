@@ -129,7 +129,6 @@ cp .env.example .env        # defaults to BACKEND=mac
 # 3. Validate the config and load the adapters.
 python -m personavoice.server --check
 #   ...or: BACKEND=cuda python -m personavoice.server --check
-#   ...or: ./scripts/dev_server.sh
 
 # 4. Run the tests.
 pytest
