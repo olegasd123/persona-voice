@@ -10,8 +10,51 @@ ideas:
    conversation** (built on **multi-voice cloning**), **CEFR level** for language learners, and
    **person type / demeanor** (kind / natural / rude).
 
-Nothing here is implemented yet — this document is the spec. File paths and function names refer
-to the current tree so each item is grounded and actionable.
+Most of this is still spec, not code. File paths and function names refer to the current tree so
+each item is grounded and actionable. See the **Status** section below for the client/server
+scaffold that has since landed and what it changes about the remaining work.
+
+---
+
+## Status (as of 2026-06-23)
+
+A first **client scaffold + a thin slice of the `/personas` enrichment** have landed (commits
+`30a16b3`…`5473c8d`). This is the "thin client" layer the headline path put *last* — it now exists,
+ahead of the server-side session-options work it was meant to host. None of the actual
+session-options behavior (voice override / CEFR / demeanor) or voice cloning is implemented yet.
+
+**Landed — client (Flutter):**
+- Redesigned **persona-picker home screen** (`client/lib/screens/home_screen.dart`): a shelf of
+  persona cards (avatar, name, `description`, voice blurb, default / last-used tags, connecting
+  spinner); last-used persona floats to the top; connection chip + pull-to-refresh.
+- **Settings screen** split out (`client/lib/screens/settings_screen.dart`): server URL, API token,
+  display name, test-connection, default mic mode, theme.
+- **`AppPreferences`** model (`client/lib/models/app_preferences.dart`): default mic mode, theme,
+  last-called persona — persisted via `shared_preferences`. Owned at the app root
+  (`client/lib/main.dart`); light/dark theming.
+- `Persona` model gains `description` + `voice` (`client/lib/models/persona.dart`); call screen
+  applies the preferred mic mode before connecting. New tests: `app_preferences_test`,
+  `persona_test`, updated `token_client_test`.
+
+**Landed — server (small slice of Feature A/B groundwork):**
+- `Persona.description` field (`src/personavoice/models.py`); all four `config/personas/*.yaml`
+  carry a one-line `description`.
+- `GET /personas` now returns `{id, name, description, voice}` (was `{id, name}`); the voice blurb
+  is resolved through the new `VoiceRegistry.describe(ref)` (`src/personavoice/voice/registry.py`),
+  and `TokenService` takes an optional `VoiceRegistry` (`src/personavoice/server/token_server.py`).
+  Token-server tests updated.
+
+**What this changes about the plan:**
+- The headline trio's **client UI (§15 step 4 / Feature J)** is now partly built — the picker and
+  settings surfaces exist. The *remaining* client work is the **voice / CEFR / demeanor selectors**
+  on top of this scaffold, plus sending the chosen options in the `/token` body.
+- `GET /personas` is **no longer "unchanged"** (see §2.5 threading table) — it's already the richer
+  shape. CEFR / demeanor live in the `/token` request, not in `/personas`.
+- `VoiceRegistry.describe()` exists; the catalog work in **Feature B (§3.2)** still needs
+  `VoiceOption` / `catalog()` / `resolve_choice()`.
+
+Still entirely unimplemented: SessionOptions data model + directives (A), voice override plumbing
+(A/B), voice catalog + clone enrollment (B), and Features C–L.
 
 ---
 
@@ -157,7 +200,7 @@ def voice_ref_for(persona, backend, voices=None, *, voice_choice: str | None = N
 | `orchestrator/pipeline.py` | `Pipeline.options` field; `voice_ref_for(..., voice_choice)`; pass `options` to `build_messages` |
 | `orchestrator/streaming.py` | `StreamingPipeline.options` field; same wiring in `stream_response` |
 | `orchestrator/agent.py` | `PersonaAgent.options` + `set_options()`; `entrypoint` parses `SessionOptions` from metadata; extend `_on_data` to accept option changes (a `session_from_metadata` next to `persona_id_from_metadata`) |
-| `server/token_server.py` | `issue(..., voice, cefr, demeanor)` validates + embeds in metadata JSON; `personas()` unchanged |
+| `server/token_server.py` | `issue(..., voice, cefr, demeanor)` validates + embeds in metadata JSON. `personas()` already enriched (`description` + `voice` blurb, see Status); leave as-is |
 | `orchestrator/stream_demo.py`, `demo.py` | `--voice` / `--cefr` / `--demeanor` flags so it is testable offline |
 
 ### 2.6 Tests
@@ -222,7 +265,9 @@ class VoiceRegistry:
 ```
 
 This reuses `ClonesStore.voice_ref(name, tts_name, emotion=...)` and
-`FinetunedVoicesStore.voice_ref(...)`, which already build the right `VoiceRef`.
+`FinetunedVoicesStore.voice_ref(...)`, which already build the right `VoiceRef`. The registry also
+already has `describe(ref)` (landed for the `/personas` voice blurb, see Status) — `VoiceOption` can
+reuse it for the human-readable name in the catalog.
 
 ### 3.3 Clone enrollment — server side (`src/personavoice/server/`)
 
@@ -421,10 +466,13 @@ Pairs with Feature H for visibility.
 
 ## 11. Feature J — Web client
 
-Only the Flutter mobile app exists (plus the generic Agents Playground). A purpose-built browser
-client (LiveKit JS SDK) removes the install barrier, is the natural home for the **voice picker**
-(Feature B) and the **session report** (Feature E), and is easy to demo. Reuses the token server
-and `/personas` + `/voices` routes unchanged.
+Only the Flutter mobile app exists (plus the generic Agents Playground). The Flutter app now has a
+real **persona picker + Settings surface** (see Status) — the natural place to add the voice / CEFR /
+demeanor selectors before standing up a separate web client. A purpose-built browser client
+(LiveKit JS SDK) is still worthwhile to remove the install barrier and is the natural home for the
+**voice picker** (Feature B) and the **session report** (Feature E); it reuses the token server and
+`/personas` + `/voices` routes. Treat the web client as additive, not a prerequisite for the
+session-options UI.
 
 ---
 
@@ -462,7 +510,9 @@ Strengthens the consent story already built (`personavoice-memory --show/--expor
    validation + offline flags on the demos. Fully testable without the client.
 3. **B** — voice **catalog** + `resolve_choice` + the **clone enrollment** endpoints, so the user
    has a real library to pick from. Document the cloning-backend requirement.
-4. **J/Web or Flutter** — the picker + settings UI on top of `/voices`, `/personas`, and the
-   `/token` body.
+4. **Flutter (scaffold landed) / Web** — the persona picker + Settings surface already exist
+   (see Status). Remaining: add **voice / CEFR / demeanor selectors** on top, wire them into the `/token`
+   body, and consume `/voices` once Feature B lands. A separate web client is optional/additive.
 
-Steps 1–3 are server-only and unit-testable; the client UI is the last, thinnest layer.
+Steps 1–3 are server-only and unit-testable; the client UI is the last, thinnest layer — and its
+scaffold (picker + settings + preferences) is already in place.
