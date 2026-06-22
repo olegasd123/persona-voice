@@ -295,6 +295,7 @@ class _PersonaCard extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
+    final isDark = scheme.brightness == Brightness.dark;
     final subtitle = persona.description.isNotEmpty ? persona.description : persona.id;
     return Opacity(
       opacity: disabled ? 0.5 : 1,
@@ -334,8 +335,12 @@ class _PersonaCard extends StatelessWidget {
                               overflow: TextOverflow.ellipsis,
                             ),
                           ),
-                          if (isLastUsed) _MiniTag('Last used', scheme.tertiaryContainer,
-                              scheme.onTertiaryContainer)
+                          if (isLastUsed)
+                            _MiniTag(
+                              'Last used',
+                              isDark ? Colors.green.shade800 : Colors.green.shade100,
+                              isDark ? Colors.green.shade100 : Colors.green.shade800,
+                            )
                           else if (isDefault) _MiniTag('Default',
                               scheme.secondaryContainer, scheme.onSecondaryContainer),
                         ],
