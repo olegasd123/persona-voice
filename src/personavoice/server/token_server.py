@@ -13,7 +13,7 @@ dependency. The request handling lives in `TokenService` (pure, unit-tested); th
 Endpoints (all JSON, permissive CORS so a browser client / Playground can call them):
 
     GET  /healthz          -> {"status": "ok", "backend": ...}
-    GET  /personas         -> {"personas": [{"id","name"}], "default": <id>}
+    GET  /personas         -> {"personas": [{"id","name","description","voice"}], "default": <id>}
     POST /token            -> mint a token; body: {"room"?, "identity"?, "persona"?}
     GET  /token?room=&identity=&persona=   (same, for quick manual testing)
 
@@ -38,6 +38,7 @@ from typing import Any
 from urllib.parse import parse_qs, urlparse
 
 from ..persona.registry import PersonaRegistry
+from ..voice.registry import VoiceRegistry
 from .config import Settings
 from .ratelimit import RateLimiter, rate_limiter_from_env
 from .security import audit_security, has_errors
@@ -138,11 +139,15 @@ class TokenService:
         *,
         default_persona: str,
         backend: str = "",
+        voices: VoiceRegistry | None = None,
     ) -> None:
         self._config = config
         self._registry = registry
         self._default_persona = default_persona
         self._backend = backend
+        # Optional: resolves a persona's voice ref to a human description for the picker.
+        # None (e.g. in unit tests) just omits the voice blurb.
+        self._voices = voices
 
     def check_auth(self, authorization: str | None) -> None:
         """Enforce the optional bearer token. No-op when `api_token` is unset (dev mode)."""
@@ -157,10 +162,22 @@ class TokenService:
             raise Unauthorized("invalid API token")
 
     def personas(self) -> dict[str, Any]:
-        """List selectable personas (hot-reloaded from disk) and the default id."""
+        """List selectable personas (hot-reloaded from disk) and the default id.
+
+        Each entry carries enough for a rich picker: a one-line `description` and a
+        human `voice` blurb (resolved via the voice registry, "" when unavailable).
+        """
         self._registry.reload()
         return {
-            "personas": [{"id": p.id, "name": p.name} for p in self._registry.all()],
+            "personas": [
+                {
+                    "id": p.id,
+                    "name": p.name,
+                    "description": p.description,
+                    "voice": self._voices.describe(p.voice.ref) if self._voices else "",
+                }
+                for p in self._registry.all()
+            ],
             "default": self._default_persona,
         }
 
@@ -219,11 +236,14 @@ def build_service(settings: Settings | None = None) -> TokenService:
     default_persona = os.getenv("PERSONAVOICE_PERSONA", "").strip()
     if default_persona not in registry:
         default_persona = registry.ids()[0] if len(registry) else ""
+    # Voice descriptions for the picker; tolerates a missing voices.yaml (empty registry).
+    voices = VoiceRegistry.load(settings.voices_path)
     return TokenService(
         TokenServiceConfig.from_env(),
         registry,
         default_persona=default_persona,
         backend=settings.backend,
+        voices=voices,
     )
 
 

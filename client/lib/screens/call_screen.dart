@@ -13,11 +13,16 @@ class CallScreen extends StatefulWidget {
     required this.session,
     required this.grant,
     required this.personas,
+    this.initialMicMode = MicMode.openMic,
   });
 
   final VoiceSession session;
   final JoinGrant grant;
   final List<Persona> personas;
+
+  /// The mic mode the call opens in (the user's default from Settings). Applied before
+  /// connecting so push-to-talk stays muted through warm-up rather than auto-going-live.
+  final MicMode initialMicMode;
 
   @override
   State<CallScreen> createState() => _CallScreenState();
@@ -30,7 +35,16 @@ class _CallScreenState extends State<CallScreen> {
   void initState() {
     super.initState();
     _session.addListener(_onChange);
-    _session.connect(widget.grant);
+    _start();
+  }
+
+  Future<void> _start() async {
+    // Apply the preferred mic mode first (no-op for the default open-mic) so warm-up honours
+    // push-to-talk and doesn't bring the mic live before the user holds the talk button.
+    if (widget.initialMicMode != _session.micMode) {
+      await _session.setMicMode(widget.initialMicMode);
+    }
+    await _session.connect(widget.grant);
   }
 
   void _onChange() {

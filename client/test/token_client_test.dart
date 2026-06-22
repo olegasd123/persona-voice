@@ -19,7 +19,12 @@ void main() {
       return http.Response(
         jsonEncode({
           'personas': [
-            {'id': 'companion', 'name': 'Companion'},
+            {
+              'id': 'companion',
+              'name': 'Companion',
+              'description': 'A warm, attentive friend.',
+              'voice': 'warm, soft, feminine',
+            },
             {'id': 'hr_interviewer', 'name': 'HR Interviewer'},
           ],
           'default': 'companion',
@@ -31,6 +36,12 @@ void main() {
         await TokenClient(_settings(), httpClient: mock).fetchPersonas();
     expect(personas.map((p) => p.id), ['companion', 'hr_interviewer']);
     expect(defaultId, 'companion');
+    // Rich fields parse when present…
+    expect(personas.first.description, 'A warm, attentive friend.');
+    expect(personas.first.voice, 'warm, soft, feminine');
+    // …and default to empty when the server omits them (older server).
+    expect(personas[1].description, '');
+    expect(personas[1].voice, '');
   });
 
   test('requestToken posts persona + identity and parses the grant', () async {

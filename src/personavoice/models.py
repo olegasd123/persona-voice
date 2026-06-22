@@ -125,6 +125,8 @@ class Persona(BaseModel):
 
     id: str
     name: str
+    # One-line blurb for client persona pickers (the system prompt is too long to show).
+    description: str = ""
     system_prompt: str
     llm: LLMSettings
     voice: VoiceSettings

@@ -131,6 +131,16 @@ class VoiceRegistry:
         entry = self._voices.get(self._key(ref))
         return bool(entry and tts_name in entry.presets)
 
+    def describe(self, ref: str) -> str:
+        """Human description of a voice `ref` (`config/voices.yaml` `description`).
+
+        Backend-independent — the character of the voice ("warm, soft, feminine"), not the
+        per-backend preset. Empty string when the voice is unknown, so callers can treat it
+        as "no detail" without special-casing.
+        """
+        entry = self._voices.get(self._key(ref))
+        return entry.description if entry else ""
+
     @property
     def clones(self) -> ClonesStore | None:
         return self._clones
