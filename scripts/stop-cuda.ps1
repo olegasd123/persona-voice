@@ -1,7 +1,7 @@
 <#
   Persona-Voice - stop the production stack on Windows.
 
-  Normally Ctrl+C in run-prod-windows.ps1 tears everything down. Use this as a fallback when a
+  Normally Ctrl+C in run-cuda.ps1 tears everything down. Use this as a fallback when a
   run was killed without cleanup (closed window, crash), or to stop containers started by hand.
 #>
 $ErrorActionPreference = 'Continue'
