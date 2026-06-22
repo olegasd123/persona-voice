@@ -1,33 +1,37 @@
 #!/usr/bin/env bash
 # Persona-Voice - start the DEV stack on macOS (M4 Max) and run the live agent.
 #
-#   ./scripts/run-dev-mac.sh
+# This is the FAST path: it assumes setup-mac.sh has already done the one-time work
+# (installed deps, built/pulled the Docker images). On a fresh checkout run setup-mac once,
+# then:
+#
+#   ./scripts/setup-mac.sh   # one-time
+#   ./scripts/run-mac.sh     # every run
 #
 # What it does (one command, then leave it running):
 #   1. starts the self-hosted LiveKit SFU + token server in Docker,
 #   2. runs the conversation worker (BACKEND=mac) in the FOREGROUND.
 #
 # Press Ctrl+C to stop: the worker exits and the LiveKit containers are torn down (trap).
-# If a run dies without cleanup, run ./scripts/stop-dev-mac.sh.
+# If a run dies without cleanup, run ./scripts/stop-mac.sh.
 #
 # The brain on mac is LM Studio (or Ollama), NOT vLLM - start LM Studio and load a model first
 # (config/backends/mac.yaml -> openai/gpt-oss-20b by default). This script warns if it is down.
 #
-# Works on a fresh machine (Docker + a .venv312 present, no images yet): the token-server image
-# is built on first run. Override the dialed LAN IP with PV_LIVEKIT_IP=<addr>; skip the
-# dependency check with NO_INSTALL=1.
+# Override the dialed LAN IP with PV_LIVEKIT_IP=<addr>.
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$REPO_ROOT"
 
-# --- venv python (created e.g. with: uv venv --python 3.12 .venv312 && uv pip install -e '.[mac,livekit]')
+# --- venv python (created by setup-mac.sh) --------------------------------------------------
 if [[ -x ".venv312/bin/python" ]]; then
     PY=".venv312/bin/python"
 elif [[ -n "${VIRTUAL_ENV:-}" ]]; then
     PY="python"
 else
-    PY="python3"
+    echo "No .venv312 found. Run the one-time setup first:  ./scripts/setup-mac.sh"
+    exit 1
 fi
 
 # --- LAN IP the phone dials (dynamic, override with PV_LIVEKIT_IP) --------------------------
@@ -53,15 +57,8 @@ export LIVEKIT_API_KEY="${LIVEKIT_API_KEY:-devkey}"      # dev keys; set real on
 export LIVEKIT_API_SECRET="${LIVEKIT_API_SECRET:-secret}"
 export LIVEKIT_URL="ws://${HOST_IP}:7880"
 
-# --- preflight -----------------------------------------------------------------------------
+# --- preflight (cheap checks only; the one-time work lives in setup-mac.sh) -----------------
 docker info >/dev/null 2>&1 || { echo "Docker is not running. Start Docker Desktop and retry."; exit 1; }
-
-if [[ "${NO_INSTALL:-0}" != "1" ]]; then
-    if ! "$PY" -c 'import livekit.agents' >/dev/null 2>&1; then
-        echo "Installing the 'livekit' extra (one-time)..."
-        "$PY" -m pip install -e '.[livekit]'
-    fi
-fi
 
 # --- teardown on exit (Ctrl+C) -------------------------------------------------------------
 _cleaned=0
@@ -77,8 +74,9 @@ trap cleanup INT TERM EXIT
 
 # --- run -----------------------------------------------------------------------------------
 echo "LAN IP: $HOST_IP"
+# No --build here: setup-mac.sh builds the token-server image.
 echo "[1/2] Starting LiveKit SFU + token server..."
-docker compose -f docker-compose.livekit.yml up -d --build
+docker compose -f docker-compose.livekit.yml up -d
 
 LM_URL="${LMSTUDIO_BASE_URL:-http://localhost:1234/v1}"
 if ! curl -sf "${LM_URL}/models" >/dev/null 2>&1; then

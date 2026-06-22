@@ -1,10 +1,16 @@
 <#
-  Persona-Voice - start the PRODUCTION stack on Windows (CUDA) and run the live agent.
+  Persona-Voice - start the PRODUCTION (CUDA) stack on Windows and run the live agent.
 
-  Usage (from anywhere; paths are resolved relative to this script):
-    .\scripts\run-prod-windows.ps1            # auto-detect the GPU (RTX 5090 / RTX 4080)
-    .\scripts\run-prod-windows.ps1 -Gpu 5090  # force the 32 GB unquantized profile
-    .\scripts\run-prod-windows.ps1 -Gpu 4080  # force the 16 GB AWQ (4-bit) profile
+  This is the FAST path: it assumes setup-cuda.ps1 has already done the one-time work
+  (installed deps, pulled/built the Docker images, pre-downloaded the host STT/TTS weights).
+  On first run, or after a fresh checkout, run setup-cuda once:
+
+    .\scripts\setup-cuda.ps1
+
+  Then start the stack (paths resolve relative to this script):
+    .\scripts\run-cuda.ps1            # auto-detect the GPU (RTX 5090 / RTX 4080)
+    .\scripts\run-cuda.ps1 -Gpu 5090  # force the 32 GB unquantized profile
+    .\scripts\run-cuda.ps1 -Gpu 4080  # force the 16 GB AWQ (4-bit) profile
 
   What it does (one command = the whole "[1]" sequence):
     1. picks a GPU profile (model + VRAM fraction),
@@ -14,21 +20,17 @@
     5. runs the conversation worker in the FOREGROUND.
 
   Press Ctrl+C to stop: the worker exits and every container is torn down (the "[2]"
-  sequence) by the finally{} block. If a run dies without cleanup, run stop-prod-windows.ps1.
-
-  Works on a fresh machine (Docker + a .venv312 present, but no images yet): the LiveKit
-  token-server image is built and the vLLM image is pulled on first run.
+  sequence) by the finally{} block. If a run dies without cleanup, run stop-cuda.ps1.
 
   Overrides (env vars): PV_LIVEKIT_IP forces the LAN IP the phone dials; LIVEKIT_API_KEY /
-  LIVEKIT_API_SECRET override the dev keys; -NoInstall skips the dependency check.
+  LIVEKIT_API_SECRET override the dev keys.
 #>
 [CmdletBinding()]
 param(
     [ValidateSet('auto', '5090', '4080')]
     [string]$Gpu = 'auto',
     [string]$HostIp = $env:PV_LIVEKIT_IP,
-    [int]$VllmTimeoutSec = 600,
-    [switch]$NoInstall
+    [int]$VllmTimeoutSec = 600
 )
 
 $ErrorActionPreference = 'Stop'
@@ -62,7 +64,7 @@ function Resolve-GpuProfile {
 
 function Wait-Vllm {
     param([int]$TimeoutSec)
-    Write-Host "Waiting for vLLM at http://localhost:8000/health (first run downloads the model)..." -ForegroundColor Cyan
+    Write-Host 'Waiting for vLLM at http://localhost:8000/health (first run downloads the model; later runs just load it into VRAM)...' -ForegroundColor Cyan
     $deadline = (Get-Date).AddSeconds($TimeoutSec)
     while ((Get-Date) -lt $deadline) {
         try {
@@ -111,22 +113,13 @@ $env:PERSONAVOICE_STT_COMPUTE = 'float16'
 $env:PERSONAVOICE_TTS_ADAPTER = 'chatterbox'   # Windows-native; Orpheus needs its own in-process vLLM
 $env:PERSONAVOICE_TTS_DEVICE = 'cuda'
 
-# --- preflight -----------------------------------------------------------------------------
+# --- preflight (cheap checks only; the one-time work lives in setup-cuda.ps1) ---------------
 $dockerOk = $false
 try { docker info 2>$null | Out-Null; $dockerOk = ($LASTEXITCODE -eq 0) } catch { $dockerOk = $false }
 if (-not $dockerOk) { throw 'Docker is not running. Start Docker Desktop and retry.' }
 
 if (-not (Test-Path $Py)) {
-    throw "Virtualenv not found at $Py.`n  Create it:  py -3.12 -m venv .venv312`n  Install:    .\.venv312\Scripts\python.exe -m pip install -e `".[cuda,livekit]`""
-}
-if (-not $NoInstall) {
-    $haveLivekit = $false
-    try { & $Py -c 'import livekit.agents' 2>$null; $haveLivekit = ($LASTEXITCODE -eq 0) } catch { $haveLivekit = $false }
-    if (-not $haveLivekit) {
-        Write-Host "Installing the 'livekit' extra (one-time)..." -ForegroundColor Cyan
-        & $Py -m pip install -e '.[livekit]'
-        if ($LASTEXITCODE -ne 0) { throw 'pip install -e .[livekit] failed.' }
-    }
+    throw "Virtualenv not found at $Py.`n  Run the one-time setup first:  .\scripts\setup-cuda.ps1"
 }
 
 # --- run -----------------------------------------------------------------------------------
@@ -138,9 +131,11 @@ try {
     docker compose up -d vllm
     if ($LASTEXITCODE -ne 0) { throw 'Failed to start vLLM.' }
 
+    # No --build here: setup-cuda.ps1 builds the token-server image. Rebuilding it on every
+    # run was the bulk of the per-start overhead.
     Write-Host '[2/3] Starting LiveKit SFU + token server...' -ForegroundColor Cyan
-    docker compose -f docker-compose.livekit.yml up -d --build
-    if ($LASTEXITCODE -ne 0) { throw 'Failed to start LiveKit / token server.' }
+    docker compose -f docker-compose.livekit.yml up -d
+    if ($LASTEXITCODE -ne 0) { throw 'Failed to start LiveKit / token server. If the image is missing, run .\scripts\setup-cuda.ps1.' }
 
     Wait-Vllm -TimeoutSec $VllmTimeoutSec
 

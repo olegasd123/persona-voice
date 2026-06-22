@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Persona-Voice - stop the dev stack on macOS. Fallback for when run-dev-mac.sh was killed
+# Persona-Voice - stop the dev stack on macOS. Fallback for when run-mac.sh was killed
 # without running its own cleanup (closed terminal, crash).
 set -uo pipefail
 
