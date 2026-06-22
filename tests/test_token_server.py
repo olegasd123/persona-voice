@@ -12,6 +12,7 @@ from pathlib import Path
 import pytest
 
 from personavoice.persona.registry import PersonaRegistry
+from personavoice.server.config import Settings
 from personavoice.server.ratelimit import RateLimiter
 from personavoice.server.token_server import (
     BadRequest,
@@ -23,6 +24,7 @@ from personavoice.server.token_server import (
     make_server,
 )
 from personavoice.server.tokens import decode_token
+from personavoice.voice.registry import VoiceRegistry
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 PERSONAS_DIR = REPO_ROOT / "config" / "personas"
@@ -41,6 +43,7 @@ def make_service(
     api_token: str | None = None,
     configured: bool = True,
     default: str = "companion",
+    voices: VoiceRegistry | None = None,
 ) -> TokenService:
     config = TokenServiceConfig(
         livekit_url="wss://livekit.example:7880" if configured else "",
@@ -48,7 +51,9 @@ def make_service(
         api_secret=SECRET if configured else "",
         api_token=api_token,
     )
-    return TokenService(config, registry, default_persona=default, backend="mac")
+    return TokenService(
+        config, registry, default_persona=default, backend="mac", voices=voices
+    )
 
 
 # --- TokenService.issue ---------------------------------------------------------------
@@ -122,8 +127,27 @@ def test_personas_lists_ids_and_default(registry: PersonaRegistry) -> None:
     data = svc.personas()
     ids = {p["id"] for p in data["personas"]}
     assert {"companion", "hr_interviewer"} <= ids
-    assert all("name" in p for p in data["personas"])
+    assert all({"name", "description", "voice"} <= p.keys() for p in data["personas"])
     assert data["default"] == "companion"
+
+
+def test_personas_includes_description_and_voice_blurb(registry: PersonaRegistry) -> None:
+    voices = VoiceRegistry.load(
+        Settings(
+            backend="mac", config_dir=REPO_ROOT / "config", models_dir=REPO_ROOT / "models"
+        ).voices_path
+    )
+    svc = make_service(registry, default="companion", voices=voices)
+    companion = next(p for p in svc.personas()["personas"] if p["id"] == "companion")
+    # description comes from the persona file; voice blurb resolves via config/voices.yaml.
+    assert companion["description"]
+    assert companion["voice"] == "warm, soft, feminine"
+
+
+def test_personas_voice_blank_without_registry(registry: PersonaRegistry) -> None:
+    # No voice registry injected (the default) -> voice blurb is "", not an error.
+    svc = make_service(registry, default="companion")
+    assert all(p["voice"] == "" for p in svc.personas()["personas"])
 
 
 # --- config + build_service -----------------------------------------------------------
@@ -160,8 +184,6 @@ def test_config_from_env_bad_ttl_raises(monkeypatch: pytest.MonkeyPatch) -> None
 def test_build_service_defaults_to_first_persona_when_env_unknown(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    from personavoice.server.config import Settings
-
     monkeypatch.setenv("PERSONAVOICE_PERSONA", "does-not-exist")
     settings = Settings(
         backend="mac", config_dir=REPO_ROOT / "config", models_dir=REPO_ROOT / "models"
