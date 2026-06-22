@@ -2,8 +2,8 @@
   Persona-Voice - start the PRODUCTION (CUDA) stack on Windows and run the live agent.
 
   This is the FAST path: it assumes setup-cuda.ps1 has already done the one-time work
-  (installed deps, pulled/built the Docker images, primed the model caches). On first run,
-  or after a fresh checkout, run setup-cuda once:
+  (installed deps, pulled/built the Docker images, pre-downloaded the host STT/TTS weights).
+  On first run, or after a fresh checkout, run setup-cuda once:
 
     .\scripts\setup-cuda.ps1
 
@@ -64,7 +64,7 @@ function Resolve-GpuProfile {
 
 function Wait-Vllm {
     param([int]$TimeoutSec)
-    Write-Host 'Waiting for vLLM at http://localhost:8000/health (loading the model into VRAM)...' -ForegroundColor Cyan
+    Write-Host 'Waiting for vLLM at http://localhost:8000/health (first run downloads the model; later runs just load it into VRAM)...' -ForegroundColor Cyan
     $deadline = (Get-Date).AddSeconds($TimeoutSec)
     while ((Get-Date) -lt $deadline) {
         try {

@@ -1,7 +1,8 @@
 # Setup / run / stop scripts
 
 There are two phases. **`setup-*` is one-time** (installs deps, pulls + builds the Docker
-images, primes the model caches) — run it on a fresh machine or after a dependency change.
+images, pre-downloads the host model weights) — run it on a fresh machine or after a
+dependency change. It does not start any server.
 **`run-*` is every-run** — it starts the stack and the live conversation worker in the
 foreground; **press `Ctrl+C` to stop** and every container it started is torn down.
 
@@ -18,7 +19,7 @@ The stop scripts are only needed if a run was killed without cleanup (closed win
 ## Windows production
 
 ```powershell
-.\scripts\setup-cuda.ps1            # ONCE: deps + images + model caches
+.\scripts\setup-cuda.ps1            # ONCE: deps + images + host STT/TTS weights (no server started)
 .\scripts\run-cuda.ps1              # then, every run (auto-detect the GPU)
 .\scripts\run-cuda.ps1 -Gpu 5090    # force the 32 GB profile
 .\scripts\run-cuda.ps1 -Gpu 4080    # force the 16 GB profile
@@ -33,9 +34,9 @@ The GPU profile is auto-detected with `nvidia-smi` (override with `-Gpu`):
 
 `run-cuda` starts vLLM + LiveKit + the token server in Docker, waits for vLLM to be healthy,
 then runs the worker (`personavoice.server --serve`). TTS is forced to Chatterbox
-(Windows-native). `setup-cuda` first downloads the vLLM model into the shared `hf-cache`
-volume and the host STT/TTS weights, so the first `run-cuda` doesn't stall on downloads
-(`-SkipModelPrime` does deps + images only).
+(Windows-native). `setup-cuda` does not start any server: it installs deps, pulls/builds the
+images, and pre-downloads the host STT/TTS weights. The vLLM model caches into the shared
+`hf-cache` volume on the **first `run-cuda`** (when vLLM actually starts) and is reused after.
 
 > The `.bat` files are thin wrappers around the `.ps1` scripts (PowerShell gives reliable
 > `Ctrl+C` → teardown). Running the `.ps1` directly avoids the `Terminate batch job?` prompt.

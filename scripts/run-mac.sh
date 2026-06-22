@@ -2,8 +2,8 @@
 # Persona-Voice - start the DEV stack on macOS (M4 Max) and run the live agent.
 #
 # This is the FAST path: it assumes setup-mac.sh has already done the one-time work
-# (installed deps, built/pulled the Docker images, primed the model caches). On a fresh
-# checkout run setup-mac once, then:
+# (installed deps, built/pulled the Docker images). On a fresh checkout run setup-mac once,
+# then:
 #
 #   ./scripts/setup-mac.sh   # one-time
 #   ./scripts/run-mac.sh     # every run
