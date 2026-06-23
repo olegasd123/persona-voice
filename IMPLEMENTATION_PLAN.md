@@ -88,6 +88,23 @@ routes, and Features **D–L**.
 
 ## 1. Priority & sequencing
 
+> **NOW (do these first).** The requested client features. Three are *client-only* — the server
+> work they ride on (Features **A/B/C**) is already done and unit-tested; one (**N3**) adds the
+> only new server surface. Detailed specs are in the **NOW** section directly below this table.
+
+| # | Feature | Builds on | Server work | Effort | Risk |
+|---|---------|-----------|-------------|--------|------|
+| **N1** | **Per-persona session selectors** — voice / CEFR / demeanor, chosen per persona, applied *before* a call | A `[Done]` | none | M | Low |
+| **N2** | **Voice Library page** — list voices + clone by file upload or device mic | B `[Done]` | none | M | Low |
+| **N3** | **Custom personas** — multi-user **JSON store**, create / edit / delete + LoRA pick | K | **new routes** | L | Med |
+| **N4** | **Seed voices** — two ready clones out of the box (`temp_voices/`) | B `[Done]` | seed script | S | Low |
+
+**Order: N1 → N2 → N4 → N3.** N1 needs only a minimal `GET /voices` fetch (fully built by N2); N4
+makes N1/N2 demoable with real voices; **N3** is the only new server surface, so it lands last.
+
+**Backlog (capabilities / ops / DX — independent, land any time).** Features **A/B/C** are the
+*server* substrate the NOW block builds on (already done & tested); D–L are unchanged.
+
 | # | Feature | Theme | Effort | Risk | Depends on |
 |---|---------|-------|--------|------|------------|
 | A | **Session options** (voice / CEFR / demeanor) `[Done]` (server) | Personalization | M | Low | — |
@@ -100,12 +117,117 @@ routes, and Features **D–L**.
 | H | **Prometheus `/metrics`** | Ops | S | Low | obs/metrics |
 | I | **Concurrency / admission control** | Ops | M | Med | — |
 | J | **Web client** | Reach | L | Low | token server |
-| K | **Persona authoring helper** | DX | S | Low | persona loader |
+| K | **Persona authoring helper** → folded into **N3** | DX | S | Low | persona loader |
 | L | **Memory introspection (client)** | Trust | S | Low | memory facade |
 
-**Suggested order:** C (small, unblocks "rude" safely) → A → B → then pick from D/E/F by product
-priority. H is a quick win any time. The personalization trio (A+B) is the headline; everything
-else is independent and can land in any order.
+---
+
+## 1.5 NOW — requested client features (implement first)
+
+These four turn the done server work into user-facing controls. Locked decisions: custom
+personas live in a **JSON store**; the deployment is **multi-user** (clones *and* personas are
+namespaced per `user_id`, derived from the token identity/metadata); **LoRA stays vLLM-only**
+(see the backend note in **N3**).
+
+### N1 — Per-persona session selectors (client) — *client-only*
+
+**Server:** done (Feature A). `/token` accepts + validates `voice/cefr/demeanor`
+(`server/token_server.py`), the agent overlays them on the persona, and they're swappable
+mid-call via the data message. Nothing new server-side.
+
+**Client work (`client/lib`):**
+- `TokenClient.requestToken(persona, {voice, cefr, demeanor, room})` — add the three optional
+  fields to the POST body (today persona-only, `services/token_client.dart:71`).
+- A small `SessionOptions` Dart model + `fetchVoices()` (`GET /voices`) on `TokenClient`.
+- A **"Customize" sheet per persona card** (`screens/home_screen.dart`): voice picker (from the
+  catalog — grey out `available=false` and show `reason`), CEFR dropdown (Default / A1–C2),
+  demeanor (Default / kind / natural / rude). **Default = unset = the persona as authored** (the
+  4 curated personas are unchanged unless the user opts in).
+- Persist last-used overrides **per persona** in `AppPreferences` (`shared_preferences`).
+- `VoiceSession._sendPersona` (`services/voice_session.dart:289`) also publishes the chosen
+  options in the data message, so mid-call persona switches keep them.
+
+**Tests:** token_client encodes options; `SessionOptions` defaults; preferences round-trip.
+**Caveat:** a chosen voice is only *audible* on a cloning backend — the catalog `available` flag
+carries this through to the picker.
+
+### N2 — Voice Library page (client) — *client-only*
+
+**Server:** done (Feature B). `GET /voices`, `POST /voices/clone?name=&text=&authorized=` (raw
+wav as the body), `DELETE /voices/clone/{name}`. The shared WAV codec mixes to mono + resamples
+(`audio.py:50`), so a device-mic recording or an uploaded wav needs **no client resampling**;
+`validate_sample` accepts **2–60 s**.
+
+**Client work:**
+- New `VoiceLibraryScreen`: list `GET /voices` grouped by kind (finetuned / clones / presets),
+  with availability + `reason` badges.
+- **Upload:** `file_picker` → wav bytes → `TokenClient.cloneVoice(name, bytes, {text,
+  authorized})` POSTing the raw body.
+- **Mic:** record ~10 s (reuse the existing audio-session / record plumbing), encode wav, same
+  POST. **Required consent checkbox → `authorized=true`** (plan §3.6 / IMPLEMENTATION_PLAN ask).
+- **Delete:** `DELETE /voices/clone/{name}` behind a confirm.
+- Reachable from Settings and from the N1 voice picker ("+ Add a voice").
+
+**Tests:** `cloneVoice` builds the right request (raw body + query params); list parses
+kinds/availability; delete round-trip (fake `http.Client`).
+**Multi-user:** list/clone/delete are scoped to the caller's `user_id` (see N3).
+
+### N3 — Custom personas: multi-user JSON store (server + client) — *supersedes Feature K*
+
+The only item that needs **new server endpoints**.
+
+**Server (`src/personavoice/persona/` + `server/token_server.py`):**
+- A `UserPersonaStore` persisting to a writable JSON file (`PERSONAVOICE_USER_PERSONAS` →
+  `user_personas.json`), shape `{user_id: {persona_id: Persona}}`. Mirror `ClonesStore`'s
+  load / record / remove / save pattern (`voice/clone.py`).
+- Routes (auth-gated via existing `check_auth`, scoped to the caller's `user_id`):
+  - `GET /personas` — merge **curated** (`config/personas/*.yaml`, read-only) + this user's
+    stored personas. Curated win on id clash and are non-deletable.
+  - `POST /personas` — body = a persona draft (name, system_prompt, voice ref + emotion,
+    turn_style, memory toggle, default `cefr/demeanor/voice`, optional `llm.lora`). Validate with
+    the `Persona` model (already `extra="forbid"`), assign a namespaced id, `record` + `save`,
+    return the `Persona`.
+  - `PUT /personas/{id}` / `DELETE /personas/{id}` — the user's own personas only; never curated.
+- Resolution: the agent's persona lookup consults the user store (by `user_id`) **before** the
+  curated `PersonaRegistry`; keep `reload()` semantics (`persona/registry.py:19`).
+
+**LoRA selection (vLLM / CUDA only):**
+- `GET /loras` → the served adapter names the active backend exposes (vLLM `--lora-modules`),
+  each with `available` + `reason`, like the voice catalog. On Mac / LM Studio
+  (`supports_lora=False`) the list is empty / "merged at train time."
+- A persona's `llm.lora` already routes by basename on vLLM (`adapters/llm/_openai_compat.py:33`)
+  — no new routing, just the picker + validation that the chosen name is actually served.
+
+> **Backend note — vLLM on Mac.** vLLM has **no Apple-Silicon / Metal GPU backend** (CUDA-first;
+> only experimental x86-CPU / ROCm / TPU), so it can't serve a 7B at voice latency on the M4. We
+> keep **LM Studio on Mac**. On Mac, "apply a LoRA" = select a **merged** base model (the mlx-lm
+> train→merge path from M7); **served / hot-swap LoRA stays the CUDA/4080 path**. The client LoRA
+> picker reflects backend capability (empty on Mac), exactly like the voice catalog.
+
+**Client work:** a "New / Edit persona" form (name, system prompt, base voice, turn_style, memory,
+default cefr/demeanor/voice, LoRA dropdown from `/loras`); custom personas appear on the home
+shelf beside the 4 curated, with edit/delete (curated are read-only).
+
+**Tests:** store CRUD + per-user isolation; `POST` validation rejects bad drafts / extra fields;
+curated personas non-shadowable and non-deletable; `/loras` availability per backend.
+**Open decisions:** id namespacing (e.g. `u/{user_id}/{slug}`); per-user persona quota; whether
+user-authored system prompts get a safety pass (ties to Feature C).
+
+### N4 — Seed voices (two out-of-the-box clones) — *seed script*
+
+Ship two ready clones so N1/N2 demo with real voices on first run.
+
+- Source: `temp_voices/{female,male}.wav` (44.1 kHz stereo — fine; the codec mixes to mono +
+  resamples). Move into the repo (e.g. `assets/seed_voices/`).
+- A `make seed-voices` / `scripts/seed_voices.py` that enrolls them through the **same path** a
+  client upload uses (`VoiceCloner` → `ClonesStore.record`), names `female` / `male`,
+  auto-transcribing `ref_text` via the active STT (F5 needs it). **Idempotent** (skip if present).
+- Runs against the **active cloning backend** (f5_mlx / chatterbox); on a preset-only backend they
+  enroll but list `available=false`. Multi-user: seed under a shared/global namespace visible to
+  all users.
+
+**Tests:** seed is idempotent; enrolled clones appear in `GET /voices`; a bad/short sample is
+rejected.
 
 ---
 
@@ -516,10 +638,13 @@ session-options UI.
 
 ## 12. Feature K — Persona authoring helper
 
-Personas are hand-written YAML validated by `--check`. Add a generator that turns a plain-English
-description into a valid persona file (prompt + voice + behavior knobs) and validates it against
-the `Persona` model + voice registry before writing. Small DX win that lowers the barrier to new
-personas.
+> **Folded into N3** (§1.5) — multi-user **JSON persona store** with `POST/PUT/DELETE /personas`
+> and client authoring UI. The note below is now an *optional add-on* to N3, not separate work.
+
+Personas are hand-written YAML validated by `--check`. An optional generator could turn a
+plain-English description into a valid persona draft (prompt + voice + behavior knobs), validated
+against the `Persona` model + voice registry before it's written to the user store. Small DX win
+on top of N3's authoring routes.
 
 ---
 
@@ -548,9 +673,12 @@ Strengthens the consent story already built (`personavoice-memory --show/--expor
    token-server validation + offline flags on the demos. Fully testable without the client.
 3. **B** `[Done]` — voice **catalog** + `resolve_choice` + the **clone enrollment** endpoints, so
    the user has a real library to pick from. Cloning-backend requirement documented.
-4. **Flutter (scaffold landed) / Web** `[Partial]` — the persona picker + Settings surface exist
-   (see Status). Remaining: add **voice / CEFR / demeanor selectors** on top, wire them into the `/token`
-   body, and consume `/voices` once Feature B lands. A separate web client is optional/additive.
+4. **Flutter client** `[Partial]` — the persona picker + Settings surface exist (see Status). The
+   remaining client work is now the **NOW block (§1.5): N1** (per-persona voice/CEFR/demeanor
+   selectors → `/token` body), **N2** (Voice Library page consuming `/voices` + clone enrollment),
+   **N4** (seed voices), then **N3** (multi-user custom personas + LoRA pick — the only new server
+   surface). A separate web client stays optional/additive.
 
-Steps 1–3 are server-only and unit-testable; the client UI is the last, thinnest layer — and its
-scaffold (picker + settings + preferences) is already in place.
+Steps 1–3 are server-only and unit-testable; the client UI is the last, thinnest layer — its
+scaffold (picker + settings + preferences) is already in place, and **§1.5 (NOW)** is the detailed
+spec for finishing it.
