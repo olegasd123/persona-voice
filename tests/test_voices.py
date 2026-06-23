@@ -145,9 +145,8 @@ def test_catalog_availability_cloning_backend(tmp_path: Path) -> None:
     by_id = {o.id: o for o in catalog}
     assert by_id["my_clone"].available is True and by_id["my_clone"].reason is None
     assert by_id["my_ft"].available is True
-    # F5 has no preset mapping, so the preset is unavailable on this backend.
-    assert by_id["companion_soft"].available is False
-    assert "f5_mlx" in (by_id["companion_soft"].reason or "")
+    # F5 has no preset mapping, so the unmapped preset is omitted entirely (not greyed-out).
+    assert "companion_soft" not in by_id
 
 
 def test_resolve_choice_precedence_finetuned_over_clone(tmp_path: Path) -> None:

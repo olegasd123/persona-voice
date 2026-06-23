@@ -179,8 +179,10 @@ class VoiceRegistry:
         """The unified, selectable voice list for a picker on the active backend.
 
         Stable order: fine-tuned, then clones, then presets. Clones/fine-tunes are listed even
-        on a non-cloning backend but marked `available=False` with a `reason`; a preset is
-        available only where it maps to a concrete voice for `tts_name`.
+        on a non-cloning backend but marked `available=False` with a `reason` (so the UI can
+        hint "switch to a cloning backend"). Presets, by contrast, are **omitted entirely**
+        when they have no mapping for `tts_name`: an unmapped preset (e.g. a Kokoro preset on
+        F5) is nothing the user can act on, so it's dropped rather than shown greyed-out.
         """
         options: list[VoiceOption] = []
         cloning_reason = None if supports_cloning else _NO_CLONING_REASON
@@ -208,15 +210,16 @@ class VoiceRegistry:
                 )
         for vid in self.ids():
             entry = self._voices[vid]
-            available = tts_name in entry.presets
+            # Drop presets with no mapping for the active backend instead of listing them
+            # unavailable — see the docstring. Clones/fine-tunes above stay listed-but-greyed.
+            if tts_name not in entry.presets:
+                continue
             options.append(
                 VoiceOption(
                     id=vid,
                     name=entry.description or vid,
                     kind="preset",
                     emotion=entry.emotion,
-                    available=available,
-                    reason=None if available else f"no preset mapped for {tts_name!r}",
                 )
             )
         return options

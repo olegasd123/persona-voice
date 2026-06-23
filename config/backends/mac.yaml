@@ -28,10 +28,7 @@ tts:
   #   model: lucasnewman/f5-tts-mlx   (needs `pip install -e '.[clone-mac]'`)
   # A clone assigned to a persona (e.g. female01 -> companion) speaks only on f5_mlx; on
   # kokoro the persona falls back to its registry preset.
-  adapter: kokoro
-  model: hexgrad/Kokoro-82M
+  adapter: f5_mlx
+  model: lucasnewman/f5-tts-mlx
   options:
-    voice: af_heart        # default preset; persona clone refs (voices/...) fall back to this
-    lang_code: a           # a=American English, b=British, ... (Kokoro convention)
     sample_rate: 24000
-    speed: 1.0

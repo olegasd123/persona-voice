@@ -53,6 +53,12 @@ services:
       - PERSONAVOICE_PERSONA=${PERSONAVOICE_PERSONA:-companion}
       - PERSONAVOICE_HOST=0.0.0.0
       - PERSONAVOICE_PORT=8080
+    volumes:
+      # Cloned / fine-tuned voices are written host-side (the agent worker, the seed script
+      # `personavoice-seed-voices`). Mount them so the token-server's /voices catalog lists
+      # them — otherwise the container sees an empty store and the picker shows no clones.
+      - ./models/clones:/app/models/clones
+      - ./models/finetuned:/app/models/finetuned
     ports:
       - "8080:8080"
     command:
