@@ -505,6 +505,48 @@ def test_select_persona_unknown_custom_falls_back(config_dir: Path, tmp_path: Pa
     assert persona.id == agent._default_persona_id(reg)
 
 
+# --- caller token metadata (the reliable selection channel) ---------------------------
+
+
+def _room_with_participants(*metas: str | None) -> SimpleNamespace:
+    """A fake `ctx.room` whose remote participants carry the given token metadata strings."""
+    parts = {f"p{i}": SimpleNamespace(identity=f"p{i}", metadata=m) for i, m in enumerate(metas)}
+    return SimpleNamespace(metadata=None, remote_participants=parts)
+
+
+def test_participant_metadata_picks_first_nonempty() -> None:
+    room = _room_with_participants("", '{"persona": "hr_interviewer", "voice": "hr_warm"}')
+    assert agent._participant_metadata(room) == '{"persona": "hr_interviewer", "voice": "hr_warm"}'
+
+
+def test_participant_metadata_none_without_participants() -> None:
+    assert agent._participant_metadata(SimpleNamespace()) is None  # no remote_participants attr
+    assert agent._participant_metadata(SimpleNamespace(remote_participants={})) is None
+    assert agent._participant_metadata(_room_with_participants(None, "")) is None
+
+
+def test_select_persona_prefers_caller_token_metadata(config_dir: Path, tmp_path: Path) -> None:
+    # Persona rides the caller's token metadata (room/job empty under automatic dispatch).
+    reg = PersonaRegistry(config_dir / "personas")
+    store = _store(tmp_path, {})
+    ctx = SimpleNamespace(
+        job=SimpleNamespace(metadata=None),
+        room=_room_with_participants('{"persona": "hr_interviewer"}'),
+    )
+    persona = agent._select_persona(ctx, reg, None, user_store=store, user_id=None)
+    assert persona.id == "hr_interviewer"
+
+
+def test_session_options_resolve_from_caller_token_metadata() -> None:
+    from personavoice.models import CEFRLevel
+
+    # The voice / cefr the user "Applied" arrive in the token metadata and must be honored.
+    room = _room_with_participants('{"voice": "hr_warm", "cefr": "B1"}')
+    opts = agent.resolve_session_options([agent._participant_metadata(room), None, None])
+    assert opts.voice == "hr_warm"
+    assert opts.cefr is CEFRLevel.b1
+
+
 # --- persona-authored session defaults ------------------------------------------------
 
 

@@ -481,6 +481,44 @@ def resolve_session_options(sources: list[str | None]) -> SessionOptions:
     return merged
 
 
+# How long to wait for the caller to appear so we can read its token metadata. The agent is
+# dispatched *because* a participant joined, so it's normally already present; this just closes
+# the brief window before the initial room state syncs. Override with PERSONAVOICE_PARTICIPANT_WAIT.
+_PARTICIPANT_WAIT_S = float(os.getenv("PERSONAVOICE_PARTICIPANT_WAIT", "10") or "10")
+
+
+def _participant_metadata(room: Any) -> str | None:
+    """The first remote participant's token metadata, or None.
+
+    The token server embeds the per-call selection (persona / voice / cefr / demeanor / user) in
+    the caller's LiveKit access-token metadata (see `server/token_server.py`), which surfaces
+    here as the participant's `metadata` once it has joined the room. This is the *reliable*
+    selection channel: room/job metadata are empty under automatic dispatch, and the client's
+    on-connect data message can race the agent joining and be dropped. Tolerant of a room with
+    no participants (returns None) so the callers fall through to room/job metadata.
+    """
+    participants = getattr(room, "remote_participants", None) or {}
+    for participant in participants.values():
+        meta = getattr(participant, "metadata", None)
+        if isinstance(meta, str) and meta.strip():
+            return meta
+    return None
+
+
+async def _await_participant(ctx: Any) -> None:
+    """Best-effort wait for the caller to join so its token metadata is readable.
+
+    Uses `JobContext.wait_for_participant` when present, bounded by a timeout so a caller that
+    never appears can't hang the job. Tolerates SDKs without the method (and any wait error):
+    we then just read whatever room state has already synced after `connect`.
+    """
+    waiter = getattr(ctx, "wait_for_participant", None)
+    if waiter is None:
+        return
+    with contextlib.suppress(Exception):
+        await asyncio.wait_for(waiter(), timeout=_PARTICIPANT_WAIT_S)
+
+
 def _default_persona_id(registry: PersonaRegistry) -> str:
     """The fallback persona: `PERSONAVOICE_PERSONA` if it's known, else the first registered."""
     env = os.getenv("PERSONAVOICE_PERSONA")
@@ -519,11 +557,14 @@ def _select_persona(
 
     A custom persona (resolved against the caller's `user_id` in the user store) is honored
     alongside the curated registry; an unknown id falls back to the default curated persona.
+    Priority: explicit override → the caller's token metadata → job/room metadata → default.
     """
     default = _default_persona_id(registry)
+    room = getattr(ctx, "room", None)
     job_meta = getattr(getattr(ctx, "job", None), "metadata", None)
-    room_meta = getattr(getattr(ctx, "room", None), "metadata", None)
-    persona_id = resolve_persona_id([override, job_meta, room_meta], default)
+    room_meta = getattr(room, "metadata", None)
+    part_meta = _participant_metadata(room)
+    persona_id = resolve_persona_id([override, part_meta, job_meta, room_meta], default)
     persona = _lookup_persona(registry, user_store, user_id, persona_id)
     if persona is None:
         logger.warning("requested persona %r is unknown; using %r", persona_id, default)
@@ -615,10 +656,11 @@ async def _warmup_backend(
 async def entrypoint(ctx: Any, *, persona_id: str | None = None) -> None:
     """LiveKit Agents job entrypoint: connect, publish a track, converse until disconnect.
 
-    The persona is selected per job: an explicit `persona_id` wins, then the job/room
-    metadata (`{"persona": "..."}`) the client set, then `PERSONAVOICE_PERSONA`/the first
-    registered persona. A client can also switch persona mid-call by sending a data message
-    (see `_data_text`); the registry hot-reloads so edited persona files take effect too.
+    The persona and session options (voice / CEFR / demeanor) are selected per job: an explicit
+    `persona_id` wins, then the caller's token metadata (`{"persona": "...", "voice": ...}` the
+    token server embedded), then job/room metadata, then `PERSONAVOICE_PERSONA`/the first
+    registered persona. A client can also switch persona or options mid-call by sending a data
+    message (see `_data_text`); the registry hot-reloads so edited persona files take effect too.
     """
     agents, rtc, silero = _require_livekit()
 
@@ -638,22 +680,31 @@ async def entrypoint(ctx: Any, *, persona_id: str | None = None) -> None:
         user_personas = load_user_persona_store(settings)
     vad = proc_data.get("vad")
 
-    # The user id from job/room metadata (`{"user": "..."}`) scopes custom-persona resolution;
-    # it's resolvable pre-connect (metadata rides on the job/room). The remote-participant
-    # fallback below only firms up the *memory* user id, which needs the connection.
+    # Connect first, then read the caller's *token* metadata. The token server embeds the
+    # per-call selection (`{"persona","voice","cefr","demeanor","user"}`) in the client's
+    # LiveKit access token (see `server/token_server.py`), which surfaces as the participant's
+    # metadata once it's in the room. Under automatic dispatch the room/job metadata are empty
+    # and the client's on-connect data message races the agent joining, so this is the reliable
+    # channel; room/job metadata stay as a lower-priority fallback (explicit dispatch).
+    await ctx.connect(auto_subscribe=agents.AutoSubscribe.AUDIO_ONLY)
+    await _await_participant(ctx)
+
     job_meta = getattr(getattr(ctx, "job", None), "metadata", None)
     room_meta = getattr(getattr(ctx, "room", None), "metadata", None)
-    meta_user_id = resolve_user_id([job_meta, room_meta])
+    part_meta = _participant_metadata(getattr(ctx, "room", None))
+    # Highest priority first: the caller's own token, then explicit-dispatch job/room metadata.
+    meta_sources = [part_meta, job_meta, room_meta]
+
+    # The user id (`{"user": "..."}`) scopes custom-persona resolution and keys memory.
+    meta_user_id = resolve_user_id(meta_sources)
     persona = _select_persona(
         ctx, registry, persona_id, user_store=user_personas, user_id=meta_user_id
     )
     logger.info("agent starting (backend=%s persona=%s)", backend.name, persona.id)
 
-    await ctx.connect(auto_subscribe=agents.AutoSubscribe.AUDIO_ONLY)
-
-    # Cross-session memory: keyed by a stable user id from the room/job metadata
-    # (`{"user": "..."}`) or the remote participant's identity. Without one we run stateless;
-    # the facade is also dormant until that user grants consent (see `personavoice-memory`).
+    # Cross-session memory: keyed by that stable user id, or the remote participant's identity.
+    # Without one we run stateless; the facade is also dormant until that user grants consent
+    # (see `personavoice-memory`).
     remote_ids = [p.identity for p in getattr(ctx.room, "remote_participants", {}).values()]
     user_id = meta_user_id or (remote_ids[0] if remote_ids else None)
     memory = build_conversation_memory(settings, backend, persona) if user_id else None
@@ -662,9 +713,9 @@ async def entrypoint(ctx: Any, *, persona_id: str | None = None) -> None:
             "memory enabled for user %r (persona memory=%s)", user_id, persona.memory.enabled
         )
 
-    # Per-session overrides (voice / CEFR / demeanor) from the room/job metadata the client
-    # set, plus the moderation guard (no-op unless PERSONAVOICE_MODERATION is set).
-    options = resolve_session_options([job_meta, room_meta])
+    # Per-session overrides (voice / CEFR / demeanor) the caller chose, plus the moderation
+    # guard (no-op unless PERSONAVOICE_MODERATION is set).
+    options = resolve_session_options(meta_sources)
     if options.any_set():
         logger.info("session options: %s", options.model_dump(exclude_none=True))
     moderator = moderator_from_env()
