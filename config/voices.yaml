@@ -35,3 +35,31 @@ pm_calm:
   presets:
     kokoro: am_michael
     orpheus: leo
+
+# The remaining Orpheus presets (Orpheus ships 8: tara/leah/jess/leo above, plus these). They
+# have no Kokoro mapping, so on Mac (kokoro/f5_mlx) the catalog hides them; they're selectable
+# only on the CUDA/Orpheus backend. Add a `kokoro:` preset to any of these to surface it on the
+# Mac too.
+orpheus_dan:
+  description: warm, grounded, masculine
+  emotion: neutral-warm
+  presets:
+    orpheus: dan
+
+orpheus_mia:
+  description: bright, expressive, feminine
+  emotion: friendly
+  presets:
+    orpheus: mia
+
+orpheus_zac:
+  description: energetic, youthful, masculine
+  emotion: upbeat
+  presets:
+    orpheus: zac
+
+orpheus_zoe:
+  description: playful, light, feminine
+  emotion: warm
+  presets:
+    orpheus: zoe
