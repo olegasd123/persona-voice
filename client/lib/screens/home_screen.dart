@@ -6,10 +6,12 @@ import 'package:permission_handler/permission_handler.dart';
 import '../models/app_preferences.dart';
 import '../models/connection_settings.dart';
 import '../models/persona.dart';
+import '../models/session_options.dart';
 import '../models/voice_option.dart';
 import '../services/token_client.dart';
 import '../services/voice_session.dart';
 import 'call_screen.dart';
+import 'persona_form_screen.dart';
 import 'persona_options_sheet.dart';
 import 'settings_screen.dart';
 import 'voice_library_screen.dart';
@@ -119,6 +121,46 @@ class _HomeScreenState extends State<HomeScreen> {
     if (mounted) setState(() {});
   }
 
+  /// Open the New / Edit persona form. [personaId] null = create; set = edit a custom persona.
+  Future<void> _openPersonaForm({String? personaId}) async {
+    final saved = await Navigator.of(context).push<bool>(MaterialPageRoute(
+      builder: (_) => PersonaFormScreen(
+        settings: _settings,
+        catalog: _catalog,
+        personaId: personaId,
+      ),
+    ));
+    if (saved == true && mounted) await _loadPersonas();
+  }
+
+  Future<void> _deletePersona(Persona persona) async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: Text('Delete ${persona.name}?'),
+        content: const Text('This removes your custom persona. It can\'t be undone.'),
+        actions: [
+          TextButton(onPressed: () => Navigator.of(ctx).pop(false), child: const Text('Cancel')),
+          FilledButton.tonal(
+            onPressed: () => Navigator.of(ctx).pop(true),
+            child: const Text('Delete'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true) return;
+    final client = TokenClient(_settings);
+    try {
+      await client.deletePersona(persona.id);
+      await widget.prefs.setOptionsFor(persona.id, const SessionOptions()); // drop stale options
+      if (mounted) await _loadPersonas();
+    } catch (e) {
+      if (mounted) _snack('Could not delete: $e');
+    } finally {
+      client.close();
+    }
+  }
+
   Future<void> _call(Persona persona) async {
     final mic = await Permission.microphone.request();
     if (!mic.isGranted) {
@@ -207,6 +249,14 @@ class _HomeScreenState extends State<HomeScreen> {
           ),
         ],
       ),
+      // Authoring needs a reachable server (the form fetches voices / LoRAs and posts the draft).
+      floatingActionButton: (_state == _LoadState.ok || _state == _LoadState.unconfigured)
+          ? FloatingActionButton.extended(
+              onPressed: _connectingId == null ? () => _openPersonaForm() : null,
+              icon: const Icon(Icons.add),
+              label: const Text('New persona'),
+            )
+          : null,
     );
   }
 
@@ -255,6 +305,8 @@ class _HomeScreenState extends State<HomeScreen> {
               disabled: _connectingId != null && p.id != _connectingId,
               onTap: () => _call(p),
               onCustomize: () => _customize(p),
+              onEdit: p.custom ? () => _openPersonaForm(personaId: p.id) : null,
+              onDelete: p.custom ? () => _deletePersona(p) : null,
             );
           },
         );
@@ -326,6 +378,8 @@ class _PersonaCard extends StatelessWidget {
     required this.disabled,
     required this.onTap,
     required this.onCustomize,
+    this.onEdit,
+    this.onDelete,
   });
 
   final Persona persona;
@@ -336,6 +390,10 @@ class _PersonaCard extends StatelessWidget {
   final bool disabled;
   final VoidCallback onTap;
   final VoidCallback onCustomize;
+
+  /// Set only for user-authored (custom) personas — curated personas are read-only.
+  final VoidCallback? onEdit;
+  final VoidCallback? onDelete;
 
   @override
   Widget build(BuildContext context) {
@@ -388,8 +446,11 @@ class _PersonaCard extends StatelessWidget {
                             )
                           else if (isDefault) _MiniTag('Default',
                               scheme.secondaryContainer, scheme.onSecondaryContainer),
+                          if (persona.custom)
+                            _MiniTag('Custom', scheme.tertiaryContainer,
+                                scheme.onTertiaryContainer),
                           if (hasOptions)
-                            _MiniTag('Custom', scheme.primaryContainer,
+                            _MiniTag('Tuned', scheme.primaryContainer,
                                 scheme.onPrimaryContainer),
                         ],
                       ),
@@ -420,6 +481,21 @@ class _PersonaCard extends StatelessWidget {
                   ),
                 ),
                 const SizedBox(width: 4),
+                if (onEdit != null || onDelete != null)
+                  PopupMenuButton<String>(
+                    tooltip: 'Edit or delete',
+                    enabled: !disabled && !connecting,
+                    onSelected: (v) {
+                      if (v == 'edit') onEdit?.call();
+                      if (v == 'delete') onDelete?.call();
+                    },
+                    itemBuilder: (_) => [
+                      if (onEdit != null)
+                        const PopupMenuItem(value: 'edit', child: Text('Edit')),
+                      if (onDelete != null)
+                        const PopupMenuItem(value: 'delete', child: Text('Delete')),
+                    ],
+                  ),
                 IconButton(
                   icon: Icon(
                     hasOptions ? Icons.tune : Icons.tune_outlined,

@@ -494,6 +494,93 @@ def test_persona_routes_disabled_without_store(registry: PersonaRegistry) -> Non
         svc.create_persona("alice", dict(_DRAFT))
 
 
+# --- get one persona (full body, for an edit form) ------------------------------------
+
+
+def test_get_persona_returns_custom_full_body(registry: PersonaRegistry, tmp_path: Path) -> None:
+    svc, _ = make_persona_service(registry, tmp_path)
+    created = svc.create_persona("alice", {**_DRAFT, "session_defaults": {"cefr": "a1"}})
+    got = svc.get_persona("alice", created["id"])
+    assert got["custom"] is True
+    # The full body the list summary omits is present for prefilling the form.
+    assert got["persona"]["system_prompt"] == _DRAFT["system_prompt"]
+    assert got["persona"]["session_defaults"]["cefr"] == "A1"
+
+
+def test_get_persona_returns_curated_full_body(registry: PersonaRegistry, tmp_path: Path) -> None:
+    svc, _ = make_persona_service(registry, tmp_path)
+    got = svc.get_persona("alice", "companion")
+    assert got["custom"] is False
+    assert got["persona"]["id"] == "companion" and got["persona"]["system_prompt"]
+
+
+def test_get_custom_persona_requires_owner(registry: PersonaRegistry, tmp_path: Path) -> None:
+    svc, _ = make_persona_service(registry, tmp_path)
+    created = svc.create_persona("alice", dict(_DRAFT))
+    # Bob can't read Alice's persona — it simply doesn't exist for him.
+    with pytest.raises(BadRequest, match="unknown persona"):
+        svc.get_persona("bob", created["id"])
+
+
+def test_get_persona_unknown_rejected(registry: PersonaRegistry, tmp_path: Path) -> None:
+    svc, _ = make_persona_service(registry, tmp_path)
+    with pytest.raises(BadRequest, match="unknown persona"):
+        svc.get_persona("alice", "ghost")
+
+
+# --- issue() with a scoping user (custom-persona resolution at call time) --------------
+
+
+def test_issue_embeds_and_echoes_user(registry: PersonaRegistry, tmp_path: Path) -> None:
+    svc, _ = make_persona_service(registry, tmp_path)
+    result = svc.issue(persona="companion", user="alice")
+    assert result["user"] == "alice"
+    meta = json.loads(decode_token(result["token"], SECRET)["metadata"])
+    # The agent reads `user` from metadata to resolve a custom persona + key memory.
+    assert meta["user"] == "alice"
+
+
+def test_issue_omits_user_when_absent(registry: PersonaRegistry, tmp_path: Path) -> None:
+    svc, _ = make_persona_service(registry, tmp_path)
+    result = svc.issue(persona="companion")
+    assert result["user"] is None
+    assert "user" not in json.loads(decode_token(result["token"], SECRET)["metadata"])
+
+
+def test_issue_accepts_owned_custom_persona(registry: PersonaRegistry, tmp_path: Path) -> None:
+    svc, _ = make_persona_service(registry, tmp_path)
+    created = svc.create_persona("alice", dict(_DRAFT))
+    result = svc.issue(persona=created["id"], user="alice")
+    assert result["persona"] == created["id"]
+    meta = json.loads(decode_token(result["token"], SECRET)["metadata"])
+    assert meta["persona"] == created["id"] and meta["user"] == "alice"
+
+
+def test_issue_rejects_custom_persona_without_user(
+    registry: PersonaRegistry, tmp_path: Path
+) -> None:
+    svc, _ = make_persona_service(registry, tmp_path)
+    created = svc.create_persona("alice", dict(_DRAFT))
+    # Without the scoping user a custom id is just unknown (curated registry only).
+    with pytest.raises(BadRequest, match="unknown persona"):
+        svc.issue(persona=created["id"])
+
+
+def test_issue_rejects_other_users_custom_persona(
+    registry: PersonaRegistry, tmp_path: Path
+) -> None:
+    svc, _ = make_persona_service(registry, tmp_path)
+    created = svc.create_persona("alice", dict(_DRAFT))
+    with pytest.raises(BadRequest, match="unknown persona"):
+        svc.issue(persona=created["id"], user="bob")
+
+
+def test_issue_rejects_invalid_user(registry: PersonaRegistry, tmp_path: Path) -> None:
+    svc, _ = make_persona_service(registry, tmp_path)
+    with pytest.raises(BadRequest, match="invalid user id"):
+        svc.issue(persona="companion", user="bad id!")
+
+
 # --- LoRA catalog ---------------------------------------------------------------------
 
 

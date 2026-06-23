@@ -4,6 +4,7 @@ import 'dart:typed_data';
 import 'package:http/http.dart' as http;
 
 import '../models/connection_settings.dart';
+import '../models/lora_option.dart';
 import '../models/persona.dart';
 import '../models/session_options.dart';
 import '../models/voice_option.dart';
@@ -60,19 +61,72 @@ class TokenClient {
         ..._authHeaders,
       };
 
-  Uri _uri(String path) {
+  Uri _uri(String path, [Map<String, String>? query]) {
     final base = settings.tokenServerUrl.trim().replaceAll(RegExp(r'/+$'), '');
-    return Uri.parse('$base$path');
+    final uri = Uri.parse('$base$path');
+    return (query == null || query.isEmpty) ? uri : uri.replace(queryParameters: query);
   }
 
-  /// Fetch the selectable personas and the server's default id.
+  /// Fetch the selectable personas (curated + this user's custom ones) and the default id.
+  /// Scoped by [ConnectionSettings.effectiveUser] so the caller's custom personas come back.
   Future<(List<Persona>, String)> fetchPersonas() async {
-    final resp = await _http.get(_uri('/personas'), headers: _jsonHeaders);
+    final resp = await _http.get(
+      _uri('/personas', {'user': settings.effectiveUser}),
+      headers: _jsonHeaders,
+    );
     final body = _decode(resp);
     final personas = (body['personas'] as List<dynamic>)
         .map((e) => Persona.fromJson(e as Map<String, dynamic>))
         .toList();
     return (personas, (body['default'] as String?) ?? '');
+  }
+
+  /// Fetch one persona's full body (`GET /personas/{id}`) to prefill the edit form — the list
+  /// route returns only a picker summary.
+  Future<PersonaDraft> fetchPersona(String id) async {
+    final resp = await _http.get(
+      _uri('/personas/${Uri.encodeComponent(id)}', {'user': settings.effectiveUser}),
+      headers: _jsonHeaders,
+    );
+    final body = _decode(resp);
+    return PersonaDraft.fromBody((body['persona'] as Map).cast<String, dynamic>());
+  }
+
+  /// Create a custom persona (`POST /personas`). Returns the stored persona's full body.
+  Future<PersonaDraft> createPersona(PersonaDraft draft) async {
+    final resp = await _http.post(
+      _uri('/personas', {'user': settings.effectiveUser}),
+      headers: _jsonHeaders,
+      body: jsonEncode(draft.toJson()),
+    );
+    final body = _decode(resp);
+    return PersonaDraft.fromBody((body['persona'] as Map).cast<String, dynamic>());
+  }
+
+  /// Replace one of the user's own personas (`PUT /personas/{id}`).
+  Future<PersonaDraft> updatePersona(String id, PersonaDraft draft) async {
+    final resp = await _http.put(
+      _uri('/personas/${Uri.encodeComponent(id)}', {'user': settings.effectiveUser}),
+      headers: _jsonHeaders,
+      body: jsonEncode(draft.toJson()),
+    );
+    final body = _decode(resp);
+    return PersonaDraft.fromBody((body['persona'] as Map).cast<String, dynamic>());
+  }
+
+  /// Delete one of the user's own personas (`DELETE /personas/{id}`).
+  Future<void> deletePersona(String id) async {
+    final resp = await _http.delete(
+      _uri('/personas/${Uri.encodeComponent(id)}', {'user': settings.effectiveUser}),
+      headers: _authHeaders,
+    );
+    _decode(resp); // throws on error; body is {"deleted": id}
+  }
+
+  /// Fetch the served LoRA adapters for the active backend (`GET /loras`) — empty on Mac.
+  Future<LoraCatalog> fetchLoras() async {
+    final resp = await _http.get(_uri('/loras'), headers: _jsonHeaders);
+    return LoraCatalog.fromJson(_decode(resp));
   }
 
   /// Fetch the voice catalog for the active backend (`GET /voices`).
@@ -123,6 +177,8 @@ class TokenClient {
     final payload = <String, dynamic>{
       'persona': persona,
       if (settings.identity.trim().isNotEmpty) 'identity': settings.identity.trim(),
+      // Scopes custom-persona resolution + memory in the agent (falls back to "default").
+      'user': settings.effectiveUser,
       if (room != null && room.trim().isNotEmpty) 'room': room.trim(),
       ...options.toWireMap(),
     };

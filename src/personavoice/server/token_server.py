@@ -16,17 +16,18 @@ Endpoints (all JSON, permissive CORS so a browser client / Playground can call t
     GET    /personas[?user=] -> {"personas": [{"id","name","description","voice","custom"}],
                                 "default": <id>}  (curated + the user's custom personas)
     POST   /personas?user=   -> create a custom persona; body = a persona draft
+    GET    /personas/{id}?user=   -> one persona's full body (for an edit form)
     PUT    /personas/{id}?user=   -> replace one of the user's own personas
     DELETE /personas/{id}?user=   -> delete one of the user's own personas
     GET    /loras            -> {"loras": [LoraOption...], "llm", "supports_lora"}
     GET    /voices           -> {"voices": [VoiceOption...], "tts", "supports_cloning"}
     POST   /token            -> mint a token; body: {"room"?, "identity"?, "persona"?,
-                                "voice"?, "cefr"?, "demeanor"?}
-    GET    /token?room=&identity=&persona=&voice=&cefr=&demeanor=  (same, for manual testing)
+                                "voice"?, "cefr"?, "demeanor"?, "user"?}
+    GET    /token?room=&identity=&persona=&voice=&cefr=&demeanor=&user=  (same, for manual testing)
     POST   /voices/clone?name=&text=&authorized=  -> enroll a clone; raw wav as the body
     DELETE /voices/clone/{name}                   -> remove a cloned voice
 
-`/token` returns `{"url","token","room","identity","persona","voice","cefr","demeanor"}`.
+`/token` returns `{"url","token","room","identity","persona","voice","cefr","demeanor","user"}`.
 Persona and session-options selection on the live agent ride the existing data-message path:
 the client connects, then publishes a `{"persona": <id>, "voice": ..., "cefr": ...,
 "demeanor": ...}` data message which the agent's `on("data_received")` handler applies (see
@@ -266,6 +267,36 @@ class TokenService:
                 out.append(self._persona_summary(p, custom=True))
         return {"personas": out, "default": self._default_persona}
 
+    def _is_user_persona(self, user: str, persona_id: str) -> bool:
+        """Whether `persona_id` is one of `user`'s own custom personas (store hot-reloaded)."""
+        if not user or self._user_personas is None:
+            return False
+        self._user_personas.reload()
+        return self._user_personas.has(user, persona_id)
+
+    def get_persona(self, user: str | None, persona_id: str) -> dict[str, Any]:
+        """Return one persona's full stored body — for prefilling an edit form.
+
+        The list route (`personas`) returns only a picker summary; the form needs the whole
+        persona (system prompt, llm, voice, behavior, memory, session defaults). A curated id
+        resolves for anyone (read-only); a custom id resolves only for its owning `user`.
+        """
+        persona_id = (persona_id or "").strip()
+        self._registry.reload()
+        if persona_id in self._registry:
+            curated = self._registry.get(persona_id)
+            return {
+                **self._persona_summary(curated, custom=False),
+                "persona": curated.model_dump(mode="json"),
+            }
+        user = (user or "").strip()
+        if user and self._user_personas is not None:
+            self._user_personas.reload()
+            persona = self._user_personas.get(user, persona_id)
+            if persona is not None:
+                return self._stored_persona_payload(persona)
+        raise BadRequest(f"unknown persona {persona_id!r}")
+
     def _validate_session_options(
         self, *, voice: str | None, cefr: str | None, demeanor: str | None
     ) -> SessionOptions:
@@ -309,14 +340,17 @@ class TokenService:
         voice: str | None = None,
         cefr: str | None = None,
         demeanor: str | None = None,
+        user: str | None = None,
     ) -> dict[str, Any]:
         """Mint a LiveKit token for a room, validating the persona and session options.
 
         Missing `room`/`identity` are generated. A requested persona must exist (else
-        `BadRequest`); none requested falls back to the default. Per-session overrides
-        (`voice`/`cefr`/`demeanor`) are validated the same way. Persona + options are embedded
-        in the token metadata for observability and echoed back so the client can apply them
-        via a data message after connecting.
+        `BadRequest`); none requested falls back to the default. A `user` scopes custom-persona
+        resolution: it lets a caller request one of their *own* personas (curated win on clash)
+        and is embedded in the token metadata so the agent resolves it at call time (and keys
+        memory to a stable id). Per-session overrides (`voice`/`cefr`/`demeanor`) are validated
+        the same way. Persona + options + user are embedded in the token metadata for the agent
+        and echoed back so the client can apply them via a data message after connecting.
         """
         if not (self._config.livekit_url and self._config.api_key and self._config.api_secret):
             raise ServerMisconfigured(
@@ -327,10 +361,19 @@ class TokenService:
         room = (room or "").strip() or _new_room()
         identity = (identity or "").strip() or _new_identity()
 
+        user = (user or "").strip()
+        if user and not _USER_ID_RE.fullmatch(user):
+            raise BadRequest("invalid user id; use letters, digits, '.', '-', '_' or '@'")
+
         persona_id = (persona or "").strip() or self._default_persona
         if persona_id and persona_id not in self._registry:
             self._registry.reload()  # tolerate a persona added since startup
-        if persona_id and persona_id not in self._registry:
+        # A custom persona isn't in the curated registry — accept it when this user owns one.
+        if (
+            persona_id
+            and persona_id not in self._registry
+            and not self._is_user_persona(user, persona_id)
+        ):
             known = ", ".join(self._registry.ids()) or "(none)"
             raise BadRequest(f"unknown persona {persona_id!r}; known: {known}")
 
@@ -339,6 +382,8 @@ class TokenService:
         meta: dict[str, Any] = {}
         if persona_id:
             meta["persona"] = persona_id
+        if user:
+            meta["user"] = user  # scopes custom-persona resolution + memory in the agent
         meta.update(options.model_dump(exclude_none=True, mode="json"))
 
         token = mint_access_token(
@@ -359,6 +404,7 @@ class TokenService:
             "voice": options.voice,
             "cefr": options.cefr.value if options.cefr else None,
             "demeanor": options.demeanor.value if options.demeanor else None,
+            "user": user or None,
         }
 
     # -- voice library -----------------------------------------------------------------
@@ -763,6 +809,9 @@ def _make_handler(
                 elif path == "/personas" and method == "POST":
                     body = self._read_json_body()
                     self._send_json(201, service.create_persona(query.get("user"), body))
+                elif path.startswith("/personas/") and method == "GET":
+                    pid = path[len("/personas/") :]
+                    self._send_json(200, service.get_persona(query.get("user"), pid))
                 elif path.startswith("/personas/") and method == "PUT":
                     pid = path[len("/personas/") :]
                     body = self._read_json_body()
@@ -788,6 +837,7 @@ def _make_handler(
                         voice=body.get("voice") or query.get("voice"),
                         cefr=body.get("cefr") or query.get("cefr"),
                         demeanor=body.get("demeanor") or query.get("demeanor"),
+                        user=body.get("user") or query.get("user"),
                     )
                     self._send_json(200, result)
                 else:

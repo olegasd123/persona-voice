@@ -5,6 +5,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:http/http.dart' as http;
 import 'package:http/testing.dart';
 import 'package:personavoice_client/models/connection_settings.dart';
+import 'package:personavoice_client/models/persona.dart';
 import 'package:personavoice_client/models/session_options.dart';
 import 'package:personavoice_client/services/token_client.dart';
 
@@ -116,7 +117,185 @@ void main() {
       return http.Response(jsonEncode({'personas': [], 'default': ''}), 200);
     });
     await TokenClient(_settings(), httpClient: mock).fetchPersonas();
-    expect(seen.toString(), 'http://localhost:8080/personas');
+    expect(seen.toString(), 'http://localhost:8080/personas?user=oleg');
+  });
+
+  test('fetchPersonas scopes the list by the effective user', () async {
+    late Uri seen;
+    final mock = MockClient((req) async {
+      seen = req.url;
+      return http.Response(jsonEncode({'personas': [], 'default': ''}), 200);
+    });
+    // No identity set → falls back to the "default" bucket.
+    await TokenClient(
+      ConnectionSettings(tokenServerUrl: 'http://localhost:8080'),
+      httpClient: mock,
+    ).fetchPersonas();
+    expect(seen.queryParameters['user'], 'default');
+  });
+
+  test('parses the custom flag on user-authored personas', () async {
+    final mock = MockClient((req) async {
+      return http.Response(
+        jsonEncode({
+          'personas': [
+            {'id': 'companion', 'name': 'Companion', 'custom': false},
+            {'id': 'french-tutor', 'name': 'French Tutor', 'custom': true},
+          ],
+          'default': 'companion',
+        }),
+        200,
+      );
+    });
+    final (personas, _) = await TokenClient(_settings(), httpClient: mock).fetchPersonas();
+    expect(personas[0].custom, isFalse);
+    expect(personas[1].custom, isTrue);
+  });
+
+  test('requestToken sends the scoping user in the body', () async {
+    final mock = MockClient((req) async {
+      final body = jsonDecode(req.body) as Map<String, dynamic>;
+      expect(body['user'], 'oleg');
+      return http.Response(
+        jsonEncode(
+            {'url': 'wss://lk', 'token': 't', 'room': 'r', 'identity': 'oleg', 'persona': 'x'}),
+        200,
+      );
+    });
+    await TokenClient(_settings(), httpClient: mock).requestToken(persona: 'x');
+  });
+
+  test('createPersona posts the draft and parses the stored body', () async {
+    late http.Request seen;
+    final mock = MockClient((req) async {
+      seen = req;
+      final body = jsonDecode(req.body) as Map<String, dynamic>;
+      expect(body['name'], 'French Tutor');
+      expect(body['system_prompt'], 'Teach French.');
+      // Server owns the id — the draft must not send one on create.
+      expect(body.containsKey('id'), isFalse);
+      return http.Response(
+        jsonEncode({
+          'id': 'french-tutor',
+          'name': 'French Tutor',
+          'custom': true,
+          'persona': {
+            'id': 'french-tutor',
+            'name': 'French Tutor',
+            'system_prompt': 'Teach French.',
+            'llm': {'base_model': 'qwen', 'lora': null},
+            'voice': {'ref': 'voices/companion_soft', 'emotion': 'neutral'},
+            'behavior': {'turn_style': 'balanced'},
+            'memory': {'enabled': false},
+            'session_defaults': {'cefr': 'A1'},
+          },
+        }),
+        201,
+      );
+    });
+    final draft = PersonaDraft(name: 'French Tutor', systemPrompt: 'Teach French.');
+    final stored = await TokenClient(_settings(), httpClient: mock).createPersona(draft);
+    expect(seen.method, 'POST');
+    expect(seen.url.path, '/personas');
+    expect(seen.url.queryParameters['user'], 'oleg');
+    expect(stored.id, 'french-tutor');
+    expect(stored.sessionDefaults.cefr, CefrLevel.a1);
+  });
+
+  test('updatePersona PUTs to the persona id', () async {
+    late http.Request seen;
+    final mock = MockClient((req) async {
+      seen = req;
+      return http.Response(
+        jsonEncode({
+          'id': 'french-tutor',
+          'name': 'Spanish Tutor',
+          'custom': true,
+          'persona': {
+            'id': 'french-tutor',
+            'name': 'Spanish Tutor',
+            'system_prompt': 'Teach Spanish.',
+            'llm': {'base_model': 'qwen'},
+            'voice': {'ref': 'voices/companion_soft'},
+          },
+        }),
+        200,
+      );
+    });
+    final draft = PersonaDraft(
+      id: 'french-tutor',
+      name: 'Spanish Tutor',
+      systemPrompt: 'Teach Spanish.',
+    );
+    final updated = await TokenClient(_settings(), httpClient: mock)
+        .updatePersona('french-tutor', draft);
+    expect(seen.method, 'PUT');
+    expect(seen.url.path, '/personas/french-tutor');
+    expect(updated.name, 'Spanish Tutor');
+  });
+
+  test('deletePersona issues a DELETE to the persona id', () async {
+    late http.Request seen;
+    final mock = MockClient((req) async {
+      seen = req;
+      return http.Response(jsonEncode({'deleted': 'french-tutor'}), 200);
+    });
+    await TokenClient(_settings(), httpClient: mock).deletePersona('french-tutor');
+    expect(seen.method, 'DELETE');
+    expect(seen.url.path, '/personas/french-tutor');
+    expect(seen.url.queryParameters['user'], 'oleg');
+  });
+
+  test('fetchPersona returns the full body for an edit form', () async {
+    final mock = MockClient((req) async {
+      expect(req.url.path, '/personas/french-tutor');
+      return http.Response(
+        jsonEncode({
+          'id': 'french-tutor',
+          'name': 'French Tutor',
+          'custom': true,
+          'persona': {
+            'id': 'french-tutor',
+            'name': 'French Tutor',
+            'system_prompt': 'Teach French.',
+            'llm': {'base_model': 'qwen', 'lora': 'adapters/fr'},
+            'voice': {'ref': 'my_voice', 'emotion': 'neutral'},
+            'behavior': {'turn_style': 'concise'},
+            'memory': {'enabled': true},
+            'session_defaults': {'demeanor': 'kind'},
+          },
+        }),
+        200,
+      );
+    });
+    final draft =
+        await TokenClient(_settings(), httpClient: mock).fetchPersona('french-tutor');
+    expect(draft.systemPrompt, 'Teach French.');
+    expect(draft.voiceRef, 'my_voice');
+    expect(draft.lora, 'adapters/fr');
+    expect(draft.turnStyle, TurnStyle.concise);
+    expect(draft.memoryEnabled, isTrue);
+    expect(draft.sessionDefaults.demeanor, Demeanor.kind);
+  });
+
+  test('fetchLoras parses the served adapters and capability', () async {
+    final mock = MockClient((req) async {
+      expect(req.url.path, '/loras');
+      return http.Response(
+        jsonEncode({
+          'loras': [
+            {'id': 'hr', 'name': 'hr', 'available': true},
+          ],
+          'llm': 'vllm',
+          'supports_lora': true,
+          'reason': null,
+        }),
+        200,
+      );
+    });
+    final cat = await TokenClient(_settings(), httpClient: mock).fetchLoras();
+    expect(cat.supportsLora, isTrue);
+    expect(cat.loras.single.id, 'hr');
   });
 
   test('requestToken includes set session options in the body', () async {

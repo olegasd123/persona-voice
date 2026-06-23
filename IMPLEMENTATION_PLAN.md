@@ -96,13 +96,15 @@ routes, and Features **D–L**.
 |---|---------|-----------|-------------|--------|
 | **N1** | **Per-persona session selectors** — voice / CEFR / demeanor, chosen per persona, applied *before* a call | A `[Done]` | none | `[Done]` (client; device run pending) |
 | **N2** | **Voice Library page** — list voices + clone by file upload or device mic | B `[Done]` | none | `[Done]` (client; device run pending) |
-| **N3** | **Custom personas** — multi-user **JSON store**, create / edit / delete + LoRA pick | K | **new routes** | `[Partial]` (server + agent done & tested; client form pending) |
+| **N3** | **Custom personas** — multi-user **JSON store**, create / edit / delete + LoRA pick | K | **new routes** | `[Done]` (server + agent + client form done & tested; device run pending) |
 | **N4** | **Seed voices** — two ready clones out of the box (`temp_voices/`) | B `[Done]` | seed script | `[Done]` (script + bundled `female`/`male` wavs) |
 
 **Order: N1 → N2 → N4 → N3.** N1+N2 are built (Flutter client; `flutter analyze` clean, unit tests
-green — no on-device run yet). **N4 done** (seed script + bundled female voice). **N3** server side
-is **done & tested** (`UserPersonaStore`, `POST/PUT/DELETE/GET /personas`, `GET /loras`, agent
-resolution, persona `session_defaults`); the client New/Edit-persona form is the remaining piece.
+green — no on-device run yet). **N4 done** (seed script + bundled female voice). **N3 done**:
+server (`UserPersonaStore`, `POST/PUT/DELETE/GET /personas`, full-body `GET /personas/{id}`,
+`GET /loras`, `user`-scoped `/token`, agent resolution, persona `session_defaults`) **and** the
+client New/Edit-persona form — `flutter analyze` clean, 86 client + 633 server tests green; live
+device + LiveKit call run still pending.
 
 **Backlog (capabilities / ops / DX — independent, land any time).** Features **A/B/C** are the
 *server* substrate the NOW block builds on (already done & tested); D–L are unchanged.
@@ -187,20 +189,28 @@ wav as the body), `DELETE /voices/clone/{name}`. The shared WAV codec mixes to m
 kinds/availability; delete round-trip (fake `http.Client`).
 **Multi-user:** list/clone/delete are scoped to the caller's `user_id` (see N3).
 
-### N3 — Custom personas: multi-user JSON store (server + client) — *supersedes Feature K* `[Partial]`
+### N3 — Custom personas: multi-user JSON store (server + client) — *supersedes Feature K* `[Done]`
 
-> **Server + agent done & tested.** `persona/store.py` (`UserPersonaStore`, per-user JSON at
+> **Done — server + agent + client.** `persona/store.py` (`UserPersonaStore`, per-user JSON at
 > `PERSONAVOICE_USER_PERSONAS`), `persona/lora.py` (`served_loras` / `LoraOption`), token-server
 > routes `GET /personas?user=` (curated + custom, `custom` flag, curated win on clash),
-> `POST /personas?user=`, `PUT`/`DELETE /personas/{id}?user=`, and `GET /loras`. Drafts validate
-> through the `Persona` model (extra fields rejected; voice ref + base model default to the curated
-> default; slug ids never shadow curated; per-user quota `PERSONAVOICE_MAX_USER_PERSONAS`; a set
-> `llm.lora` is checked against the served adapters). The agent resolves a custom persona by
-> `user_id` (curated-first), hot-reloads it for a mid-call switch, and applies a persona's new
-> `session_defaults` (CEFR/demeanor/voice baked in) under any explicit session option. Remaining:
-> the client **New / Edit persona** form.
+> `POST /personas?user=`, full-body `GET /personas/{id}?user=` (prefills the edit form — the list
+> returns only a summary), `PUT`/`DELETE /personas/{id}?user=`, and `GET /loras`. `/token` now
+> takes a `user` and embeds it in the metadata so a custom persona **resolves at call time** (and
+> accepts an owned custom-persona id, which isn't in the curated registry) — without it a custom
+> persona could be authored but not called. Drafts validate through the `Persona` model (extra
+> fields rejected; voice ref + base model default to the curated default; slug ids never shadow
+> curated; per-user quota `PERSONAVOICE_MAX_USER_PERSONAS`; a set `llm.lora` is checked against the
+> served adapters). The agent resolves a custom persona by `user_id` (curated-first), hot-reloads
+> it for a mid-call switch, and applies a persona's `session_defaults` under any explicit session
+> option. **Client:** `PersonaDraft` model (round-trips advanced fields it doesn't surface),
+> `TokenClient` CRUD + `/loras`, a `PersonaFormScreen` (name, system prompt, base voice, turn
+> style, memory, session-default CEFR/demeanor, LoRA dropdown — empty on Mac with the reason), and
+> a home-shelf "New persona" FAB + per-card edit/delete on custom personas. The scoping user is
+> `identity` or `"default"` when unset (`ConnectionSettings.effectiveUser`), used for both the CRUD
+> routes and the `/token` body so authoring and calling hit the same bucket.
 
-The only item that needs **new server endpoints**.
+This was the only item that needed **new server endpoints**.
 
 **Server (`src/personavoice/persona/` + `server/token_server.py`):**
 - A `UserPersonaStore` persisting to a writable JSON file (`PERSONAVOICE_USER_PERSONAS` →
