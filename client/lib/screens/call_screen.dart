@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import '../models/persona.dart';
+import '../models/session_options.dart';
 import '../services/audio_session.dart';
 import '../services/token_client.dart';
 import '../services/voice_session.dart';
@@ -13,12 +14,16 @@ class CallScreen extends StatefulWidget {
     required this.session,
     required this.grant,
     required this.personas,
+    this.options = const SessionOptions(),
     this.initialMicMode = MicMode.openMic,
   });
 
   final VoiceSession session;
   final JoinGrant grant;
   final List<Persona> personas;
+
+  /// Per-session overrides (voice / CEFR / demeanor) for this call.
+  final SessionOptions options;
 
   /// The mic mode the call opens in (the user's default from Settings). Applied before
   /// connecting so push-to-talk stays muted through warm-up rather than auto-going-live.
@@ -44,7 +49,7 @@ class _CallScreenState extends State<CallScreen> {
     if (widget.initialMicMode != _session.micMode) {
       await _session.setMicMode(widget.initialMicMode);
     }
-    await _session.connect(widget.grant);
+    await _session.connect(widget.grant, options: widget.options);
   }
 
   void _onChange() {

@@ -2,8 +2,11 @@ import 'dart:async';
 import 'dart:convert';
 
 import 'package:flutter/foundation.dart';
-import 'package:livekit_client/livekit_client.dart';
+// livekit_client also exports a `SessionOptions` (for its agent API); hide it so the name
+// refers to our per-call overrides model.
+import 'package:livekit_client/livekit_client.dart' hide SessionOptions;
 
+import '../models/session_options.dart';
 import 'audio_session.dart';
 import 'telephony.dart';
 import 'token_client.dart';
@@ -95,6 +98,11 @@ class VoiceSession extends ChangeNotifier {
   /// "Connecting to assistant…" and the open mic is held muted until this flips true.
   bool agentReady = false;
   String persona = '';
+
+  /// The per-session overrides (voice / CEFR / demeanor) chosen for this call. Already applied
+  /// server-side from the token metadata; re-sent in the persona data message so a mid-call
+  /// persona switch keeps them.
+  SessionOptions options = const SessionOptions();
   MicMode micMode = MicMode.openMic;
   bool talking = false; // push-to-talk: true while the talk button is held
 
@@ -115,10 +123,12 @@ class VoiceSession extends ChangeNotifier {
 
   bool get isConnected => status == SessionStatus.connected;
 
-  Future<void> connect(JoinGrant grant) async {
+  Future<void> connect(JoinGrant grant,
+      {SessionOptions options = const SessionOptions()}) async {
     if (status == SessionStatus.connecting || status == SessionStatus.connected) return;
     _setStatus(SessionStatus.connecting);
     persona = grant.persona;
+    this.options = options;
     agentReady = false;
     try {
       final room = Room(
@@ -289,7 +299,10 @@ class VoiceSession extends ChangeNotifier {
   Future<void> _sendPersona(String personaId) async {
     final lp = _room?.localParticipant;
     if (lp == null || personaId.isEmpty) return;
-    final data = utf8.encode(jsonEncode({'persona': personaId}));
+    // Carry the session overrides alongside the persona so a mid-call persona switch keeps the
+    // chosen voice / CEFR / demeanor (the agent's data handler applies both — agent.py).
+    final payload = <String, dynamic>{'persona': personaId, ...options.toWireMap()};
+    final data = utf8.encode(jsonEncode(payload));
     await lp.publishData(data, reliable: true);
   }
 

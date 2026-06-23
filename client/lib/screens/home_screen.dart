@@ -6,10 +6,13 @@ import 'package:permission_handler/permission_handler.dart';
 import '../models/app_preferences.dart';
 import '../models/connection_settings.dart';
 import '../models/persona.dart';
+import '../models/voice_option.dart';
 import '../services/token_client.dart';
 import '../services/voice_session.dart';
 import 'call_screen.dart';
+import 'persona_options_sheet.dart';
 import 'settings_screen.dart';
+import 'voice_library_screen.dart';
 
 /// The launch screen: a shelf of personas to call. Connection settings live in
 /// [SettingsScreen] now — here you just pick who to talk to and tap to call.
@@ -34,6 +37,7 @@ class _HomeScreenState extends State<HomeScreen> {
 
   List<Persona> _personas = [];
   String? _defaultId;
+  VoiceCatalog _catalog = VoiceCatalog.empty;
   _LoadState _state = _LoadState.loading;
   String? _error;
   String? _connectingId; // persona currently being dialled
@@ -58,10 +62,17 @@ class _HomeScreenState extends State<HomeScreen> {
     final client = TokenClient(_settings);
     try {
       final (personas, defaultId) = await client.fetchPersonas();
+      // The voice catalog is best-effort — an older server or unconfigured registry shouldn't
+      // block the persona shelf; the customize sheet just falls back to CEFR/demeanor only.
+      var catalog = VoiceCatalog.empty;
+      try {
+        catalog = await client.fetchVoices();
+      } catch (_) {}
       if (!mounted) return;
       setState(() {
         _personas = personas;
         _defaultId = defaultId;
+        _catalog = catalog;
         _state = personas.isEmpty ? _LoadState.unconfigured : _LoadState.ok;
         _error = null;
       });
@@ -87,6 +98,27 @@ class _HomeScreenState extends State<HomeScreen> {
     await _bootstrap();
   }
 
+  Future<void> _openVoiceLibrary() async {
+    await Navigator.of(context).push(MaterialPageRoute(
+      builder: (_) => VoiceLibraryScreen(settings: _settings),
+    ));
+    // Adding/removing clones changes the catalog the customize sheet offers.
+    if (mounted) await _loadPersonas();
+  }
+
+  Future<void> _customize(Persona persona) async {
+    final result = await showPersonaOptionsSheet(
+      context,
+      persona: persona,
+      current: widget.prefs.optionsFor(persona.id),
+      catalog: _catalog,
+      onManageVoices: _openVoiceLibrary,
+    );
+    if (result == null) return; // dismissed without applying
+    await widget.prefs.setOptionsFor(persona.id, result);
+    if (mounted) setState(() {});
+  }
+
   Future<void> _call(Persona persona) async {
     final mic = await Permission.microphone.request();
     if (!mic.isGranted) {
@@ -98,8 +130,9 @@ class _HomeScreenState extends State<HomeScreen> {
 
     setState(() => _connectingId = persona.id);
     final client = TokenClient(_settings);
+    final options = widget.prefs.optionsFor(persona.id);
     try {
-      final grant = await client.requestToken(persona: persona.id);
+      final grant = await client.requestToken(persona: persona.id, options: options);
       if (!mounted) return;
       final session = VoiceSession();
       await Navigator.of(context).push(MaterialPageRoute(
@@ -107,6 +140,7 @@ class _HomeScreenState extends State<HomeScreen> {
           session: session,
           grant: grant,
           personas: _personas,
+          options: options,
           initialMicMode: widget.prefs.defaultMicMode,
         ),
       ));
@@ -142,6 +176,11 @@ class _HomeScreenState extends State<HomeScreen> {
       appBar: AppBar(
         title: const Text('Personas'),
         actions: [
+          IconButton(
+            icon: const Icon(Icons.record_voice_over_outlined),
+            tooltip: 'Voice library',
+            onPressed: _openVoiceLibrary,
+          ),
           IconButton(
             icon: const Icon(Icons.refresh),
             tooltip: 'Reload personas',
@@ -211,9 +250,11 @@ class _HomeScreenState extends State<HomeScreen> {
               persona: p,
               isDefault: p.id == _defaultId,
               isLastUsed: p.id == lastId,
+              hasOptions: widget.prefs.optionsFor(p.id).isNotEmpty,
               connecting: p.id == _connectingId,
               disabled: _connectingId != null && p.id != _connectingId,
               onTap: () => _call(p),
+              onCustomize: () => _customize(p),
             );
           },
         );
@@ -280,17 +321,21 @@ class _PersonaCard extends StatelessWidget {
     required this.persona,
     required this.isDefault,
     required this.isLastUsed,
+    required this.hasOptions,
     required this.connecting,
     required this.disabled,
     required this.onTap,
+    required this.onCustomize,
   });
 
   final Persona persona;
   final bool isDefault;
   final bool isLastUsed;
+  final bool hasOptions;
   final bool connecting;
   final bool disabled;
   final VoidCallback onTap;
+  final VoidCallback onCustomize;
 
   @override
   Widget build(BuildContext context) {
@@ -343,6 +388,9 @@ class _PersonaCard extends StatelessWidget {
                             )
                           else if (isDefault) _MiniTag('Default',
                               scheme.secondaryContainer, scheme.onSecondaryContainer),
+                          if (hasOptions)
+                            _MiniTag('Custom', scheme.primaryContainer,
+                                scheme.onPrimaryContainer),
                         ],
                       ),
                       const SizedBox(height: 2),
@@ -371,7 +419,15 @@ class _PersonaCard extends StatelessWidget {
                     ],
                   ),
                 ),
-                const SizedBox(width: 8),
+                const SizedBox(width: 4),
+                IconButton(
+                  icon: Icon(
+                    hasOptions ? Icons.tune : Icons.tune_outlined,
+                    color: hasOptions ? scheme.primary : scheme.outline,
+                  ),
+                  tooltip: 'Customize',
+                  onPressed: disabled || connecting ? null : onCustomize,
+                ),
                 connecting
                     ? const SizedBox(
                         width: 22, height: 22, child: CircularProgressIndicator(strokeWidth: 2))

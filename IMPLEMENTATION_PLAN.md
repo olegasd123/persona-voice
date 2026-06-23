@@ -92,15 +92,16 @@ routes, and Features **D–L**.
 > work they ride on (Features **A/B/C**) is already done and unit-tested; one (**N3**) adds the
 > only new server surface. Detailed specs are in the **NOW** section directly below this table.
 
-| # | Feature | Builds on | Server work | Effort | Risk |
-|---|---------|-----------|-------------|--------|------|
-| **N1** | **Per-persona session selectors** — voice / CEFR / demeanor, chosen per persona, applied *before* a call | A `[Done]` | none | M | Low |
-| **N2** | **Voice Library page** — list voices + clone by file upload or device mic | B `[Done]` | none | M | Low |
-| **N3** | **Custom personas** — multi-user **JSON store**, create / edit / delete + LoRA pick | K | **new routes** | L | Med |
-| **N4** | **Seed voices** — two ready clones out of the box (`temp_voices/`) | B `[Done]` | seed script | S | Low |
+| # | Feature | Builds on | Server work | Status |
+|---|---------|-----------|-------------|--------|
+| **N1** | **Per-persona session selectors** — voice / CEFR / demeanor, chosen per persona, applied *before* a call | A `[Done]` | none | `[Done]` (client; device run pending) |
+| **N2** | **Voice Library page** — list voices + clone by file upload or device mic | B `[Done]` | none | `[Done]` (client; device run pending) |
+| **N3** | **Custom personas** — multi-user **JSON store**, create / edit / delete + LoRA pick | K | **new routes** | — |
+| **N4** | **Seed voices** — two ready clones out of the box (`temp_voices/`) | B `[Done]` | seed script | — |
 
-**Order: N1 → N2 → N4 → N3.** N1 needs only a minimal `GET /voices` fetch (fully built by N2); N4
-makes N1/N2 demoable with real voices; **N3** is the only new server surface, so it lands last.
+**Order: N1 → N2 → N4 → N3.** N1+N2 are built (Flutter client; `flutter analyze` clean, unit tests
+green — no on-device run yet). Remaining: **N4** (makes N1/N2 demoable with real voices) then **N3**
+(the only new server surface).
 
 **Backlog (capabilities / ops / DX — independent, land any time).** Features **A/B/C** are the
 *server* substrate the NOW block builds on (already done & tested); D–L are unchanged.
@@ -129,7 +130,13 @@ personas live in a **JSON store**; the deployment is **multi-user** (clones *and
 namespaced per `user_id`, derived from the token identity/metadata); **LoRA stays vLLM-only**
 (see the backend note in **N3**).
 
-### N1 — Per-persona session selectors (client) — *client-only*
+### N1 — Per-persona session selectors (client) — *client-only* `[Done]`
+
+> **Built.** `models/session_options.dart` (+ `voice_option.dart`), `TokenClient.requestToken`
+> sends voice/cefr/demeanor, a "Customize" sheet per persona card
+> (`screens/persona_options_sheet.dart`), overrides persisted in `AppPreferences.personaOptions`,
+> and `VoiceSession` re-sends them in the persona data message (mid-call). `flutter analyze` clean,
+> unit tests green; on-device run still pending.
 
 **Server:** done (Feature A). `/token` accepts + validates `voice/cefr/demeanor`
 (`server/token_server.py`), the agent overlays them on the persona, and they're swappable
@@ -151,7 +158,14 @@ mid-call via the data message. Nothing new server-side.
 **Caveat:** a chosen voice is only *audible* on a cloning backend — the catalog `available` flag
 carries this through to the picker.
 
-### N2 — Voice Library page (client) — *client-only*
+### N2 — Voice Library page (client) — *client-only* `[Done]`
+
+> **Built.** `screens/voice_library_screen.dart` lists `GET /voices` grouped by kind with
+> availability/reason badges; enroll via file upload (`file_picker`) or device mic (`record` +
+> `path_provider`, `services/voice_recorder.dart`) behind the "authorized" consent box; delete
+> clones. New client deps (file_picker / record / path_provider) — **next iOS build needs
+> `pod install`**. Entry points: home AppBar + Settings. Analyzer clean, unit tests green; on-device
+> run pending.
 
 **Server:** done (Feature B). `GET /voices`, `POST /voices/clone?name=&text=&authorized=` (raw
 wav as the body), `DELETE /voices/clone/{name}`. The shared WAV codec mixes to mono + resamples

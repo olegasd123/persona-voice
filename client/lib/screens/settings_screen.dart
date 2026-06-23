@@ -4,6 +4,7 @@ import '../models/app_preferences.dart';
 import '../models/connection_settings.dart';
 import '../services/token_client.dart';
 import '../services/voice_session.dart' show MicMode;
+import 'voice_library_screen.dart';
 
 /// Connection details (server URL, API token, your name) + app defaults (mic mode, theme).
 /// This is where the config that used to clutter the home screen now lives — you only come
@@ -154,6 +155,20 @@ class _SettingsScreenState extends State<SettingsScreen> {
               prefixIcon: Icon(Icons.person_outline),
             ),
             onChanged: (_) => _persistConnection(),
+          ),
+          const SizedBox(height: 24),
+          _SectionLabel('Voices'),
+          Card(
+            margin: EdgeInsets.zero,
+            child: ListTile(
+              leading: const Icon(Icons.record_voice_over_outlined),
+              title: const Text('Voice library'),
+              subtitle: const Text('Browse voices and add your own clones'),
+              trailing: const Icon(Icons.chevron_right),
+              onTap: () => Navigator.of(context).push(MaterialPageRoute(
+                builder: (_) => VoiceLibraryScreen(settings: _settings),
+              )),
+            ),
           ),
           const SizedBox(height: 24),
           _SectionLabel('Call defaults'),
