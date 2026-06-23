@@ -35,9 +35,10 @@ from typing import Any
 from ..adapters.factory import Backend, build_backend
 from ..audio import pcm16_to_wav, wav_to_pcm16
 from ..memory import ConversationMemory
-from ..models import Persona
+from ..models import Persona, SessionOptions
 from ..obs import configure_logging, turn_metrics_from_stream
 from ..persona.registry import PersonaRegistry
+from ..safety import Moderator, moderator_from_env
 from ..server.config import (
     Settings,
     build_conversation_memory,
@@ -106,6 +107,8 @@ class PersonaAgent:
         source: Any,
         voices: VoiceRegistry | None = None,
         *,
+        options: SessionOptions | None = None,
+        moderator: Moderator | None = None,
         publish_transcript: TranscriptPublisher | None = None,
         memory: ConversationMemory | None = None,
         user_id: str | None = None,
@@ -114,7 +117,16 @@ class PersonaAgent:
         self._persona = persona
         self._source = source
         self._memory = memory
-        self._pipeline = StreamingPipeline(backend, persona, voices, memory=memory, user_id=user_id)
+        self._options = options or SessionOptions()
+        self._pipeline = StreamingPipeline(
+            backend,
+            persona,
+            voices,
+            options=self._options,
+            moderator=moderator,
+            memory=memory,
+            user_id=user_id,
+        )
         self._turn = TurnController(self._capture_wav)
         self._frame_samples = max(1, _OUT_SAMPLE_RATE * _FRAME_MS // 1000)
         # Publishes the assistant's spoken words back as a live transcript (the client renders
@@ -140,6 +152,25 @@ class PersonaAgent:
         self._persona = persona
         self._pipeline.persona = persona
         logger.info("persona switched to %s mid-session", persona.id)
+
+    @property
+    def options(self) -> SessionOptions:
+        return self._options
+
+    def set_options(self, options: SessionOptions) -> None:
+        """Apply per-session option changes mid-call (voice / CEFR / demeanor).
+
+        The given options are *merged over* the current ones, so a data message that only sets
+        `demeanor` keeps the existing voice/CEFR. The in-flight reply is interrupted so the
+        next user turn is answered under the new options (the pipeline reads them per turn).
+        """
+        merged = options.merged_over(self._options)
+        if merged == self._options:
+            return
+        self._turn.interrupt()
+        self._options = merged
+        self._pipeline.options = merged
+        logger.info("session options updated mid-session: %s", merged.model_dump(exclude_none=True))
 
     async def _capture_wav(self, wav: bytes) -> None:
         """Sink: push one sentence's WAV onto the WebRTC track as 20 ms PCM frames."""
@@ -415,6 +446,20 @@ def resolve_user_id(sources: list[str | None]) -> str | None:
     return None
 
 
+def resolve_session_options(sources: list[str | None]) -> SessionOptions:
+    """Merge `SessionOptions` across metadata sources (highest priority first).
+
+    Each source can set a different subset of fields (voice / cefr / demeanor); they're
+    merged so a higher-priority source's set fields win, matching how the client may put some
+    options on the job and others on the room. The analog of `persona_id_from_metadata` for
+    the session-options rail.
+    """
+    merged = SessionOptions()
+    for src in reversed(sources):  # apply lowest priority first so the highest wins
+        merged = SessionOptions.from_metadata(src).merged_over(merged)
+    return merged
+
+
 def _default_persona_id(registry: PersonaRegistry) -> str:
     """The fallback persona: `PERSONAVOICE_PERSONA` if it's known, else the first registered."""
     env = os.getenv("PERSONAVOICE_PERSONA")
@@ -549,6 +594,13 @@ async def entrypoint(ctx: Any, *, persona_id: str | None = None) -> None:
             "memory enabled for user %r (persona memory=%s)", user_id, persona.memory.enabled
         )
 
+    # Per-session overrides (voice / CEFR / demeanor) from the room/job metadata the client
+    # set, plus the moderation guard (no-op unless PERSONAVOICE_MODERATION is set).
+    options = resolve_session_options([job_meta, room_meta])
+    if options.any_set():
+        logger.info("session options: %s", options.model_dump(exclude_none=True))
+    moderator = moderator_from_env()
+
     source = rtc.AudioSource(_OUT_SAMPLE_RATE, 1)
     track = rtc.LocalAudioTrack.create_audio_track("assistant-voice", source)
     publication = await ctx.room.local_participant.publish_track(
@@ -563,6 +615,8 @@ async def entrypoint(ctx: Any, *, persona_id: str | None = None) -> None:
         persona,
         source,
         voices,
+        options=options,
+        moderator=moderator,
         publish_transcript=publisher,
         memory=memory,
         user_id=user_id,
@@ -578,14 +632,18 @@ async def entrypoint(ctx: Any, *, persona_id: str | None = None) -> None:
 
     @ctx.room.on("data_received")
     def _on_data(data: Any, *_: Any) -> None:
-        pid = persona_id_from_metadata(_data_text(data))
-        if not pid:
-            return
-        if pid in registry:
-            registry.reload()  # pick up any edits to the persona file before swapping
-            agent.set_persona(registry.get(pid))
-        else:
-            logger.warning("ignoring data request to switch to unknown persona %r", pid)
+        text = _data_text(data)
+        pid = persona_id_from_metadata(text)
+        if pid:
+            if pid in registry:
+                registry.reload()  # pick up any edits to the persona file before swapping
+                agent.set_persona(registry.get(pid))
+            else:
+                logger.warning("ignoring data request to switch to unknown persona %r", pid)
+        # A data message can also change session options (voice / CEFR / demeanor) mid-call.
+        options = SessionOptions.from_metadata(text)
+        if options.any_set():
+            agent.set_options(options)
 
     # Stay alive until the job is cancelled (participant leaves / worker shuts down).
     try:

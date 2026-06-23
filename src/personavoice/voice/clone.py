@@ -153,6 +153,20 @@ class ClonesStore:
     def get(self, name: str) -> ClonedVoice | None:
         return self._voices.get(name)
 
+    def remove(self, name: str) -> bool:
+        """Delete clone `name` and drop any persona assignments to it, then persist.
+
+        Returns True if a clone was removed. Assignments pointing at the removed clone are
+        cleared too, so a persona doesn't keep a dangling reference.
+        """
+        if name not in self._voices:
+            return False
+        del self._voices[name]
+        for persona_id in [pid for pid, n in self._assignments.items() if n == name]:
+            del self._assignments[persona_id]
+        self.save()
+        return True
+
     def names(self) -> list[str]:
         return sorted(self._voices)
 

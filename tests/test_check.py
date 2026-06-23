@@ -39,6 +39,32 @@ def test_check_reports_unknown_adapter(tmp_path) -> None:
     assert any("unknown stt adapter" in e for e in report.errors)
 
 
+def test_check_warns_when_clones_present_but_tts_cannot_speak_them(tmp_path) -> None:  # type: ignore[no-untyped-def]
+    from personavoice.voice.clone import ClonedVoice, ClonesStore
+
+    backends = tmp_path / "backends"
+    backends.mkdir()
+    (backends / "mac.yaml").write_text(
+        "backend: mac\n"
+        "stt: {adapter: whisper_mlx}\n"
+        "llm: {adapter: ollama}\n"
+        "tts: {adapter: kokoro}\n"  # preset-only: can't speak clones
+    )
+    (tmp_path / "personas").mkdir()
+    clones_dir = tmp_path / "clones"
+    store = ClonesStore(clones_dir)
+    store.record(ClonedVoice(name="my_voice", sample_path="s.wav"))
+    settings = Settings(
+        backend="mac",
+        config_dir=tmp_path,
+        models_dir=tmp_path / "models",
+        clones_dir=clones_dir,
+    )
+
+    report = run_check(settings)
+    assert any("can't speak them" in w for w in report.warnings)
+
+
 def test_check_warns_on_backend_mismatch(tmp_path) -> None:
     backends = tmp_path / "backends"
     backends.mkdir()

@@ -374,3 +374,71 @@ def test_set_same_persona_is_a_noop(config_dir: Path) -> None:
     ag = agent.PersonaAgent(make_backend(), companion, FakeSource())
     ag.set_persona(_companion(config_dir))  # same id, different instance
     assert ag.persona is companion  # unchanged
+
+
+# --- session options (mid-session) ----------------------------------------------------
+
+
+def test_resolve_session_options_merges_across_sources() -> None:
+    from personavoice.models import CEFRLevel, Demeanor
+
+    # Highest priority (first) source wins per field; fields combine across sources.
+    opts = agent.resolve_session_options(
+        ['{"demeanor": "rude"}', '{"cefr": "B1", "demeanor": "kind"}']
+    )
+    assert opts.demeanor is Demeanor.rude  # first source wins for demeanor
+    assert opts.cefr is CEFRLevel.b1  # only the second source set cefr
+
+
+def test_resolve_session_options_empty() -> None:
+    from personavoice.models import SessionOptions
+
+    assert agent.resolve_session_options([None, "", "not json"]) == SessionOptions()
+
+
+def test_set_options_merges_and_propagates(config_dir: Path) -> None:
+    from personavoice.models import CEFRLevel, Demeanor, SessionOptions
+
+    ag = agent.PersonaAgent(
+        make_backend(),
+        _companion(config_dir),
+        FakeSource(),
+        options=SessionOptions(cefr=CEFRLevel.b1),
+    )
+    ag.set_options(SessionOptions(demeanor=Demeanor.rude))
+    # The new field is applied; the prior field is kept; the pipeline sees the merged options.
+    assert ag.options.demeanor is Demeanor.rude
+    assert ag.options.cefr is CEFRLevel.b1
+    assert ag._pipeline.options == ag.options
+
+
+async def test_set_options_interrupts_in_flight_reply(config_dir: Path) -> None:
+    from personavoice.models import Demeanor, SessionOptions
+
+    ag = agent.PersonaAgent(make_backend(), _companion(config_dir), FakeSource())
+
+    async def slow():  # type: ignore[no-untyped-def]
+        await asyncio.sleep(10)
+        yield b"x"
+
+    ag._turn.begin(slow())
+    await asyncio.sleep(0)
+    assert ag._turn.speaking is True
+
+    ag.set_options(SessionOptions(demeanor=Demeanor.rude))
+    await ag._turn.join()
+    assert ag._turn.speaking is False
+
+
+def test_set_options_noop_when_unchanged(config_dir: Path) -> None:
+    from personavoice.models import Demeanor, SessionOptions
+
+    ag = agent.PersonaAgent(
+        make_backend(),
+        _companion(config_dir),
+        FakeSource(),
+        options=SessionOptions(demeanor=Demeanor.rude),
+    )
+    before = ag.options
+    ag.set_options(SessionOptions(demeanor=Demeanor.rude))  # same value
+    assert ag.options == before

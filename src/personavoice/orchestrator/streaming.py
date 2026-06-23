@@ -22,8 +22,9 @@ from dataclasses import dataclass
 
 from ..adapters.factory import Backend
 from ..memory import ConversationMemory
-from ..models import Msg, Persona, Role
+from ..models import Msg, Persona, Role, SessionOptions
 from ..persona.prompt import build_messages
+from ..safety import Moderator
 from ..voice.registry import VoiceRegistry
 from .chunker import chunk_kwargs_from_env, stream_sentences
 from .pipeline import voice_ref_for
@@ -53,6 +54,8 @@ class StreamingPipeline:
         persona: Persona,
         voices: VoiceRegistry | None = None,
         *,
+        options: SessionOptions | None = None,
+        moderator: Moderator | None = None,
         memory: ConversationMemory | None = None,
         user_id: str | None = None,
         chunk_kwargs: dict[str, int | None] | None = None,
@@ -60,6 +63,13 @@ class StreamingPipeline:
         self.backend = backend
         self.persona = persona
         self.voices = voices
+        # Per-session overrides (voice / cefr / demeanor). None = persona defaults.
+        self.options = options
+        # Optional input guard. None = no moderation (behavior unchanged). On the streaming
+        # path the guard runs on *input* (a flagged/crisis utterance short-circuits to a safe
+        # spoken reply); the bounded `rude` prompt and the turn-based output guard cover the
+        # output side (full-reply output moderation pre-TTS would defeat streaming).
+        self.moderator = moderator
         self.history: list[Msg] = []
         # TTS chunk-sizing knobs (latency); resolved from the environment by default so
         # the live agent and demos pick up `PERSONAVOICE_TTS_*` without extra wiring.
@@ -94,15 +104,33 @@ class StreamingPipeline:
         use_internal = history is None
         history = self.history if use_internal else history
 
-        memory_context = await self._recall(user_text)
-        messages = build_messages(
-            self.persona, history=history, user_input=user_text, memory_context=memory_context
+        # Input moderation: a flagged/crisis utterance short-circuits to a safe spoken reply,
+        # skipping the LLM (and memory recall) entirely.
+        canned = await self._safe_input_reply(user_text)
+        if canned is None:
+            memory_context = await self._recall(user_text)
+            messages = build_messages(
+                self.persona,
+                history=history,
+                user_input=user_text,
+                memory_context=memory_context,
+                options=self.options,
+            )
+        else:
+            messages = []
+        voice = voice_ref_for(
+            self.persona, self.backend, self.voices, voice_choice=self._voice_choice
         )
-        voice = voice_ref_for(self.persona, self.backend, self.voices)
         collected: list[str] = []
         t0 = time.perf_counter()
 
         async def _tokens() -> AsyncIterator[str]:
+            if canned is not None:
+                if metrics is not None and metrics.first_token is None:
+                    metrics.first_token = time.perf_counter() - t0
+                collected.append(canned)
+                yield canned
+                return
             async for tok in self.backend.llm.stream_chat(messages, self.persona):
                 if metrics is not None and metrics.first_token is None:
                     metrics.first_token = time.perf_counter() - t0
@@ -141,6 +169,19 @@ class StreamingPipeline:
                 self.history.append(Msg(role=Role.user, content=user_text))
                 self.history.append(Msg(role=Role.assistant, content=reply))
             await self._remember(user_text, reply)
+
+    @property
+    def _voice_choice(self) -> str | None:
+        return self.options.voice if self.options else None
+
+    async def _safe_input_reply(self, user_text: str) -> str | None:
+        """A safe canned reply when the input is flagged, else None (run the normal turn)."""
+        if self.moderator is None:
+            return None
+        verdict = await self.moderator.check_input(user_text)
+        if verdict.flagged and verdict.replacement is not None:
+            return verdict.replacement
+        return None
 
     async def _recall(self, user_text: str) -> str | None:
         """Memory block to inject for this turn (None when memory is off / no consent)."""

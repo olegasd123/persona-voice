@@ -14,6 +14,9 @@ Most of this is still spec, not code. File paths and function names refer to the
 each item is grounded and actionable. See the **Status** section below for the client/server
 scaffold that has since landed and what it changes about the remaining work.
 
+**Convention** Mark a functionality as `[Done]` when it's completed, or `[Partial]` when it's started
+but not finished.
+
 ---
 
 ## Status (as of 2026-06-23)
@@ -53,8 +56,20 @@ session-options behavior (voice override / CEFR / demeanor) or voice cloning is 
 - `VoiceRegistry.describe()` exists; the catalog work in **Feature B (§3.2)** still needs
   `VoiceOption` / `catalog()` / `resolve_choice()`.
 
-Still entirely unimplemented: SessionOptions data model + directives (A), voice override plumbing
-(A/B), voice catalog + clone enrollment (B), and Features C–L.
+**Update (server-side headline trio landed).** Features **C → A → B are implemented server-side
+and unit-tested** (full `pytest` green, `ruff`/`mypy` clean):
+- **C** — `safety/` moderation seam: `Moderator` protocol + no-op default + `KeywordModerator`
+  (crisis/abuse), wired into both pipelines; `PERSONAVOICE_MODERATION` toggle.
+- **A** — `SessionOptions`/`CEFRLevel`/`Demeanor`, CEFR+demeanor prompt directives, voice-override
+  resolution, options threaded through pipelines + agent (incl. mid-call `set_options` /
+  `resolve_session_options`), token-server validation/echo, and `--voice/--cefr/--demeanor` demo
+  flags.
+- **B** — `VoiceOption` + `catalog()`/`resolve_choice()`/`choice_ids()`, and the
+  `GET /voices` / `POST /voices/clone` / `DELETE /voices/clone/{name}` routes (raw-wav upload,
+  quotas, capability gating).
+
+Still unimplemented: the **client selectors/picker** (§15 step 4 / Feature J) on top of these
+routes, and Features **D–L**.
 
 ---
 
@@ -75,9 +90,9 @@ Still entirely unimplemented: SessionOptions data model + directives (A), voice 
 
 | # | Feature | Theme | Effort | Risk | Depends on |
 |---|---------|-------|--------|------|------------|
-| A | **Session options** (voice / CEFR / demeanor) | Personalization | M | Low | — |
-| B | **Multi-voice cloning + voice library** | Personalization | L | Med | A (voice field) |
-| C | **Safety / moderation layer** | Trust | M | Low | — (enables "rude") |
+| A | **Session options** (voice / CEFR / demeanor) `[Done]` (server) | Personalization | M | Low | — |
+| B | **Multi-voice cloning + voice library** `[Done]` (server) | Personalization | L | Med | A (voice field) |
+| C | **Safety / moderation layer** `[Done]` | Trust | M | Low | — (enables "rude") |
 | D | **Tool / function calling** | Capability | L | Med | — |
 | E | **Post-session feedback report** | Capability | M | Low | memory/transcript |
 | F | **Dynamic emotion / prosody** | Naturalness | M | Med | A (emotion plumbing) |
@@ -94,7 +109,15 @@ else is independent and can land in any order.
 
 ---
 
-## 2. Feature A — Session options (voice / CEFR / demeanor)
+## 2. Feature A — Session options (voice / CEFR / demeanor) `[Done]` (server)
+
+> **Status:** Server-side complete and unit-tested. `SessionOptions` + `CEFRLevel`/`Demeanor`
+> (`models.py`), the CEFR/demeanor directives (`persona/prompt.py`), the voice-override path
+> (`voice_ref_for(..., voice_choice=...)`), options threaded through `Pipeline`/`StreamingPipeline`/
+> `PersonaAgent` (with `set_options()` + a `session_from_metadata`/`resolve_session_options`
+> helper and mid-call data-message changes), token-server validation/echo, and `--voice/--cefr/
+> --demeanor` flags on both demos all landed. The remaining piece is the **client selectors**
+> (§15 step 4 / Feature J).
 
 ### 2.1 Motivation
 
@@ -221,7 +244,14 @@ def voice_ref_for(persona, backend, voices=None, *, voice_choice: str | None = N
 
 ---
 
-## 3. Feature B — Multi-voice cloning + voice library
+## 3. Feature B — Multi-voice cloning + voice library `[Done]` (server)
+
+> **Status:** Server substrate complete and unit-tested. `VoiceOption` + `VoiceRegistry.catalog()`
+> / `resolve_choice()` / `choice_ids()` (`voice/registry.py`), and the HTTP routes `GET /voices`,
+> `POST /voices/clone` (raw-wav body + `name`/`text`/`authorized`; quota + size caps), and
+> `DELETE /voices/clone/{name}` (`server/token_server.py`, with `ClonesStore.remove`) all landed.
+> Enrollment is multipart-free (Python 3.13 dropped `cgi`): the wav rides as the raw request
+> body. The **client picker UI** is the remaining piece (§15 step 4 / Feature J).
 
 > This is the substrate for "pick a voice before a conversation." The store already holds **many**
 > named clones (`ClonesStore._voices: dict[name -> ClonedVoice]` in
@@ -315,7 +345,15 @@ but active TTS cannot speak them."
 
 ---
 
-## 4. Feature C — Safety / moderation layer
+## 4. Feature C — Safety / moderation layer `[Done]`
+
+> **Status:** The seam landed. `safety/` ships the `Moderator` protocol + `ModerationResult`, a
+> `NoopModerator` default (wired everywhere, behavior unchanged) and a dependency-free
+> `KeywordModerator` (crisis-on-input short-circuit + bounded `rude`/abuse/threat output),
+> selectable via `PERSONAVOICE_MODERATION`. Input moderation short-circuits both pipelines;
+> output moderation runs in the turn-based `Pipeline`. **Follow-up:** full pre-TTS output
+> moderation on the *streaming* path (buffering the whole reply would defeat streaming) — for now
+> the bounded `rude` prompt + the input guard cover streaming.
 
 ### 4.1 Motivation
 
@@ -505,12 +543,12 @@ Strengthens the consent story already built (`personavoice-memory --show/--expor
 
 ## 15. Headline path (the requested trio, end to end)
 
-1. **C** — land the moderation seam (no-op default) so `rude` is safe by construction.
-2. **A** — `SessionOptions` + CEFR/demeanor directives + voice-override plumbing + token-server
-   validation + offline flags on the demos. Fully testable without the client.
-3. **B** — voice **catalog** + `resolve_choice` + the **clone enrollment** endpoints, so the user
-   has a real library to pick from. Document the cloning-backend requirement.
-4. **Flutter (scaffold landed) / Web** — the persona picker + Settings surface already exist
+1. **C** `[Done]` — moderation seam (no-op default) so `rude` is safe by construction.
+2. **A** `[Done]` — `SessionOptions` + CEFR/demeanor directives + voice-override plumbing +
+   token-server validation + offline flags on the demos. Fully testable without the client.
+3. **B** `[Done]` — voice **catalog** + `resolve_choice` + the **clone enrollment** endpoints, so
+   the user has a real library to pick from. Cloning-backend requirement documented.
+4. **Flutter (scaffold landed) / Web** `[Partial]` — the persona picker + Settings surface exist
    (see Status). Remaining: add **voice / CEFR / demeanor selectors** on top, wire them into the `/token`
    body, and consume `/voices` once Feature B lands. A separate web client is optional/additive.
 

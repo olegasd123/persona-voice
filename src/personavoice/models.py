@@ -7,10 +7,14 @@ in one place lets every adapter depend on the contract without importing each ot
 
 from __future__ import annotations
 
+import json
+import logging
 from enum import StrEnum
 from typing import Any
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
+
+logger = logging.getLogger("personavoice.models")
 
 # --------------------------------------------------------------------------------------
 # Conversation values (flow between stages)
@@ -132,6 +136,98 @@ class Persona(BaseModel):
     voice: VoiceSettings
     behavior: BehaviorSettings = BehaviorSettings()
     memory: MemorySettings = MemorySettings()
+
+
+# --------------------------------------------------------------------------------------
+# Session options (per-conversation overrides on top of a persona)
+# --------------------------------------------------------------------------------------
+
+
+class CEFRLevel(StrEnum):
+    """Common European Framework of Reference language-proficiency levels."""
+
+    a1 = "A1"
+    a2 = "A2"
+    b1 = "B1"
+    b2 = "B2"
+    c1 = "C1"
+    c2 = "C2"
+
+
+class Demeanor(StrEnum):
+    """How the persona carries itself for this session. `natural` = persona as authored."""
+
+    kind = "kind"
+    natural = "natural"
+    rude = "rude"
+
+
+class SessionOptions(BaseModel):
+    """Per-conversation overrides layered on top of a persona.
+
+    All fields are optional; `None` means "use the persona's default". These are decided
+    before a call (carried in room/job metadata) and can be swapped mid-call. They reuse the
+    persona-selection rail: token metadata → agent → optional data message.
+    """
+
+    model_config = ConfigDict(extra="ignore")
+
+    voice: str | None = None  # voice-library id (preset | clone | finetuned)
+    cefr: CEFRLevel | None = None
+    demeanor: Demeanor | None = None
+
+    # Case-insensitive enums: clients/CLI flags send "b1"/"KIND"; the enum values are
+    # canonical ("B1"/"kind"). Normalize before validation so casing never drops a value.
+    @field_validator("cefr", mode="before")
+    @classmethod
+    def _normalize_cefr(cls, value: Any) -> Any:
+        return value.upper() if isinstance(value, str) else value
+
+    @field_validator("demeanor", mode="before")
+    @classmethod
+    def _normalize_demeanor(cls, value: Any) -> Any:
+        return value.lower() if isinstance(value, str) else value
+
+    @classmethod
+    def from_metadata(cls, meta: str | None) -> SessionOptions:
+        """Parse session options from a JSON metadata string, tolerating junk.
+
+        The client tags the room/job with
+        `{"persona": "...", "voice": "...", "cefr": "B1", "demeanor": "kind"}`. Missing keys
+        are fine (the field stays None); an unknown enum value is dropped (logged once) rather
+        than raising, so a stray value never blocks a session. Anything that isn't a JSON
+        object yields empty options.
+        """
+        if not meta or not meta.strip() or not meta.strip().startswith("{"):
+            return cls()
+        try:
+            obj = json.loads(meta.strip())
+        except json.JSONDecodeError:
+            return cls()
+        if not isinstance(obj, dict):
+            return cls()
+        # Validate each field on its own so one bad value (e.g. cefr="Z9") drops only that
+        # field instead of discarding the whole options object.
+        kept: dict[str, Any] = {}
+        for key in ("voice", "cefr", "demeanor"):
+            value = obj.get(key)
+            if value is None:
+                continue
+            try:
+                cls.model_validate({key: value})
+            except ValidationError:
+                logger.warning("dropping invalid session option %s=%r", key, value)
+                continue
+            kept[key] = value
+        return cls.model_validate(kept)
+
+    def merged_over(self, base: SessionOptions) -> SessionOptions:
+        """Return `base` with this object's set (non-None) fields taking precedence."""
+        return base.model_copy(update={k: v for k, v in self.model_dump().items() if v is not None})
+
+    def any_set(self) -> bool:
+        """True when at least one override is set (vs. an all-None "use the defaults")."""
+        return any(v is not None for v in self.model_dump().values())
 
 
 # --------------------------------------------------------------------------------------

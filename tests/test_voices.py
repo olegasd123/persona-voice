@@ -8,7 +8,14 @@ import pytest
 
 from personavoice.models import VoiceDef
 from personavoice.persona import load_personas
-from personavoice.voice import VoiceError, VoiceRegistry
+from personavoice.voice import (
+    ClonedVoice,
+    ClonesStore,
+    FinetunedVoice,
+    FinetunedVoicesStore,
+    VoiceError,
+    VoiceRegistry,
+)
 
 PERSONA_REFS = {
     "companion": "voices/companion_soft",
@@ -103,6 +110,86 @@ def test_unknown_field_rejected(tmp_path: Path) -> None:
     bad.write_text("v:\n  bogus: 1\n")
     with pytest.raises(VoiceError, match="invalid voice registry"):
         VoiceRegistry.load(bad)
+
+
+# --- catalog + resolve_choice (Feature B) ---------------------------------------------
+
+
+def _registry_with_stores(tmp_path: Path) -> VoiceRegistry:
+    """A registry with one preset, one clone, and one fine-tuned voice for catalog tests."""
+    clones = ClonesStore(tmp_path / "clones")
+    clones.record(ClonedVoice(name="my_clone", sample_path="s.wav", ref_text="hello"))
+    finetuned = FinetunedVoicesStore(tmp_path / "ft")
+    finetuned.record(FinetunedVoice(name="my_ft", checkpoint_path="ckpt"))
+    voices = {"companion_soft": VoiceDef(description="warm", presets={"kokoro": "af_heart"})}
+    return VoiceRegistry(voices, clones=clones, finetuned=finetuned)
+
+
+def test_catalog_order_and_availability_non_cloning(tmp_path: Path) -> None:
+    reg = _registry_with_stores(tmp_path)
+    catalog = reg.catalog("kokoro", supports_cloning=False)
+    # Stable order: finetuned, clones, presets.
+    assert [o.kind for o in catalog] == ["finetuned", "clone", "preset"]
+    by_id = {o.id: o for o in catalog}
+    # On a non-cloning backend clones/fine-tunes are listed but unavailable, with a reason.
+    assert by_id["my_ft"].available is False and by_id["my_ft"].reason
+    assert by_id["my_clone"].available is False and by_id["my_clone"].reason
+    # The preset is available where it maps for this backend.
+    assert by_id["companion_soft"].available is True
+    assert by_id["companion_soft"].name == "warm"  # description used as the label
+
+
+def test_catalog_availability_cloning_backend(tmp_path: Path) -> None:
+    reg = _registry_with_stores(tmp_path)
+    catalog = reg.catalog("f5_mlx", supports_cloning=True)
+    by_id = {o.id: o for o in catalog}
+    assert by_id["my_clone"].available is True and by_id["my_clone"].reason is None
+    assert by_id["my_ft"].available is True
+    # F5 has no preset mapping, so the preset is unavailable on this backend.
+    assert by_id["companion_soft"].available is False
+    assert "f5_mlx" in (by_id["companion_soft"].reason or "")
+
+
+def test_resolve_choice_precedence_finetuned_over_clone(tmp_path: Path) -> None:
+    reg = _registry_with_stores(tmp_path)
+    ref = reg.resolve_choice("my_ft", "f5_mlx", supports_cloning=True)
+    assert ref is not None and ref.model_path == "ckpt"
+
+
+def test_resolve_choice_clone_on_cloning_backend(tmp_path: Path) -> None:
+    reg = _registry_with_stores(tmp_path)
+    ref = reg.resolve_choice("my_clone", "f5_mlx", supports_cloning=True, default_emotion="warm")
+    assert ref is not None
+    assert ref.sample_path == "s.wav"
+    assert ref.emotion == "warm"
+
+
+def test_resolve_choice_clone_unavailable_on_non_cloning_backend(tmp_path: Path) -> None:
+    reg = _registry_with_stores(tmp_path)
+    # The clone isn't speakable on Kokoro -> None, so the caller falls back to the default.
+    assert reg.resolve_choice("my_clone", "kokoro", supports_cloning=False) is None
+
+
+def test_resolve_choice_preset(tmp_path: Path) -> None:
+    reg = _registry_with_stores(tmp_path)
+    ref = reg.resolve_choice("companion_soft", "kokoro", supports_cloning=False)
+    assert ref is not None and ref.id == "af_heart"
+
+
+def test_resolve_choice_preset_without_mapping_is_none(tmp_path: Path) -> None:
+    reg = _registry_with_stores(tmp_path)
+    # Known preset, but no mapping for f5_mlx -> not speakable as that choice -> None.
+    assert reg.resolve_choice("companion_soft", "f5_mlx", supports_cloning=True) is None
+
+
+def test_resolve_choice_unknown_is_none(tmp_path: Path) -> None:
+    reg = _registry_with_stores(tmp_path)
+    assert reg.resolve_choice("nope", "kokoro", supports_cloning=True) is None
+
+
+def test_choice_ids_spans_all_kinds(tmp_path: Path) -> None:
+    reg = _registry_with_stores(tmp_path)
+    assert reg.choice_ids() == ["companion_soft", "my_clone", "my_ft"]
 
 
 async def test_pipeline_speaks_each_persona_in_its_own_voice(config_dir: Path) -> None:

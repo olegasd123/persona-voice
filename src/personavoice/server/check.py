@@ -125,6 +125,16 @@ def run_check(settings: Settings) -> CheckReport:
         report.finetuned_assignments = voices.finetuned.assignments
     report.warnings.extend(_validate_personas(personas, backend, voices))
 
+    # Clones/fine-tunes exist but the active TTS can't speak them (e.g. enrolled a voice, then
+    # ran Kokoro/Orpheus): the catalog lists them as unavailable and a session voice override
+    # would silently fall back. Flag it so the misconfig is visible.
+    if not getattr(backend.tts, "supports_cloning", False) and (report.clones or report.finetuned):
+        n = len(report.clones) + len(report.finetuned)
+        report.warnings.append(
+            f"{n} cloned/fine-tuned voice(s) present but the active TTS {backend.tts.name!r} "
+            "can't speak them — switch to a cloning backend (f5_mlx on Mac, chatterbox on CUDA)"
+        )
+
     # 4. Memory. Surfaces the store location, at-rest encryption, and #users so a
     # misconfigured PERSONAVOICE_MEMORY_KEY (cryptography missing / bad key) fails the check.
     report.memory_dir = str(settings.memory_dir)

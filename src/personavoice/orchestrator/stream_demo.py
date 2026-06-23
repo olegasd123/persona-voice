@@ -24,9 +24,10 @@ from pathlib import Path
 from ..adapters.factory import build_backend
 from ..audio import read_wav_file, write_wav_file
 from ..memory import ConversationMemory
-from ..models import Persona
+from ..models import Persona, SessionOptions
 from ..persona.loader import load_persona
 from ..persona.registry import PersonaRegistry
+from ..safety import moderator_from_env
 from ..server.config import (
     ConfigError,
     Settings,
@@ -34,6 +35,7 @@ from ..server.config import (
     load_backend_config,
     load_voice_registry,
 )
+from .demo import add_session_option_args, session_options_from_args
 from .streaming import StreamingPipeline, StreamMetrics
 
 
@@ -76,6 +78,7 @@ async def _run(
     out_dir: Path,
     play: bool,
     user_id: str | None,
+    options: SessionOptions | None = None,
 ) -> StreamMetrics:
     backend = build_backend(load_backend_config(settings))
 
@@ -99,7 +102,13 @@ async def _run(
     print(f"{persona.id} : ", end="", flush=True)
 
     pipe = StreamingPipeline(
-        backend, persona, load_voice_registry(settings), memory=memory, user_id=user_id
+        backend,
+        persona,
+        load_voice_registry(settings),
+        options=options,
+        moderator=moderator_from_env(),
+        memory=memory,
+        user_id=user_id,
     )
     metrics = StreamMetrics()
 
@@ -162,6 +171,7 @@ def main(argv: list[str] | None = None) -> int:
         help="enable cross-session memory keyed by this user id: grants consent, "
         "records the turn, recalls prior-session facts on the next run",
     )
+    add_session_option_args(parser)
     args = parser.parse_args(argv)
 
     try:
@@ -184,7 +194,17 @@ def main(argv: list[str] | None = None) -> int:
 
     args.out_dir.mkdir(parents=True, exist_ok=True)
     try:
-        metrics = asyncio.run(_run(settings, persona, audio_in, args.out_dir, args.play, args.user))
+        metrics = asyncio.run(
+            _run(
+                settings,
+                persona,
+                audio_in,
+                args.out_dir,
+                args.play,
+                args.user,
+                session_options_from_args(args),
+            )
+        )
     except Exception as exc:  # surface backend/model errors without a traceback wall
         print(f"error: {exc}", file=sys.stderr)
         return 1

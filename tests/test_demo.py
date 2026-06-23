@@ -72,3 +72,46 @@ def test_demo_unknown_persona_returns_2(tmp_path: Path, monkeypatch: pytest.Monk
     monkeypatch.setattr(demo, "build_backend", lambda cfg: make_backend())
     rc = demo.main(["--wav", str(in_wav), "--persona", "does_not_exist"])
     assert rc == 2
+
+
+def test_session_option_args_parse() -> None:
+    import argparse
+
+    from personavoice.models import CEFRLevel, Demeanor
+
+    parser = argparse.ArgumentParser()
+    demo.add_session_option_args(parser)
+    args = parser.parse_args(["--voice", "libby", "--cefr", "b1", "--demeanor", "RUDE"])
+    opts = demo.session_options_from_args(args)
+    assert opts.voice == "libby"
+    assert opts.cefr is CEFRLevel.b1
+    assert opts.demeanor is Demeanor.rude
+
+
+def test_demo_session_flags_thread_into_prompt(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    in_wav = tmp_path / "in.wav"
+    out_wav = tmp_path / "out.wav"
+    _write_tiny_wav(in_wav)
+    backend = make_backend(stt_text="hello", llm_reply="ok")
+    monkeypatch.setattr(demo, "build_backend", lambda cfg: backend)
+
+    rc = demo.main(
+        [
+            "--wav",
+            str(in_wav),
+            "--persona",
+            "companion",
+            "--out",
+            str(out_wav),
+            "--demeanor",
+            "rude",
+            "--cefr",
+            "b1",
+        ]
+    )
+    assert rc == 0
+    system_prompt = backend.llm.last_messages[0].content  # type: ignore[index]
+    assert "brusque" in system_prompt  # rude directive reached the model
+    assert "B1" in system_prompt  # cefr directive too

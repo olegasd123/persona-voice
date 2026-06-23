@@ -18,7 +18,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 import yaml
-from pydantic import ValidationError
+from pydantic import BaseModel, ValidationError
 
 from ..models import Persona, VoiceDef, VoiceRef
 
@@ -28,9 +28,29 @@ if TYPE_CHECKING:
 
 _VOICE_PREFIX = "voices/"
 
+# Reason shown for a clone/fine-tune the active backend can't speak (no cloning capability).
+_NO_CLONING_REASON = "requires a cloning backend (f5_mlx on Mac, chatterbox on CUDA)"
+
 
 class VoiceError(ValueError):
     """The voice registry file is missing data or fails validation."""
+
+
+class VoiceOption(BaseModel):
+    """One selectable voice in the catalog the client shows in a picker.
+
+    `available` reflects whether this voice is actually speakable on the *active* TTS backend
+    (presets need a per-backend mapping; clones/fine-tunes need a cloning backend). When it's
+    not, `reason` explains why so the UI can grey it out with a hint rather than silently drop
+    it.
+    """
+
+    id: str
+    name: str
+    kind: str  # "preset" | "clone" | "finetuned"
+    emotion: str | None = None
+    available: bool = True
+    reason: str | None = None
 
 
 class VoiceRegistry:
@@ -126,6 +146,81 @@ class VoiceRegistry:
                         return ref
         return self.resolve(persona.voice.ref, tts_name, default_emotion=persona.voice.emotion)
 
+    def resolve_choice(
+        self,
+        voice_id: str,
+        tts_name: str,
+        *,
+        supports_cloning: bool,
+        default_emotion: str | None = None,
+    ) -> VoiceRef | None:
+        """Resolve an explicitly chosen voice id, independent of any persona assignment.
+
+        Precedence mirrors `resolve_for_persona`: fine-tuned store → clones store → preset.
+        Returns `None` when the choice is unknown or **not speakable** on this backend (a
+        clone/fine-tune on a non-cloning backend, or a preset with no mapping for `tts_name`),
+        so the caller falls back to the persona's default voice.
+        """
+        key = self._key(voice_id)
+        if supports_cloning:
+            if self._finetuned is not None and key in self._finetuned:
+                ref = self._finetuned.voice_ref(key, tts_name, emotion=default_emotion)
+                if ref is not None:
+                    return ref
+            if self._clones is not None and key in self._clones:
+                ref = self._clones.voice_ref(key, tts_name, emotion=default_emotion)
+                if ref is not None:
+                    return ref
+        if key in self._voices and self.has_preset(key, tts_name):
+            return self.resolve(key, tts_name, default_emotion=default_emotion)
+        return None
+
+    def catalog(self, tts_name: str, *, supports_cloning: bool) -> list[VoiceOption]:
+        """The unified, selectable voice list for a picker on the active backend.
+
+        Stable order: fine-tuned, then clones, then presets. Clones/fine-tunes are listed even
+        on a non-cloning backend but marked `available=False` with a `reason`; a preset is
+        available only where it maps to a concrete voice for `tts_name`.
+        """
+        options: list[VoiceOption] = []
+        cloning_reason = None if supports_cloning else _NO_CLONING_REASON
+        if self._finetuned is not None:
+            for name in self._finetuned.names():
+                options.append(
+                    VoiceOption(
+                        id=name,
+                        name=name,
+                        kind="finetuned",
+                        available=supports_cloning,
+                        reason=cloning_reason,
+                    )
+                )
+        if self._clones is not None:
+            for name in self._clones.names():
+                options.append(
+                    VoiceOption(
+                        id=name,
+                        name=name,
+                        kind="clone",
+                        available=supports_cloning,
+                        reason=cloning_reason,
+                    )
+                )
+        for vid in self.ids():
+            entry = self._voices[vid]
+            available = tts_name in entry.presets
+            options.append(
+                VoiceOption(
+                    id=vid,
+                    name=entry.description or vid,
+                    kind="preset",
+                    emotion=entry.emotion,
+                    available=available,
+                    reason=None if available else f"no preset mapped for {tts_name!r}",
+                )
+            )
+        return options
+
     def has_preset(self, ref: str, tts_name: str) -> bool:
         """True when this voice maps to a concrete preset for `tts_name`."""
         entry = self._voices.get(self._key(ref))
@@ -159,6 +254,20 @@ class VoiceRegistry:
 
     def ids(self) -> list[str]:
         return sorted(self._voices)
+
+    def choice_ids(self) -> list[str]:
+        """Every selectable voice id (presets + clones + fine-tunes), for choice validation.
+
+        Backend-independent — a clone listed here may still be unspeakable on a non-cloning
+        backend (that's gated at resolve time / surfaced by `catalog`). It answers "is this a
+        known voice the user could pick?", which is what the token server validates against.
+        """
+        ids = set(self._voices)
+        if self._clones is not None:
+            ids.update(self._clones.names())
+        if self._finetuned is not None:
+            ids.update(self._finetuned.names())
+        return sorted(ids)
 
     def __len__(self) -> int:
         return len(self._voices)

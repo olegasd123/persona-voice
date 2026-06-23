@@ -223,13 +223,39 @@ personavoice --token-server          # HTTP on PERSONAVOICE_HOST:PERSONAVOICE_PO
 | Route | Purpose |
 |-------|---------|
 | `GET /healthz` | liveness |
-| `GET /personas` | `{"personas": [{"id","name"}], "default": <id>}` |
-| `POST /token` | body `{"room"?, "identity"?, "persona"?}` → `{"url","token","room","identity","persona"}` |
+| `GET /personas` | `{"personas": [{"id","name","description","voice"}], "default": <id>}` |
+| `GET /voices` | selectable voice catalog for the active backend (`{"voices": [...], "supports_cloning"}`) |
+| `POST /token` | body `{"room"?, "identity"?, "persona"?, "voice"?, "cefr"?, "demeanor"?}` → `{"url","token","room","identity","persona","voice","cefr","demeanor"}` |
+| `POST /voices/clone` | `?name=&text=&authorized=1` + the wav as the raw body → enroll a clone |
+| `DELETE /voices/clone/{name}` | remove a cloned voice |
 
-`room`/`identity` are generated when omitted. The persona is validated against the registry,
-embedded in the token metadata, and echoed back, so the client can select it with a data message
-after connecting. If `PERSONAVOICE_API_TOKEN` is set, requests need `Authorization: Bearer …`.
-Tokens are standard HS256 JWTs in LiveKit's documented format (`server/tokens.py`).
+`room`/`identity` are generated when omitted. The persona and the per-session options (voice /
+CEFR / demeanor — see below) are validated, embedded in the token metadata, and echoed back, so
+the client can apply them with a data message after connecting. If `PERSONAVOICE_API_TOKEN` is
+set, requests need `Authorization: Bearer …`. Tokens are standard HS256 JWTs in LiveKit's
+documented format (`server/tokens.py`).
+
+### Session options (voice / CEFR / demeanor)
+
+Three per-conversation knobs, chosen before a call and swappable mid-call, layered on top of the
+persona (the client only *chooses*; the server *applies*):
+
+- **voice** — speak with any voice from the library (`GET /voices`) instead of the persona's
+  assigned voice, for this session only.
+- **cefr** — a CEFR level (`A1`…`C2`) that calibrates language difficulty for learners.
+- **demeanor** — `kind`, `natural` (the persona as authored), or `rude` (blunt but **bounded** —
+  brusque, never abusive).
+
+They ride the existing metadata/data-message rail: pass them to `POST /token` (validated +
+embedded in metadata) or send a `{"voice":…, "cefr":…, "demeanor":…}` data message to change them
+mid-call. The offline demos take `--voice/--cefr/--demeanor` so the behavior is testable without a
+client (e.g. `personavoice-stream-demo --wav q.wav --persona language_teacher --cefr a2`).
+
+**Moderation.** A pluggable input/output guard (`safety/`) wraps the LLM turn — off by default
+(no-op), enabled with `PERSONAVOICE_MODERATION=keyword`. The shipped rule guard short-circuits a
+crisis/self-harm utterance to a calm, resource-pointing reply and bounds abusive output, which is
+what *guarantees* the `rude` demeanor stays "brusque, not abusive". Recommended once `rude` is
+exposed to real users.
 
 **Self-host the SFU.** `docker-compose.livekit.yml` brings up a LiveKit server (dev keys
 `devkey`/`secret`) plus the token server:
@@ -316,6 +342,15 @@ A clone is a stored reference sample plus, for reference-text models (F5), its t
 **survives restarts** and the live agent picks it up at startup. Assigning a clone is
 non-destructive: it overlays the voice registry at resolve time and is only honored on a backend
 that can clone. Switching back to Kokoro/Orpheus simply restores the persona's preset voice.
+
+**Enroll from a client.** Besides the CLI, the token server exposes the library over HTTP:
+`GET /voices` lists every selectable voice (presets + clones + fine-tunes) with an `available`
+flag per the active backend, `POST /voices/clone` enrolls one from an uploaded wav (requires
+`authorized=1`, since cloning a real person's voice is sensitive), and `DELETE /voices/clone/{name}`
+removes it. A picked voice is then chosen per session via the **voice** session option above.
+Because clones/fine-tunes are only **audible on a cloning backend**, the catalog still lists them
+on Kokoro/Orpheus but marks them `available:false` with a reason — a "bring your own voice"
+session should run `f5_mlx`/`chatterbox`.
 
 > **Licensing:** F5's default checkpoint has **CC-BY-NC** weights (non-commercial) — fine for Mac
 > dev. For anything you redistribute, clone with **Chatterbox** (MIT) on CUDA. See
