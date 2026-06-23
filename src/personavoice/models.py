@@ -136,6 +136,11 @@ class Persona(BaseModel):
     voice: VoiceSettings
     behavior: BehaviorSettings = BehaviorSettings()
     memory: MemorySettings = MemorySettings()
+    # Per-session option defaults baked into the persona (custom personas set these via N3's
+    # authoring routes). The agent layers an explicit `SessionOptions` over these; an unset
+    # field falls through to the persona's authored behavior. Empty for the curated personas.
+    # Forward ref + `Persona.model_rebuild()` below, since `SessionOptions` is defined later.
+    session_defaults: SessionOptions = Field(default_factory=lambda: SessionOptions())
 
 
 # --------------------------------------------------------------------------------------
@@ -228,6 +233,11 @@ class SessionOptions(BaseModel):
     def any_set(self) -> bool:
         """True when at least one override is set (vs. an all-None "use the defaults")."""
         return any(v is not None for v in self.model_dump().values())
+
+
+# `Persona.session_defaults` forward-references `SessionOptions` (defined just above); finish
+# building the deferred Persona schema now that the name resolves.
+Persona.model_rebuild()
 
 
 # --------------------------------------------------------------------------------------

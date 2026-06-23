@@ -96,12 +96,13 @@ routes, and Features **D–L**.
 |---|---------|-----------|-------------|--------|
 | **N1** | **Per-persona session selectors** — voice / CEFR / demeanor, chosen per persona, applied *before* a call | A `[Done]` | none | `[Done]` (client; device run pending) |
 | **N2** | **Voice Library page** — list voices + clone by file upload or device mic | B `[Done]` | none | `[Done]` (client; device run pending) |
-| **N3** | **Custom personas** — multi-user **JSON store**, create / edit / delete + LoRA pick | K | **new routes** | — |
-| **N4** | **Seed voices** — two ready clones out of the box (`temp_voices/`) | B `[Done]` | seed script | — |
+| **N3** | **Custom personas** — multi-user **JSON store**, create / edit / delete + LoRA pick | K | **new routes** | `[Partial]` (server + agent done & tested; client form pending) |
+| **N4** | **Seed voices** — two ready clones out of the box (`temp_voices/`) | B `[Done]` | seed script | `[Done]` (script + bundled `female`/`male` wavs) |
 
 **Order: N1 → N2 → N4 → N3.** N1+N2 are built (Flutter client; `flutter analyze` clean, unit tests
-green — no on-device run yet). Remaining: **N4** (makes N1/N2 demoable with real voices) then **N3**
-(the only new server surface).
+green — no on-device run yet). **N4 done** (seed script + bundled female voice). **N3** server side
+is **done & tested** (`UserPersonaStore`, `POST/PUT/DELETE/GET /personas`, `GET /loras`, agent
+resolution, persona `session_defaults`); the client New/Edit-persona form is the remaining piece.
 
 **Backlog (capabilities / ops / DX — independent, land any time).** Features **A/B/C** are the
 *server* substrate the NOW block builds on (already done & tested); D–L are unchanged.
@@ -186,7 +187,18 @@ wav as the body), `DELETE /voices/clone/{name}`. The shared WAV codec mixes to m
 kinds/availability; delete round-trip (fake `http.Client`).
 **Multi-user:** list/clone/delete are scoped to the caller's `user_id` (see N3).
 
-### N3 — Custom personas: multi-user JSON store (server + client) — *supersedes Feature K*
+### N3 — Custom personas: multi-user JSON store (server + client) — *supersedes Feature K* `[Partial]`
+
+> **Server + agent done & tested.** `persona/store.py` (`UserPersonaStore`, per-user JSON at
+> `PERSONAVOICE_USER_PERSONAS`), `persona/lora.py` (`served_loras` / `LoraOption`), token-server
+> routes `GET /personas?user=` (curated + custom, `custom` flag, curated win on clash),
+> `POST /personas?user=`, `PUT`/`DELETE /personas/{id}?user=`, and `GET /loras`. Drafts validate
+> through the `Persona` model (extra fields rejected; voice ref + base model default to the curated
+> default; slug ids never shadow curated; per-user quota `PERSONAVOICE_MAX_USER_PERSONAS`; a set
+> `llm.lora` is checked against the served adapters). The agent resolves a custom persona by
+> `user_id` (curated-first), hot-reloads it for a mid-call switch, and applies a persona's new
+> `session_defaults` (CEFR/demeanor/voice baked in) under any explicit session option. Remaining:
+> the client **New / Edit persona** form.
 
 The only item that needs **new server endpoints**.
 
@@ -227,7 +239,14 @@ curated personas non-shadowable and non-deletable; `/loras` availability per bac
 **Open decisions:** id namespacing (e.g. `u/{user_id}/{slug}`); per-user persona quota; whether
 user-authored system prompts get a safety pass (ties to Feature C).
 
-### N4 — Seed voices (two out-of-the-box clones) — *seed script*
+### N4 — Seed voices (two out-of-the-box clones) — *seed script* `[Done]`
+
+> **Done.** `voice/seed.py` (`personavoice-seed-voices` / `scripts/seed_voices.py`) enrolls every
+> wav in `assets/seed_voices/` (real `female.wav` + `male.wav` bundled) as a clone
+> named after the file stem, through the same `VoiceCloner` → `ClonesStore` path a client upload
+> uses — **idempotent** (skip-if-present; `--force` re-enrolls). On a preset-only backend the seed
+> still records (catalog-visible as `available=false`). `PERSONAVOICE_SEED_VOICES_DIR` overrides
+> the dir. Tested: idempotency, discovery, both per-backend enrollers, bad-sample rejection.
 
 Ship two ready clones so N1/N2 demo with real voices on first run.
 

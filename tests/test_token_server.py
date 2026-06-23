@@ -11,8 +11,9 @@ from pathlib import Path
 
 import pytest
 
-from personavoice.models import VoiceDef, VoiceRef
+from personavoice.models import Persona, VoiceDef, VoiceRef
 from personavoice.persona.registry import PersonaRegistry
+from personavoice.persona.store import UserPersonaStore
 from personavoice.server.config import Settings
 from personavoice.server.ratelimit import RateLimiter
 from personavoice.server.token_server import (
@@ -307,6 +308,227 @@ def test_personas_voice_blank_without_registry(registry: PersonaRegistry) -> Non
     assert all(p["voice"] == "" for p in svc.personas()["personas"])
 
 
+# --- custom personas (multi-user) -----------------------------------------------------
+
+
+def make_persona_service(
+    registry: PersonaRegistry,
+    tmp_path: Path,
+    *,
+    supports_lora: bool = False,
+    lora_modules: str | None = None,
+    max_user_personas: int = 50,
+    api_token: str | None = None,
+) -> tuple[TokenService, UserPersonaStore]:
+    """A TokenService with a real user-persona store + a voice registry for blurbs."""
+    store = UserPersonaStore(tmp_path / "user_personas.json")
+    voices = VoiceRegistry(
+        {"companion_soft": VoiceDef(presets={"kokoro": "af_heart"}, description="warm, soft")}
+    )
+    config = TokenServiceConfig(
+        livekit_url="wss://livekit.example:7880",
+        api_key="APIkey",
+        api_secret=SECRET,
+        api_token=api_token,
+    )
+    svc = TokenService(
+        config,
+        registry,
+        default_persona="companion",
+        backend="mac",
+        voices=voices,
+        user_personas=store,
+        max_user_personas=max_user_personas,
+        llm_name="vllm" if supports_lora else "lmstudio",
+        supports_lora=supports_lora,
+        lora_modules=lora_modules,
+    )
+    return svc, store
+
+
+_DRAFT = {"name": "French Tutor", "system_prompt": "Teach French, gently."}
+
+
+def test_create_persona_happy_path(registry: PersonaRegistry, tmp_path: Path) -> None:
+    svc, store = make_persona_service(registry, tmp_path)
+    result = svc.create_persona("alice", dict(_DRAFT))
+    assert result["custom"] is True
+    assert result["id"] == "french-tutor"  # slug of the name
+    assert result["persona"]["system_prompt"] == "Teach French, gently."
+    # Persisted under the user and now visible in that user's persona list.
+    assert store.has("alice", "french-tutor")
+    ids = {p["id"] for p in svc.personas(user="alice")["personas"]}
+    assert {"companion", "french-tutor"} <= ids
+
+
+def test_create_persona_fills_defaults_from_curated(
+    registry: PersonaRegistry, tmp_path: Path
+) -> None:
+    svc, _ = make_persona_service(registry, tmp_path)
+    # A minimal draft (name + prompt) is enough; voice ref + base model default to the curated.
+    result = svc.create_persona("alice", {"name": "Minimal", "system_prompt": "hi"})
+    persona = result["persona"]
+    assert persona["voice"]["ref"]  # filled
+    assert persona["llm"]["base_model"]  # filled
+
+
+def test_create_persona_with_session_defaults(registry: PersonaRegistry, tmp_path: Path) -> None:
+    svc, _ = make_persona_service(registry, tmp_path)
+    draft = {**_DRAFT, "session_defaults": {"cefr": "a1", "demeanor": "kind"}}
+    result = svc.create_persona("alice", draft)
+    assert result["persona"]["session_defaults"]["cefr"] == "A1"  # canonicalized
+
+
+def test_create_persona_requires_user(registry: PersonaRegistry, tmp_path: Path) -> None:
+    svc, _ = make_persona_service(registry, tmp_path)
+    with pytest.raises(BadRequest, match="user id is required"):
+        svc.create_persona(None, dict(_DRAFT))
+
+
+def test_create_persona_rejects_empty_name(registry: PersonaRegistry, tmp_path: Path) -> None:
+    svc, _ = make_persona_service(registry, tmp_path)
+    with pytest.raises(BadRequest, match="non-empty name"):
+        svc.create_persona("alice", {"system_prompt": "no name"})
+
+
+def test_create_persona_rejects_extra_field(registry: PersonaRegistry, tmp_path: Path) -> None:
+    svc, _ = make_persona_service(registry, tmp_path)
+    with pytest.raises(BadRequest, match="invalid persona draft"):
+        svc.create_persona("alice", {**_DRAFT, "bogus": 1})
+
+
+def test_create_persona_id_uniqueness(registry: PersonaRegistry, tmp_path: Path) -> None:
+    svc, _ = make_persona_service(registry, tmp_path)
+    first = svc.create_persona("alice", dict(_DRAFT))
+    second = svc.create_persona("alice", dict(_DRAFT))  # same name → distinct id
+    assert first["id"] == "french-tutor" and second["id"] == "french-tutor-2"
+
+
+def test_create_persona_never_shadows_curated_id(registry: PersonaRegistry, tmp_path: Path) -> None:
+    svc, _ = make_persona_service(registry, tmp_path)
+    # A name that slugs to a curated id is suffixed so it can't shadow the built-in.
+    result = svc.create_persona("alice", {"name": "Companion", "system_prompt": "hi"})
+    assert result["id"] != "companion"
+
+
+def test_create_persona_enforces_quota(registry: PersonaRegistry, tmp_path: Path) -> None:
+    svc, _ = make_persona_service(registry, tmp_path, max_user_personas=1)
+    svc.create_persona("alice", {"name": "One", "system_prompt": "hi"})
+    with pytest.raises(BadRequest, match="quota"):
+        svc.create_persona("alice", {"name": "Two", "system_prompt": "hi"})
+
+
+def test_personas_are_user_scoped(registry: PersonaRegistry, tmp_path: Path) -> None:
+    svc, _ = make_persona_service(registry, tmp_path)
+    svc.create_persona("alice", dict(_DRAFT))
+    # Bob doesn't see Alice's custom persona, only the curated set.
+    bob_ids = {p["id"] for p in svc.personas(user="bob")["personas"]}
+    assert "french-tutor" not in bob_ids
+    assert "companion" in bob_ids
+    # And with no user, only curated are listed.
+    assert all(not p["custom"] for p in svc.personas()["personas"])
+
+
+def test_personas_curated_win_on_clash(registry: PersonaRegistry, tmp_path: Path) -> None:
+    svc, store = make_persona_service(registry, tmp_path)
+    # Force a stored persona whose id collides with a curated one (bypassing slug uniqueness).
+    store.record(
+        "alice",
+        Persona.model_validate(
+            {
+                "id": "companion",
+                "name": "Evil Companion",
+                "system_prompt": "x",
+                "llm": {"base_model": "m"},
+                "voice": {"ref": "voices/companion_soft"},
+            }
+        ),
+    )
+    companions = [p for p in svc.personas(user="alice")["personas"] if p["id"] == "companion"]
+    # Only the curated one survives; the shadowing custom persona is dropped from the list.
+    assert len(companions) == 1 and companions[0]["custom"] is False
+
+
+def test_update_persona_own(registry: PersonaRegistry, tmp_path: Path) -> None:
+    svc, _ = make_persona_service(registry, tmp_path)
+    created = svc.create_persona("alice", dict(_DRAFT))
+    updated = svc.update_persona("alice", created["id"], {**_DRAFT, "name": "Spanish Tutor"})
+    assert updated["id"] == created["id"]  # id preserved
+    assert updated["name"] == "Spanish Tutor"
+
+
+def test_update_curated_rejected(registry: PersonaRegistry, tmp_path: Path) -> None:
+    svc, _ = make_persona_service(registry, tmp_path)
+    with pytest.raises(BadRequest, match="built-in persona"):
+        svc.update_persona("alice", "companion", dict(_DRAFT))
+
+
+def test_update_unknown_rejected(registry: PersonaRegistry, tmp_path: Path) -> None:
+    svc, _ = make_persona_service(registry, tmp_path)
+    with pytest.raises(BadRequest, match="unknown persona"):
+        svc.update_persona("alice", "ghost", dict(_DRAFT))
+
+
+def test_delete_persona_own(registry: PersonaRegistry, tmp_path: Path) -> None:
+    svc, store = make_persona_service(registry, tmp_path)
+    created = svc.create_persona("alice", dict(_DRAFT))
+    assert svc.delete_persona("alice", created["id"]) == {"deleted": created["id"]}
+    assert not store.has("alice", created["id"])
+
+
+def test_delete_curated_rejected(registry: PersonaRegistry, tmp_path: Path) -> None:
+    svc, _ = make_persona_service(registry, tmp_path)
+    with pytest.raises(BadRequest, match="built-in persona"):
+        svc.delete_persona("alice", "companion")
+
+
+def test_delete_unknown_rejected(registry: PersonaRegistry, tmp_path: Path) -> None:
+    svc, _ = make_persona_service(registry, tmp_path)
+    with pytest.raises(BadRequest, match="unknown persona"):
+        svc.delete_persona("alice", "ghost")
+
+
+def test_persona_routes_disabled_without_store(registry: PersonaRegistry) -> None:
+    svc = make_service(registry)  # no user_personas store wired
+    with pytest.raises(ServerMisconfigured, match="custom personas are not enabled"):
+        svc.create_persona("alice", dict(_DRAFT))
+
+
+# --- LoRA catalog ---------------------------------------------------------------------
+
+
+def test_loras_empty_on_non_lora_backend(registry: PersonaRegistry, tmp_path: Path) -> None:
+    svc, _ = make_persona_service(registry, tmp_path, supports_lora=False)
+    result = svc.loras()
+    assert result["supports_lora"] is False
+    assert result["loras"] == []
+    assert "merged" in result["reason"]
+
+
+def test_loras_lists_served_modules(registry: PersonaRegistry, tmp_path: Path) -> None:
+    svc, _ = make_persona_service(
+        registry, tmp_path, supports_lora=True, lora_modules="hr_interviewer=/m/hr pm=/m/pm"
+    )
+    result = svc.loras()
+    assert result["supports_lora"] is True and result["reason"] is None
+    assert {o["id"] for o in result["loras"]} == {"hr_interviewer", "pm"}
+
+
+def test_create_persona_validates_lora_on_lora_backend(
+    registry: PersonaRegistry, tmp_path: Path
+) -> None:
+    svc, _ = make_persona_service(
+        registry, tmp_path, supports_lora=True, lora_modules="hr_interviewer=/m/hr"
+    )
+    # An unknown served adapter is rejected; a served one is accepted (routed by basename).
+    with pytest.raises(BadRequest, match="unknown lora"):
+        svc.create_persona("alice", {**_DRAFT, "llm": {"base_model": "m", "lora": "ghost"}})
+    ok = svc.create_persona(
+        "alice", {**_DRAFT, "llm": {"base_model": "m", "lora": "adapters/hr_interviewer"}}
+    )
+    assert ok["persona"]["llm"]["lora"] == "adapters/hr_interviewer"
+
+
 # --- config + build_service -----------------------------------------------------------
 
 
@@ -400,6 +622,17 @@ def _post_raw(url: str, data: bytes, headers: dict[str, str] | None = None) -> t
 
 def _delete(url: str, headers: dict[str, str] | None = None) -> tuple[int, dict]:
     req = urllib.request.Request(url, headers=headers or {}, method="DELETE")
+    try:
+        with urllib.request.urlopen(req, timeout=5) as resp:
+            return resp.status, json.loads(resp.read())
+    except urllib.error.HTTPError as exc:
+        return exc.code, json.loads(exc.read())
+
+
+def _put(url: str, body: dict, headers: dict[str, str] | None = None) -> tuple[int, dict]:
+    data = json.dumps(body).encode()
+    hdrs = {"Content-Type": "application/json", **(headers or {})}
+    req = urllib.request.Request(url, data=data, headers=hdrs, method="PUT")
     try:
         with urllib.request.urlopen(req, timeout=5) as resp:
             return resp.status, json.loads(resp.read())
@@ -601,3 +834,82 @@ def test_http_healthz_not_rate_limited(registry: PersonaRegistry) -> None:
         httpd.server_close()
         thread.join(timeout=2)
     assert codes == [200, 200, 200]
+
+
+# --- HTTP: custom-persona + LoRA routes -----------------------------------------------
+
+
+@pytest.fixture
+def persona_server(
+    registry: PersonaRegistry, tmp_path: Path
+) -> Iterator[tuple[str, TokenService, UserPersonaStore]]:
+    svc, store = make_persona_service(
+        registry, tmp_path, supports_lora=True, lora_modules="hr=/m/hr", api_token="sekret"
+    )
+    httpd = make_server(svc, "127.0.0.1", 0)
+    thread = threading.Thread(target=httpd.serve_forever, daemon=True)
+    thread.start()
+    host, port = httpd.server_address[0], httpd.server_address[1]
+    try:
+        yield f"http://{host}:{port}", svc, store
+    finally:
+        httpd.shutdown()
+        httpd.server_close()
+        thread.join(timeout=2)
+
+
+def test_http_persona_crud_round_trip(
+    persona_server: tuple[str, TokenService, UserPersonaStore],
+) -> None:
+    base, _, store = persona_server
+    auth = {"Authorization": "Bearer sekret"}
+
+    # Create.
+    status, body = _post(
+        f"{base}/personas?user=alice", {"name": "French Tutor", "system_prompt": "teach"}, auth
+    )
+    assert status == 201 and body["id"] == "french-tutor" and body["custom"] is True
+    assert store.has("alice", "french-tutor")
+
+    # List (curated + custom) for that user.
+    status, body = _get(f"{base}/personas?user=alice", auth)
+    assert status == 200
+    assert "french-tutor" in {p["id"] for p in body["personas"]}
+
+    # Update.
+    status, body = _put(
+        f"{base}/personas/french-tutor?user=alice",
+        {"name": "Spanish Tutor", "system_prompt": "teach"},
+        auth,
+    )
+    assert status == 200 and body["name"] == "Spanish Tutor"
+
+    # Delete.
+    status, body = _delete(f"{base}/personas/french-tutor?user=alice", auth)
+    assert status == 200 and body["deleted"] == "french-tutor"
+    assert not store.has("alice", "french-tutor")
+
+
+def test_http_persona_create_requires_auth(
+    persona_server: tuple[str, TokenService, UserPersonaStore],
+) -> None:
+    base, _, _ = persona_server
+    status, _ = _post(f"{base}/personas?user=alice", {"name": "x", "system_prompt": "y"})
+    assert status == 401
+
+
+def test_http_persona_create_bad_draft_400(
+    persona_server: tuple[str, TokenService, UserPersonaStore],
+) -> None:
+    base, _, _ = persona_server
+    auth = {"Authorization": "Bearer sekret"}
+    status, body = _post(f"{base}/personas?user=alice", {"system_prompt": "no name"}, auth)
+    assert status == 400 and "name" in body["error"]
+
+
+def test_http_loras(persona_server: tuple[str, TokenService, UserPersonaStore]) -> None:
+    base, _, _ = persona_server
+    status, body = _get(f"{base}/loras", {"Authorization": "Bearer sekret"})
+    assert status == 200
+    assert body["supports_lora"] is True
+    assert {o["id"] for o in body["loras"]} == {"hr"}

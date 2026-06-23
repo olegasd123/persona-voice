@@ -13,7 +13,12 @@ dependency. The request handling lives in `TokenService` (pure, unit-tested); th
 Endpoints (all JSON, permissive CORS so a browser client / Playground can call them):
 
     GET    /healthz          -> {"status": "ok", "backend": ...}
-    GET    /personas         -> {"personas": [{"id","name","description","voice"}], "default": <id>}
+    GET    /personas[?user=] -> {"personas": [{"id","name","description","voice","custom"}],
+                                "default": <id>}  (curated + the user's custom personas)
+    POST   /personas?user=   -> create a custom persona; body = a persona draft
+    PUT    /personas/{id}?user=   -> replace one of the user's own personas
+    DELETE /personas/{id}?user=   -> delete one of the user's own personas
+    GET    /loras            -> {"loras": [LoraOption...], "llm", "supports_lora"}
     GET    /voices           -> {"voices": [VoiceOption...], "tts", "supports_cloning"}
     POST   /token            -> mint a token; body: {"room"?, "identity"?, "persona"?,
                                 "voice"?, "cefr"?, "demeanor"?}
@@ -42,14 +47,19 @@ import uuid
 from collections.abc import Callable
 from dataclasses import dataclass
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs, urlparse
 
-from ..models import CEFRLevel, Demeanor, SessionOptions
+from pydantic import ValidationError
+
+from ..models import CEFRLevel, Demeanor, Persona, SessionOptions
+from ..persona.lora import served_loras
 from ..persona.registry import PersonaRegistry
+from ..persona.store import UserPersonaStore
 from ..voice.clone import CloneError, VoiceCloner
 from ..voice.registry import VoiceRegistry
-from .config import Settings, load_voice_registry
+from .config import Settings, load_user_persona_store, load_voice_registry
 from .ratelimit import RateLimiter, rate_limiter_from_env
 from .security import audit_security, has_errors
 from .tokens import mint_access_token
@@ -58,6 +68,13 @@ logger = logging.getLogger("personavoice.token_server")
 
 # A clone name is a bare identifier (usable as a filename and a `voices/<name>` ref).
 _VOICE_NAME_RE = re.compile(r"[A-Za-z0-9_-]+")
+# A user id scopes custom personas (and clones). Derived from the token identity/metadata;
+# permissive enough for the generated `user-xxxx` ids and email-like identities.
+_USER_ID_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._@-]{0,127}")
+# Turn a persona name into a slug id (lowercase, dashes); falls back to "persona" when empty.
+_SLUG_STRIP_RE = re.compile(r"[^a-z0-9]+")
+# Cap custom personas per user (abuse surface); override with PERSONAVOICE_MAX_USER_PERSONAS.
+_DEFAULT_MAX_USER_PERSONAS = 50
 # Cap an uploaded clone sample (bytes) so an enroll can't exhaust memory/disk. ~10 s of
 # 24 kHz mono PCM wav is well under this; override with PERSONAVOICE_MAX_CLONE_BYTES.
 _DEFAULT_MAX_CLONE_BYTES = 10 * 1024 * 1024
@@ -154,6 +171,12 @@ def _new_identity() -> str:
     return f"user-{uuid.uuid4().hex[:8]}"
 
 
+def _slugify(name: str) -> str:
+    """A bare-identifier id from a persona name (lowercase, dashes), e.g. 'My Tutor' → 'my-tutor'."""
+    slug = _SLUG_STRIP_RE.sub("-", name.strip().lower()).strip("-")
+    return slug or "persona"
+
+
 class TokenService:
     """Resolves personas and mints room tokens. Pure (no sockets) so it's unit-testable."""
 
@@ -169,6 +192,11 @@ class TokenService:
         supports_cloning: bool = False,
         cloner_factory: ClonerFactory | None = None,
         max_clones: int = _DEFAULT_MAX_CLONES,
+        user_personas: UserPersonaStore | None = None,
+        max_user_personas: int = _DEFAULT_MAX_USER_PERSONAS,
+        llm_name: str = "",
+        supports_lora: bool = False,
+        lora_modules: str | None = None,
     ) -> None:
         self._config = config
         self._registry = registry
@@ -185,6 +213,15 @@ class TokenService:
         self._supports_cloning = supports_cloning
         self._cloner_factory = cloner_factory
         self._max_clones = max_clones
+        # Multi-user custom personas (N3): None disables the authoring routes. Scoped per
+        # user id; curated personas always win on id clash and are never stored/deletable here.
+        self._user_personas = user_personas
+        self._max_user_personas = max_user_personas
+        # Active LLM adapter name + whether it can hot-swap LoRA, plus the served `--lora-modules`
+        # spec — drives the /loras picker and validates a custom persona's `llm.lora`.
+        self._llm_name = llm_name
+        self._supports_lora = supports_lora
+        self._lora_modules = lora_modules
 
     def check_auth(self, authorization: str | None) -> None:
         """Enforce the optional bearer token. No-op when `api_token` is unset (dev mode)."""
@@ -198,25 +235,36 @@ class TokenService:
         if not hmac.compare_digest(authorization[len(prefix) :].strip(), expected):
             raise Unauthorized("invalid API token")
 
-    def personas(self) -> dict[str, Any]:
+    def _persona_summary(self, persona: Persona, *, custom: bool) -> dict[str, Any]:
+        """Picker entry for one persona: id/name/description, a voice blurb, and editability."""
+        return {
+            "id": persona.id,
+            "name": persona.name,
+            "description": persona.description,
+            "voice": self._voices.describe(persona.voice.ref) if self._voices else "",
+            "custom": custom,  # True = user-authored (editable/deletable); False = curated
+        }
+
+    def personas(self, user: str | None = None) -> dict[str, Any]:
         """List selectable personas (hot-reloaded from disk) and the default id.
 
-        Each entry carries enough for a rich picker: a one-line `description` and a
-        human `voice` blurb (resolved via the voice registry, "" when unavailable).
+        Curated personas (`config/personas`) are always returned. When `user` is given and the
+        custom-persona store is enabled, that user's own personas are merged in too — curated
+        win on id clash (so a user can't shadow a built-in). Each entry carries enough for a
+        rich picker: a one-line `description`, a human `voice` blurb, and a `custom` flag the
+        client uses to show edit/delete only on user-authored personas.
         """
         self._registry.reload()
-        return {
-            "personas": [
-                {
-                    "id": p.id,
-                    "name": p.name,
-                    "description": p.description,
-                    "voice": self._voices.describe(p.voice.ref) if self._voices else "",
-                }
-                for p in self._registry.all()
-            ],
-            "default": self._default_persona,
-        }
+        curated_ids = set(self._registry.ids())
+        out = [self._persona_summary(p, custom=False) for p in self._registry.all()]
+        user = (user or "").strip()
+        if user and self._user_personas is not None:
+            self._user_personas.reload()  # pick up personas created since startup
+            for p in self._user_personas.list_for(user):
+                if p.id in curated_ids:
+                    continue  # curated win on id clash
+                out.append(self._persona_summary(p, custom=True))
+        return {"personas": out, "default": self._default_persona}
 
     def _validate_session_options(
         self, *, voice: str | None, cefr: str | None, demeanor: str | None
@@ -392,6 +440,151 @@ class TokenService:
             raise BadRequest(f"unknown clone {name!r}")
         return {"deleted": name}
 
+    # -- custom personas (multi-user) --------------------------------------------------
+
+    def _require_user(self, user: str | None) -> str:
+        """Validate the scoping user id (required for the persona CRUD routes)."""
+        user = (user or "").strip()
+        if not user:
+            raise BadRequest("a user id is required (pass ?user=<id>)")
+        if not _USER_ID_RE.fullmatch(user):
+            raise BadRequest("invalid user id; use letters, digits, '.', '-', '_' or '@'")
+        return user
+
+    def _require_user_store(self) -> UserPersonaStore:
+        if self._user_personas is None:
+            raise ServerMisconfigured("custom personas are not enabled")
+        return self._user_personas
+
+    def _curated(self) -> Persona | None:
+        """The default curated persona (for sensible draft defaults), or the first, or None."""
+        if self._default_persona in self._registry:
+            return self._registry.get(self._default_persona)
+        ids = self._registry.ids()
+        return self._registry.get(ids[0]) if ids else None
+
+    def _unique_persona_id(self, name: str, user: str, store: UserPersonaStore) -> str:
+        """A slug id from `name`, unique within the user's set and never a curated id."""
+        base = _slugify(name)
+        curated = set(self._registry.ids())
+        existing = set(store.ids_for(user))
+        candidate, n = base, 2
+        while candidate in curated or candidate in existing:
+            candidate, n = f"{base}-{n}", n + 1
+        return candidate
+
+    def _persona_from_draft(self, draft: Any, *, persona_id: str) -> Persona:
+        """Validate a client draft into a `Persona`, filling sensible defaults.
+
+        The server assigns the id (a client-sent `id`/`user` is ignored). A minimal draft
+        (`name` + `system_prompt`) is enough: the voice ref and LLM base model default to the
+        curated default persona's. Unknown top-level fields are rejected (`Persona` forbids
+        extras); a set `llm.lora` is checked against the served adapters on a LoRA backend.
+        """
+        if not isinstance(draft, dict):
+            raise BadRequest("persona draft must be a JSON object")
+        data = {k: v for k, v in draft.items() if k not in ("id", "user")}
+        data["id"] = persona_id
+
+        curated = self._curated()
+        voice = dict(data.get("voice") or {}) if isinstance(data.get("voice"), dict) else {}
+        if not voice.get("ref"):
+            voice["ref"] = curated.voice.ref if curated else "voices/companion_soft"
+        data["voice"] = voice
+        llm = dict(data.get("llm") or {}) if isinstance(data.get("llm"), dict) else {}
+        if not llm.get("base_model"):
+            llm["base_model"] = curated.llm.base_model if curated else "qwen2.5-7b-instruct"
+        data["llm"] = llm
+
+        lora = llm.get("lora")
+        if lora and self._supports_lora:
+            served = {
+                o.id for o in served_loras(supports_lora=True, lora_modules=self._lora_modules)
+            }
+            if Path(lora).name not in served:
+                known = ", ".join(sorted(served)) or "(none)"
+                raise BadRequest(f"unknown lora {lora!r}; served: {known}")
+
+        try:
+            return Persona.model_validate(data)
+        except ValidationError as exc:
+            errors = exc.errors()
+            if errors:
+                loc = ".".join(str(p) for p in errors[0].get("loc", ())) or "persona"
+                raise BadRequest(f"invalid persona draft: {loc}: {errors[0].get('msg')}") from exc
+            raise BadRequest(f"invalid persona draft: {exc}") from exc
+
+    def _stored_persona_payload(self, persona: Persona) -> dict[str, Any]:
+        """Create/update response: the picker summary plus the full stored persona for editing."""
+        return {
+            **self._persona_summary(persona, custom=True),
+            "persona": persona.model_dump(mode="json"),
+        }
+
+    def create_persona(self, user: str | None, draft: Any) -> dict[str, Any]:
+        """Create a custom persona for `user` from a draft, returning the stored persona."""
+        user = self._require_user(user)
+        store = self._require_user_store()
+        store.reload()
+        name = draft.get("name") if isinstance(draft, dict) else None
+        if not isinstance(name, str) or not name.strip():
+            raise BadRequest("a persona needs a non-empty name")
+        if len(store.ids_for(user)) >= self._max_user_personas:
+            raise BadRequest(f"persona quota reached ({self._max_user_personas}); delete one first")
+        persona_id = self._unique_persona_id(name, user, store)
+        persona = self._persona_from_draft(draft, persona_id=persona_id)
+        store.record(user, persona)
+        return self._stored_persona_payload(persona)
+
+    def update_persona(self, user: str | None, persona_id: str, draft: Any) -> dict[str, Any]:
+        """Replace one of `user`'s own personas. Curated personas are never editable."""
+        user = self._require_user(user)
+        store = self._require_user_store()
+        store.reload()
+        persona_id = (persona_id or "").strip()
+        if persona_id in self._registry:
+            raise BadRequest(f"{persona_id!r} is a built-in persona and can't be edited")
+        if not store.has(user, persona_id):
+            raise BadRequest(f"unknown persona {persona_id!r}")
+        persona = self._persona_from_draft(draft, persona_id=persona_id)
+        store.record(user, persona)
+        return self._stored_persona_payload(persona)
+
+    def delete_persona(self, user: str | None, persona_id: str) -> dict[str, Any]:
+        """Delete one of `user`'s own personas. Curated personas are never deletable."""
+        user = self._require_user(user)
+        store = self._require_user_store()
+        store.reload()
+        persona_id = (persona_id or "").strip()
+        if persona_id in self._registry:
+            raise BadRequest(f"{persona_id!r} is a built-in persona and can't be deleted")
+        if not store.remove(user, persona_id):
+            raise BadRequest(f"unknown persona {persona_id!r}")
+        return {"deleted": persona_id}
+
+    # -- LoRA catalog ------------------------------------------------------------------
+
+    def loras(self) -> dict[str, Any]:
+        """The selectable served LoRA adapters for a custom persona's `llm.lora`.
+
+        Empty on a non-LoRA backend (Mac / LM Studio), where a LoRA is merged into the base
+        model at train time rather than hot-swapped — the `reason` says so.
+        """
+        options = served_loras(supports_lora=self._supports_lora, lora_modules=self._lora_modules)
+        reason = (
+            None
+            if self._supports_lora
+            else "the active LLM backend doesn't hot-swap LoRA; on Mac a LoRA is merged "
+            "into the base model at train time"
+        )
+        return {
+            "loras": [o.model_dump() for o in options],
+            "backend": self._backend,
+            "llm": self._llm_name,
+            "supports_lora": self._supports_lora,
+            "reason": reason,
+        }
+
 
 def _active_tts(settings: Settings) -> tuple[str, bool]:
     """Resolve the active TTS adapter name + whether it can clone, without loading models.
@@ -411,6 +604,24 @@ def _active_tts(settings: Settings) -> tuple[str, bool]:
     return tts_name, bool(getattr(cls, "supports_cloning", False))
 
 
+def _active_llm(settings: Settings) -> tuple[str, bool]:
+    """Resolve the active LLM adapter name + whether it can hot-swap LoRA, without loading it.
+
+    Mirrors `_active_tts`: reads the backend YAML and the adapter table's `supports_lora` class
+    attribute (True only for vLLM). Tolerates a missing/invalid backend config so /loras answers.
+    """
+    from ..adapters.factory import LLM_ADAPTERS
+    from .config import ConfigError, load_backend_config
+
+    try:
+        config = load_backend_config(settings)
+    except ConfigError:
+        return "", False
+    llm_name = config.llm.adapter
+    cls = LLM_ADAPTERS.get(llm_name)
+    return llm_name, bool(getattr(cls, "supports_lora", False))
+
+
 def build_service(settings: Settings | None = None) -> TokenService:
     """Assemble a `TokenService` from process settings + env LiveKit credentials."""
     settings = settings or Settings.load()
@@ -422,6 +633,14 @@ def build_service(settings: Settings | None = None) -> TokenService:
     # the clone + fine-tuned stores so those voices are selectable; tolerates missing files.
     voices = load_voice_registry(settings)
     tts_name, supports_cloning = _active_tts(settings)
+    # Multi-user custom personas + LoRA picker capability (N3).
+    user_personas = load_user_persona_store(settings)
+    llm_name, supports_lora = _active_llm(settings)
+    # What vLLM was launched serving (`--lora-modules`). PERSONAVOICE_LORA_MODULES overrides the
+    # docker-compose VLLM_LORA_MODULES var for non-compose deployments.
+    lora_modules = (
+        os.getenv("PERSONAVOICE_LORA_MODULES") or os.getenv("VLLM_LORA_MODULES") or ""
+    ).strip() or None
 
     cloner_factory: ClonerFactory | None = None
     if supports_cloning and voices.clones is not None:
@@ -438,6 +657,9 @@ def build_service(settings: Settings | None = None) -> TokenService:
             return VoiceCloner(backend, store)
 
     max_clones = int(os.getenv("PERSONAVOICE_MAX_CLONES", str(_DEFAULT_MAX_CLONES)).strip() or 0)
+    max_user_personas = int(
+        os.getenv("PERSONAVOICE_MAX_USER_PERSONAS", str(_DEFAULT_MAX_USER_PERSONAS)).strip() or 0
+    )
     return TokenService(
         TokenServiceConfig.from_env(),
         registry,
@@ -448,6 +670,11 @@ def build_service(settings: Settings | None = None) -> TokenService:
         supports_cloning=supports_cloning,
         cloner_factory=cloner_factory,
         max_clones=max_clones,
+        user_personas=user_personas,
+        max_user_personas=max_user_personas,
+        llm_name=llm_name,
+        supports_lora=supports_lora,
+        lora_modules=lora_modules,
     )
 
 
@@ -489,7 +716,7 @@ def _make_handler(
             # Permissive CORS: the token endpoint is meant to be called from clients.
             self.send_header("Access-Control-Allow-Origin", "*")
             self.send_header("Access-Control-Allow-Headers", "Authorization, Content-Type")
-            self.send_header("Access-Control-Allow-Methods", "GET, POST, DELETE, OPTIONS")
+            self.send_header("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
             self.end_headers()
             self.wfile.write(payload)
 
@@ -532,7 +759,19 @@ def _make_handler(
                 # Everything below is protected by the optional bearer token.
                 service.check_auth(self.headers.get("Authorization"))
                 if path == "/personas" and method == "GET":
-                    self._send_json(200, service.personas())
+                    self._send_json(200, service.personas(user=query.get("user")))
+                elif path == "/personas" and method == "POST":
+                    body = self._read_json_body()
+                    self._send_json(201, service.create_persona(query.get("user"), body))
+                elif path.startswith("/personas/") and method == "PUT":
+                    pid = path[len("/personas/") :]
+                    body = self._read_json_body()
+                    self._send_json(200, service.update_persona(query.get("user"), pid, body))
+                elif path.startswith("/personas/") and method == "DELETE":
+                    pid = path[len("/personas/") :]
+                    self._send_json(200, service.delete_persona(query.get("user"), pid))
+                elif path == "/loras" and method == "GET":
+                    self._send_json(200, service.loras())
                 elif path == "/voices" and method == "GET":
                     self._send_json(200, service.voices_catalog())
                 elif path == "/voices/clone" and method == "POST":
@@ -582,6 +821,9 @@ def _make_handler(
 
         def do_POST(self) -> None:
             self._dispatch("POST")
+
+        def do_PUT(self) -> None:
+            self._dispatch("PUT")
 
         def do_DELETE(self) -> None:
             self._dispatch("DELETE")

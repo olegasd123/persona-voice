@@ -18,6 +18,7 @@ from .._env import expand_env_vars
 from ..memory import ConversationMemory, MemoryStore, cipher_from_key
 from ..models import BackendConfig, Persona
 from ..persona.loader import load_personas
+from ..persona.store import UserPersonaStore
 from ..voice.clone import ClonesStore
 from ..voice.finetuned import FinetunedVoicesStore
 from ..voice.registry import VoiceRegistry
@@ -42,6 +43,7 @@ class Settings:
         finetuned_dir: Path | None = None,
         memory_dir: Path | None = None,
         memory_key: str | None = None,
+        user_personas_path: Path | None = None,
     ) -> None:
         self.backend = backend
         self.config_dir = config_dir
@@ -50,6 +52,7 @@ class Settings:
         self._finetuned_dir = finetuned_dir
         self._memory_dir = memory_dir
         self.memory_key = memory_key
+        self._user_personas_path = user_personas_path
 
     @property
     def backends_dir(self) -> Path:
@@ -78,6 +81,11 @@ class Settings:
         """Where per-user conversation memory lives. Defaults under the models dir."""
         return self._memory_dir or (self.models_dir / "memory")
 
+    @property
+    def user_personas_path(self) -> Path:
+        """The writable JSON file holding user-authored personas. Defaults under models dir."""
+        return self._user_personas_path or (self.models_dir / "user_personas.json")
+
     @classmethod
     def load(cls, *, backend: str | None = None, env_file: str | Path | None = ".env") -> Settings:
         """Resolve settings from env/.env, with an optional `backend` override."""
@@ -99,6 +107,8 @@ class Settings:
         memory_env = os.getenv("PERSONAVOICE_MEMORY_DIR")
         memory_dir = Path(memory_env).expanduser() if memory_env else None
         memory_key = os.getenv("PERSONAVOICE_MEMORY_KEY") or None
+        user_personas_env = os.getenv("PERSONAVOICE_USER_PERSONAS")
+        user_personas_path = Path(user_personas_env).expanduser() if user_personas_env else None
         return cls(
             backend=resolved,
             config_dir=config_dir,
@@ -107,6 +117,7 @@ class Settings:
             finetuned_dir=finetuned_dir,
             memory_dir=memory_dir,
             memory_key=memory_key,
+            user_personas_path=user_personas_path,
         )
 
 
@@ -155,6 +166,11 @@ def load_voice_registry(settings: Settings) -> VoiceRegistry:
         clones=load_clones_store(settings),
         finetuned=load_finetuned_store(settings),
     )
+
+
+def load_user_persona_store(settings: Settings) -> UserPersonaStore:
+    """Load the multi-user custom-persona store (tolerates a missing file → empty store)."""
+    return UserPersonaStore.load(settings.user_personas_path)
 
 
 def load_memory_store(settings: Settings) -> MemoryStore:

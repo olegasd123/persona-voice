@@ -20,6 +20,8 @@ from personavoice.models import Msg, Persona, Transcript
 from personavoice.orchestrator import agent
 from personavoice.orchestrator.turn import TurnController
 from personavoice.persona import load_persona
+from personavoice.persona.registry import PersonaRegistry
+from personavoice.persona.store import UserPersonaStore
 
 from .fakes import FakeLLM, FakeSTT, FakeTTS, make_backend
 
@@ -442,3 +444,108 @@ def test_set_options_noop_when_unchanged(config_dir: Path) -> None:
     before = ag.options
     ag.set_options(SessionOptions(demeanor=Demeanor.rude))  # same value
     assert ag.options == before
+
+
+# --- custom personas (multi-user store) -----------------------------------------------
+
+
+def _custom_persona(persona_id: str, *, name: str = "Custom", **session_defaults: str) -> Persona:
+    body: dict[str, object] = {
+        "id": persona_id,
+        "name": name,
+        "system_prompt": "You are a custom persona.",
+        "llm": {"base_model": "qwen2.5-7b-instruct"},
+        "voice": {"ref": "voices/companion_soft"},
+    }
+    if session_defaults:
+        body["session_defaults"] = session_defaults
+    return Persona.model_validate(body)
+
+
+def _store(tmp_path: Path, users: dict[str, dict[str, Persona]]) -> UserPersonaStore:
+    # In-memory (constructor users=) so no file is written during the test.
+    return UserPersonaStore(tmp_path / "u.json", users=users)
+
+
+def test_lookup_persona_resolves_custom(config_dir: Path, tmp_path: Path) -> None:
+    reg = PersonaRegistry(config_dir / "personas")
+    store = _store(tmp_path, {"alice": {"french-tutor": _custom_persona("french-tutor")}})
+    assert agent._lookup_persona(reg, store, "alice", "french-tutor").id == "french-tutor"
+    assert agent._lookup_persona(reg, store, "bob", "french-tutor") is None  # other user
+    assert agent._lookup_persona(reg, store, "alice", "companion").id == "companion"  # curated
+    assert agent._lookup_persona(reg, store, "alice", "ghost") is None
+
+
+def test_lookup_persona_curated_wins_on_clash(config_dir: Path, tmp_path: Path) -> None:
+    reg = PersonaRegistry(config_dir / "personas")
+    store = _store(tmp_path, {"alice": {"companion": _custom_persona("companion", name="Evil")}})
+    # The built-in companion wins; the user's same-id persona can't shadow it.
+    assert agent._lookup_persona(reg, store, "alice", "companion").name != "Evil"
+
+
+def test_select_persona_picks_custom_from_metadata(config_dir: Path, tmp_path: Path) -> None:
+    reg = PersonaRegistry(config_dir / "personas")
+    store = _store(tmp_path, {"alice": {"french-tutor": _custom_persona("french-tutor")}})
+    ctx = SimpleNamespace(
+        job=SimpleNamespace(metadata='{"persona": "french-tutor", "user": "alice"}'),
+        room=SimpleNamespace(metadata=None),
+    )
+    persona = agent._select_persona(ctx, reg, None, user_store=store, user_id="alice")
+    assert persona.id == "french-tutor"
+
+
+def test_select_persona_unknown_custom_falls_back(config_dir: Path, tmp_path: Path) -> None:
+    reg = PersonaRegistry(config_dir / "personas")
+    store = _store(tmp_path, {})
+    ctx = SimpleNamespace(
+        job=SimpleNamespace(metadata='{"persona": "ghost", "user": "alice"}'),
+        room=SimpleNamespace(metadata=None),
+    )
+    persona = agent._select_persona(ctx, reg, None, user_store=store, user_id="alice")
+    assert persona.id == agent._default_persona_id(reg)
+
+
+# --- persona-authored session defaults ------------------------------------------------
+
+
+def test_persona_session_defaults_apply(config_dir: Path) -> None:
+    from personavoice.models import CEFRLevel
+
+    persona = _custom_persona("tutor", cefr="a1")  # baked-in default
+    ag = agent.PersonaAgent(make_backend(), persona, FakeSource())
+    assert ag.options.cefr is CEFRLevel.a1
+    assert ag._pipeline.options.cefr is CEFRLevel.a1
+
+
+def test_explicit_options_override_persona_defaults(config_dir: Path) -> None:
+    from personavoice.models import CEFRLevel, Demeanor, SessionOptions
+
+    persona = _custom_persona("tutor", cefr="a1", demeanor="kind")
+    ag = agent.PersonaAgent(
+        make_backend(), persona, FakeSource(), options=SessionOptions(cefr=CEFRLevel.c2)
+    )
+    assert ag.options.cefr is CEFRLevel.c2  # explicit wins
+    assert ag.options.demeanor is Demeanor.kind  # persona default fills the gap
+
+
+def test_set_persona_recomputes_session_defaults(config_dir: Path) -> None:
+    from personavoice.models import CEFRLevel
+
+    ag = agent.PersonaAgent(make_backend(), _companion(config_dir), FakeSource())
+    assert ag.options.cefr is None  # companion has no session defaults
+    ag.set_persona(_custom_persona("tutor", cefr="a1"))
+    assert ag.options.cefr is CEFRLevel.a1  # the new persona's default now applies
+
+
+def test_explicit_options_survive_persona_switch(config_dir: Path) -> None:
+    from personavoice.models import CEFRLevel, Demeanor, SessionOptions
+
+    ag = agent.PersonaAgent(
+        make_backend(),
+        _companion(config_dir),
+        FakeSource(),
+        options=SessionOptions(demeanor=Demeanor.rude),
+    )
+    ag.set_persona(_custom_persona("tutor", cefr="a1"))
+    assert ag.options.demeanor is Demeanor.rude  # explicit override preserved across the switch
+    assert ag.options.cefr is CEFRLevel.a1  # new persona's default added underneath

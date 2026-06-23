@@ -223,7 +223,10 @@ personavoice --token-server          # HTTP on PERSONAVOICE_HOST:PERSONAVOICE_PO
 | Route | Purpose |
 |-------|---------|
 | `GET /healthz` | liveness |
-| `GET /personas` | `{"personas": [{"id","name","description","voice"}], "default": <id>}` |
+| `GET /personas[?user=]` | `{"personas": [{"id","name","description","voice","custom"}], "default": <id>}` — curated + the user's custom personas |
+| `POST /personas?user=` | create a custom persona (body = a persona draft) |
+| `PUT /personas/{id}?user=` / `DELETE /personas/{id}?user=` | edit / delete one of the user's own personas (curated are read-only) |
+| `GET /loras` | served LoRA adapters for a custom persona's `llm.lora` (`{"loras": [...], "supports_lora"}`) |
 | `GET /voices` | selectable voice catalog for the active backend (`{"voices": [...], "supports_cloning"}`) |
 | `POST /token` | body `{"room"?, "identity"?, "persona"?, "voice"?, "cefr"?, "demeanor"?}` → `{"url","token","room","identity","persona","voice","cefr","demeanor"}` |
 | `POST /voices/clone` | `?name=&text=&authorized=1` + the wav as the raw body → enroll a clone |
@@ -316,6 +319,18 @@ client can also **switch persona mid-call** by publishing a data message — a b
 and the registry reloads from disk first, so editing a persona file takes effect without a
 restart.
 
+**Custom personas (multi-user).** Beyond the curated YAML, users can author their own personas at
+runtime over HTTP, scoped per `user_id` (the token identity / `{"user": …}` metadata): `POST
+/personas?user=`, `PUT`/`DELETE /personas/{id}?user=`, and `GET /personas?user=` (which merges the
+curated set with that user's own, each tagged `custom`). A draft is just a persona body — `name`
+and `system_prompt` are enough; the voice ref and LLM base model default to the curated default,
+and a `session_defaults` block bakes in CEFR/demeanor/voice the agent layers under any explicit
+session option. They persist to `PERSONAVOICE_USER_PERSONAS` (`<models>/user_personas.json`) and
+the agent resolves a `{"persona": <id>, "user": <uid>}` against this store — **curated always win
+on id clash**, so a user can't shadow or delete a built-in. A persona's `llm.lora` routes to a
+vLLM-served adapter; `GET /loras` lists the selectable ones (empty on Mac/LM Studio, where a LoRA
+is merged into the base model at train time).
+
 ### Voice cloning (zero-shot)
 
 Clone a voice from a short sample and make a persona speak in it. Cloning needs a cloning TTS
@@ -351,6 +366,13 @@ removes it. A picked voice is then chosen per session via the **voice** session 
 Because clones/fine-tunes are only **audible on a cloning backend**, the catalog still lists them
 on Kokoro/Orpheus but marks them `available:false` with a reason — a "bring your own voice"
 session should run `f5_mlx`/`chatterbox`.
+
+**Seed voices.** Ship the library non-empty so the picker has something to choose on first run:
+`personavoice-seed-voices` (`python scripts/seed_voices.py`) enrolls the wavs in
+`assets/seed_voices/` (bundled `female.wav` + `male.wav`; add more — each becomes a clone named
+after its file stem). It goes through the same path a client upload uses and is **idempotent**
+(already-present clones are skipped; `--force` re-enrolls). On a preset-only backend the seeds
+still enroll but list `available:false`.
 
 > **Licensing:** F5's default checkpoint has **CC-BY-NC** weights (non-commercial) — fine for Mac
 > dev. For anything you redistribute, clone with **Chatterbox** (MIT) on CUDA. See

@@ -38,11 +38,13 @@ from ..memory import ConversationMemory
 from ..models import Persona, SessionOptions
 from ..obs import configure_logging, turn_metrics_from_stream
 from ..persona.registry import PersonaRegistry
+from ..persona.store import UserPersonaStore
 from ..safety import Moderator, moderator_from_env
 from ..server.config import (
     Settings,
     build_conversation_memory,
     load_backend_config,
+    load_user_persona_store,
     load_voice_registry,
 )
 from ..voice.registry import VoiceRegistry
@@ -117,7 +119,12 @@ class PersonaAgent:
         self._persona = persona
         self._source = source
         self._memory = memory
-        self._options = options or SessionOptions()
+        # `_explicit_options` are the per-session overrides the client set (metadata / data
+        # message); `_options` is them merged over the persona's `session_defaults`, so a custom
+        # persona's authored defaults (e.g. a tutor that defaults to CEFR A1) apply unless the
+        # client overrides them. Recomputed on a persona switch.
+        self._explicit_options = options or SessionOptions()
+        self._options = self._effective_options(persona)
         self._pipeline = StreamingPipeline(
             backend,
             persona,
@@ -144,33 +151,47 @@ class PersonaAgent:
 
         Interrupts any in-flight reply so the next user turn is answered (and voiced) by the
         new persona; the shared `StreamingPipeline.history` carries over so the conversation
-        continues rather than resetting.
+        continues rather than resetting. The effective options are recomputed over the new
+        persona's `session_defaults` (the client's explicit overrides still win).
         """
         if persona.id == self._persona.id:
             return
         self._turn.interrupt()
         self._persona = persona
         self._pipeline.persona = persona
+        new_options = self._effective_options(persona)
+        if new_options != self._options:
+            self._options = new_options
+            self._pipeline.options = new_options
         logger.info("persona switched to %s mid-session", persona.id)
 
     @property
     def options(self) -> SessionOptions:
         return self._options
 
+    def _effective_options(self, persona: Persona) -> SessionOptions:
+        """Explicit session overrides layered over the persona's authored option defaults."""
+        return self._explicit_options.merged_over(persona.session_defaults)
+
     def set_options(self, options: SessionOptions) -> None:
         """Apply per-session option changes mid-call (voice / CEFR / demeanor).
 
-        The given options are *merged over* the current ones, so a data message that only sets
-        `demeanor` keeps the existing voice/CEFR. The in-flight reply is interrupted so the
-        next user turn is answered under the new options (the pipeline reads them per turn).
+        The given options are *merged over* the current explicit overrides, so a data message
+        that only sets `demeanor` keeps the existing voice/CEFR; the result is then layered over
+        the persona's `session_defaults`. The in-flight reply is interrupted so the next user
+        turn is answered under the new options (the pipeline reads them per turn).
         """
-        merged = options.merged_over(self._options)
-        if merged == self._options:
+        new_explicit = options.merged_over(self._explicit_options)
+        new_effective = new_explicit.merged_over(self._persona.session_defaults)
+        if new_explicit == self._explicit_options and new_effective == self._options:
             return
         self._turn.interrupt()
-        self._options = merged
-        self._pipeline.options = merged
-        logger.info("session options updated mid-session: %s", merged.model_dump(exclude_none=True))
+        self._explicit_options = new_explicit
+        self._options = new_effective
+        self._pipeline.options = new_effective
+        logger.info(
+            "session options updated mid-session: %s", new_effective.model_dump(exclude_none=True)
+        )
 
     async def _capture_wav(self, wav: bytes) -> None:
         """Sink: push one sentence's WAV onto the WebRTC track as 20 ms PCM frames."""
@@ -468,16 +489,46 @@ def _default_persona_id(registry: PersonaRegistry) -> str:
     return registry.ids()[0] if len(registry) else "companion"
 
 
-def _select_persona(ctx: Any, registry: PersonaRegistry, override: str | None) -> Persona:
-    """Pick the persona for a job: explicit override → job/room metadata → default."""
+def _lookup_persona(
+    registry: PersonaRegistry,
+    user_store: UserPersonaStore | None,
+    user_id: str | None,
+    persona_id: str,
+) -> Persona | None:
+    """Resolve a persona id to a `Persona`, or None if unknown.
+
+    Curated personas win on id clash (so a user can't shadow a built-in); failing that, the
+    caller's own custom persona (from the multi-user store) is consulted when a user id is known.
+    """
+    if persona_id in registry:
+        return registry.get(persona_id)
+    if user_store is not None and user_id:
+        return user_store.get(user_id, persona_id)
+    return None
+
+
+def _select_persona(
+    ctx: Any,
+    registry: PersonaRegistry,
+    override: str | None,
+    *,
+    user_store: UserPersonaStore | None = None,
+    user_id: str | None = None,
+) -> Persona:
+    """Pick the persona for a job: explicit override → job/room metadata → default.
+
+    A custom persona (resolved against the caller's `user_id` in the user store) is honored
+    alongside the curated registry; an unknown id falls back to the default curated persona.
+    """
     default = _default_persona_id(registry)
     job_meta = getattr(getattr(ctx, "job", None), "metadata", None)
     room_meta = getattr(getattr(ctx, "room", None), "metadata", None)
     persona_id = resolve_persona_id([override, job_meta, room_meta], default)
-    if persona_id not in registry:
+    persona = _lookup_persona(registry, user_store, user_id, persona_id)
+    if persona is None:
         logger.warning("requested persona %r is unknown; using %r", persona_id, default)
-        persona_id = default
-    return registry.get(persona_id)
+        persona = registry.get(default)
+    return persona
 
 
 # Process-global cache of the warmed backend + registries. On Windows the LiveKit worker uses a
@@ -516,11 +567,18 @@ def _ensure_warm() -> dict[str, Any]:
         backend = build_backend(load_backend_config(settings))
         voices = load_voice_registry(settings)
         registry = PersonaRegistry(settings.personas_dir)
+        user_personas = load_user_persona_store(settings)
         vad = _load_vad(silero)
         logger.info("prewarm: loading models (backend=%s)…", backend.name)
         # No event loop is running during prewarm, so drive the async warm-ups with asyncio.run.
         asyncio.run(_warmup_backend(backend, voices, registry))
-        _WARMED.update(backend=backend, voices=voices, registry=registry, vad=vad)
+        _WARMED.update(
+            backend=backend,
+            voices=voices,
+            registry=registry,
+            user_personas=user_personas,
+            vad=vad,
+        )
         return _WARMED
 
 
@@ -575,8 +633,20 @@ async def entrypoint(ctx: Any, *, persona_id: str | None = None) -> None:
     registry = proc_data.get("registry")
     if registry is None:
         registry = PersonaRegistry(settings.personas_dir)
+    user_personas = proc_data.get("user_personas")
+    if user_personas is None:
+        user_personas = load_user_persona_store(settings)
     vad = proc_data.get("vad")
-    persona = _select_persona(ctx, registry, persona_id)
+
+    # The user id from job/room metadata (`{"user": "..."}`) scopes custom-persona resolution;
+    # it's resolvable pre-connect (metadata rides on the job/room). The remote-participant
+    # fallback below only firms up the *memory* user id, which needs the connection.
+    job_meta = getattr(getattr(ctx, "job", None), "metadata", None)
+    room_meta = getattr(getattr(ctx, "room", None), "metadata", None)
+    meta_user_id = resolve_user_id([job_meta, room_meta])
+    persona = _select_persona(
+        ctx, registry, persona_id, user_store=user_personas, user_id=meta_user_id
+    )
     logger.info("agent starting (backend=%s persona=%s)", backend.name, persona.id)
 
     await ctx.connect(auto_subscribe=agents.AutoSubscribe.AUDIO_ONLY)
@@ -585,9 +655,7 @@ async def entrypoint(ctx: Any, *, persona_id: str | None = None) -> None:
     # (`{"user": "..."}`) or the remote participant's identity. Without one we run stateless;
     # the facade is also dormant until that user grants consent (see `personavoice-memory`).
     remote_ids = [p.identity for p in getattr(ctx.room, "remote_participants", {}).values()]
-    job_meta = getattr(getattr(ctx, "job", None), "metadata", None)
-    room_meta = getattr(getattr(ctx, "room", None), "metadata", None)
-    user_id = resolve_user_id([job_meta, room_meta]) or (remote_ids[0] if remote_ids else None)
+    user_id = meta_user_id or (remote_ids[0] if remote_ids else None)
     memory = build_conversation_memory(settings, backend, persona) if user_id else None
     if memory is not None:
         logger.info(
@@ -635,9 +703,12 @@ async def entrypoint(ctx: Any, *, persona_id: str | None = None) -> None:
         text = _data_text(data)
         pid = persona_id_from_metadata(text)
         if pid:
-            if pid in registry:
-                registry.reload()  # pick up any edits to the persona file before swapping
-                agent.set_persona(registry.get(pid))
+            registry.reload()  # pick up any edits to a curated persona file before swapping
+            if user_personas is not None:
+                user_personas.reload()  # and any custom persona created since the call began
+            target = _lookup_persona(registry, user_personas, user_id, pid)
+            if target is not None:
+                agent.set_persona(target)
             else:
                 logger.warning("ignoring data request to switch to unknown persona %r", pid)
         # A data message can also change session options (voice / CEFR / demeanor) mid-call.
