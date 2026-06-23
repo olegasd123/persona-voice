@@ -22,5 +22,12 @@ dev_dependencies:
     sdk: flutter
   flutter_lints: ^6.0.0
 
+# `record` 5.2.1 caps record_linux at <1.0.0 (forcing the stale 0.7.2) while still
+# pulling record_platform_interface 1.6.0, whose startStream / hasPermission additions
+# 0.7.2 never implemented. That broken combo fails the iOS kernel_snapshot build even
+# though the Linux backend is unused. 1.3.1 implements both members and accepts 1.6.0.
+dependency_overrides:
+  record_linux: ^1.3.1
+
 flutter:
   uses-material-design: true
