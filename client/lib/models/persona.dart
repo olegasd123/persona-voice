@@ -6,6 +6,8 @@ class Persona {
     required this.name,
     this.description = '',
     this.voice = '',
+    this.cefr,
+    this.demeanor,
     this.custom = false,
   });
 
@@ -17,6 +19,11 @@ class Persona {
 
   /// Human description of the persona's voice (e.g. "warm, soft, feminine"); may be empty.
   final String voice;
+
+  /// The persona's baked-in session defaults (`session_defaults`), so the card can show what
+  /// it speaks like before any per-call override. Null = unset (the curated personas, today).
+  final CefrLevel? cefr;
+  final Demeanor? demeanor;
 
   /// True for a user-authored persona (editable / deletable). Curated personas are false.
   final bool custom;
@@ -30,6 +37,8 @@ class Persona {
           : id,
       description: (json['description'] as String?)?.trim() ?? '',
       voice: (json['voice'] as String?)?.trim() ?? '',
+      cefr: cefrFromWire(json['cefr'] as String?),
+      demeanor: demeanorFromWire(json['demeanor'] as String?),
       custom: json['custom'] as bool? ?? false,
     );
   }

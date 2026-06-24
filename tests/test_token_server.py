@@ -308,8 +308,15 @@ def test_personas_lists_ids_and_default(registry: PersonaRegistry) -> None:
     data = svc.personas()
     ids = {p["id"] for p in data["personas"]}
     assert {"companion", "hr_interviewer"} <= ids
-    assert all({"name", "description", "voice"} <= p.keys() for p in data["personas"])
+    assert all({"name", "description", "voice", "cefr", "demeanor"} <= p.keys()
+               for p in data["personas"])
     assert data["default"] == "companion"
+
+
+def test_personas_session_defaults_none_for_curated(registry: PersonaRegistry) -> None:
+    # Curated personas set no session defaults, so the picker reports them as None (not absent).
+    svc = make_service(registry, default="companion")
+    assert all(p["cefr"] is None and p["demeanor"] is None for p in svc.personas()["personas"])
 
 
 def test_personas_includes_description_and_voice_blurb(registry: PersonaRegistry) -> None:
@@ -400,6 +407,9 @@ def test_create_persona_with_session_defaults(registry: PersonaRegistry, tmp_pat
     draft = {**_DRAFT, "session_defaults": {"cefr": "a1", "demeanor": "kind"}}
     result = svc.create_persona("alice", draft)
     assert result["persona"]["session_defaults"]["cefr"] == "A1"  # canonicalized
+    # …and the picker summary surfaces those baked-in defaults so the card can show them.
+    summary = next(p for p in svc.personas(user="alice")["personas"] if p["id"] == result["id"])
+    assert (summary["cefr"], summary["demeanor"]) == ("A1", "kind")
 
 
 def test_create_persona_requires_user(registry: PersonaRegistry, tmp_path: Path) -> None:

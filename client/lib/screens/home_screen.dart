@@ -300,7 +300,8 @@ class _HomeScreenState extends State<HomeScreen> {
               persona: p,
               isDefault: p.id == _defaultId,
               isLastUsed: p.id == lastId,
-              hasOptions: widget.prefs.optionsFor(p.id).isNotEmpty,
+              options: widget.prefs.optionsFor(p.id),
+              catalog: _catalog,
               connecting: p.id == _connectingId,
               disabled: _connectingId != null && p.id != _connectingId,
               onTap: () => _call(p),
@@ -366,14 +367,16 @@ class _ConnectionChip extends StatelessWidget {
   }
 }
 
-/// A tappable persona row: avatar, name, description, voice — and a call affordance that
-/// becomes a spinner while dialling.
+/// A tappable persona row: avatar, name, description, and the voice / CEFR / demeanor it will
+/// speak with (reflecting any per-call override) — plus a call affordance that becomes a
+/// spinner while dialling.
 class _PersonaCard extends StatelessWidget {
   const _PersonaCard({
     required this.persona,
     required this.isDefault,
     required this.isLastUsed,
-    required this.hasOptions,
+    required this.options,
+    required this.catalog,
     required this.connecting,
     required this.disabled,
     required this.onTap,
@@ -385,7 +388,15 @@ class _PersonaCard extends StatelessWidget {
   final Persona persona;
   final bool isDefault;
   final bool isLastUsed;
-  final bool hasOptions;
+
+  /// The user's saved per-call overrides for this persona (voice / CEFR / demeanor); empty
+  /// when untouched. Drives the "Tuned" tag and the *effective* attributes shown on the card.
+  final SessionOptions options;
+
+  /// The active backend's voice catalog — used to resolve an overridden voice id to its
+  /// descriptor (and to tell presets, which have one, from clones/fine-tunes, which don't).
+  final VoiceCatalog catalog;
+
   final bool connecting;
   final bool disabled;
   final VoidCallback onTap;
@@ -395,11 +406,30 @@ class _PersonaCard extends StatelessWidget {
   final VoidCallback? onEdit;
   final VoidCallback? onDelete;
 
+  bool get hasOptions => options.isNotEmpty;
+
+  /// The voice blurb to show. When a voice override is set, that wins: a preset resolves to its
+  /// descriptor ("warm, soft, feminine"); a clone/fine-tune (no descriptor) or an unknown/stale
+  /// id hides the line. With no override, fall back to the persona's authored voice blurb (which
+  /// is itself empty when the authored voice is a clone). Null = render no voice line.
+  String? get _voiceDescriptor {
+    final overrideId = options.voice;
+    if (overrideId != null) {
+      final option = catalog.byId(overrideId);
+      return (option != null && option.isPreset) ? option.name : null;
+    }
+    return persona.voice.isNotEmpty ? persona.voice : null;
+  }
+
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
     final isDark = scheme.brightness == Brightness.dark;
     final subtitle = persona.description.isNotEmpty ? persona.description : persona.id;
+    // Effective attributes = the per-call override, falling back to the persona's own default.
+    final voiceDescriptor = _voiceDescriptor;
+    final cefr = options.cefr ?? persona.cefr;
+    final demeanor = options.demeanor ?? persona.demeanor;
     return Opacity(
       opacity: disabled ? 0.5 : 1,
       child: Card(
@@ -461,7 +491,7 @@ class _PersonaCard extends StatelessWidget {
                         maxLines: 2,
                         overflow: TextOverflow.ellipsis,
                       ),
-                      if (persona.voice.isNotEmpty) ...[
+                      if (voiceDescriptor != null) ...[
                         const SizedBox(height: 4),
                         Row(
                           children: [
@@ -469,11 +499,31 @@ class _PersonaCard extends StatelessWidget {
                             const SizedBox(width: 4),
                             Flexible(
                               child: Text(
-                                persona.voice,
+                                voiceDescriptor,
                                 style: TextStyle(fontSize: 12, color: scheme.outline),
                                 overflow: TextOverflow.ellipsis,
                               ),
                             ),
+                          ],
+                        ),
+                      ],
+                      if (cefr != null || demeanor != null) ...[
+                        const SizedBox(height: 4),
+                        Row(
+                          children: [
+                            if (cefr != null) ...[
+                              Icon(Icons.school_outlined, size: 13, color: scheme.outline),
+                              const SizedBox(width: 4),
+                              Text(cefr.label,
+                                  style: TextStyle(fontSize: 12, color: scheme.outline)),
+                            ],
+                            if (cefr != null && demeanor != null) const SizedBox(width: 12),
+                            if (demeanor != null) ...[
+                              Icon(Icons.mood_outlined, size: 13, color: scheme.outline),
+                              const SizedBox(width: 4),
+                              Text(demeanor.label,
+                                  style: TextStyle(fontSize: 12, color: scheme.outline)),
+                            ],
                           ],
                         ),
                       ],

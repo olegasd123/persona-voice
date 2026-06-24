@@ -17,10 +17,23 @@ void main() {
     expect(p.initial, 'C');
   });
 
-  test('description and voice default to empty (older server)', () {
+  test('parses baked-in session defaults (cefr / demeanor)', () {
+    final p = Persona.fromJson({
+      'id': 'tutor',
+      'name': 'Tutor',
+      'cefr': 'b1',
+      'demeanor': 'kind',
+    });
+    expect(p.cefr, CefrLevel.b1);
+    expect(p.demeanor, Demeanor.kind);
+  });
+
+  test('description, voice and session defaults default to empty/null (older server)', () {
     final p = Persona.fromJson({'id': 'x', 'name': 'X'});
     expect(p.description, '');
     expect(p.voice, '');
+    expect(p.cefr, isNull);
+    expect(p.demeanor, isNull);
   });
 
   test('falls back to the id when name is blank', () {

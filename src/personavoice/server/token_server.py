@@ -13,8 +13,9 @@ dependency. The request handling lives in `TokenService` (pure, unit-tested); th
 Endpoints (all JSON, permissive CORS so a browser client / Playground can call them):
 
     GET    /healthz          -> {"status": "ok", "backend": ...}
-    GET    /personas[?user=] -> {"personas": [{"id","name","description","voice","custom"}],
-                                "default": <id>}  (curated + the user's custom personas)
+    GET    /personas[?user=] -> {"personas": [{"id","name","description","voice","cefr",
+                                "demeanor","custom"}], "default": <id>}
+                                (curated + the user's custom personas)
     POST   /personas?user=   -> create a custom persona; body = a persona draft
     GET    /personas/{id}?user=   -> one persona's full body (for an edit form)
     PUT    /personas/{id}?user=   -> replace one of the user's own personas
@@ -242,12 +243,21 @@ class TokenService:
             raise Unauthorized("invalid API token")
 
     def _persona_summary(self, persona: Persona, *, custom: bool) -> dict[str, Any]:
-        """Picker entry for one persona: id/name/description, a voice blurb, and editability."""
+        """Picker entry for one persona: id/name/description, a voice blurb, the baked-in
+        session defaults (CEFR / demeanor), and editability.
+
+        The CEFR/demeanor defaults let the client show what a persona speaks like before any
+        per-call override; both are `None` for the curated personas (none set them today) and
+        for any custom persona that left them unset.
+        """
+        defaults = persona.session_defaults
         return {
             "id": persona.id,
             "name": persona.name,
             "description": persona.description,
             "voice": self._voices.describe(persona.voice.ref) if self._voices else "",
+            "cefr": defaults.cefr.value if defaults.cefr else None,
+            "demeanor": defaults.demeanor.value if defaults.demeanor else None,
             "custom": custom,  # True = user-authored (editable/deletable); False = curated
         }
 

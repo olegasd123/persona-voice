@@ -30,6 +30,10 @@ class VoiceOption {
 
   bool get isClone => kind == 'clone';
 
+  /// A built-in preset voice (vs. a clone / fine-tune). Presets carry a human descriptor in
+  /// [name] ("warm, soft, feminine"); clones/fine-tunes carry only their library name.
+  bool get isPreset => kind == 'preset';
+
   /// Title-cased kind for section headers ("Clone", "Preset", "Finetuned").
   String get kindLabel =>
       kind.isEmpty ? 'Voice' : '${kind[0].toUpperCase()}${kind.substring(1)}';
