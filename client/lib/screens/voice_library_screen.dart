@@ -174,13 +174,16 @@ class _VoiceLibraryScreenState extends State<VoiceLibraryScreen> {
     const order = ['finetuned', 'clone', 'preset'];
     final widgets = <Widget>[];
     for (final kind in order) {
+      // Hide "Your clones" entirely on a backend that can't clone — nothing there is
+      // actionable (the clones would all be greyed-out as unavailable).
+      if (kind == 'clone' && !_catalog.supportsCloning) continue;
       final group = _catalog.voices.where((v) => v.kind == kind).toList();
       if (group.isEmpty) continue;
       widgets.add(_SectionHeader('${_kindHeading(kind)} (${group.length})'));
       for (final v in group) {
         widgets.add(_VoiceTile(
           voice: v,
-          onDelete: v.isClone ? () => _deleteVoice(v) : null,
+          onDelete: v.removable ? () => _deleteVoice(v) : null,
         ));
       }
     }

@@ -58,6 +58,28 @@ class SeedResult:
         return not self.failed
 
 
+def _resolve_seed_dir(seed_dir: str | Path | None) -> Path:
+    """The seed-wav directory: explicit arg, else $PERSONAVOICE_SEED_VOICES_DIR, else default."""
+    import os
+
+    base = seed_dir or os.getenv("PERSONAVOICE_SEED_VOICES_DIR") or DEFAULT_SEED_DIR
+    return Path(base).expanduser()
+
+
+def seed_voice_names(seed_dir: str | Path | None = None) -> set[str]:
+    """Names of the bundled "inbox" seed voices: the `*.wav` stems under the seed dir.
+
+    These ship with the deployment (e.g. `male`/`female`) and are protected from deletion in
+    the voice library — the catalog marks them `removable=False` and the server rejects a
+    delete. Derived live from the seed dir (resolved the same way the seeder does), so changing
+    the shipped set is just a matter of changing the files. A missing dir yields an empty set.
+    """
+    base = _resolve_seed_dir(seed_dir)
+    if not base.is_dir():
+        return set()
+    return {path.stem for path in base.glob("*.wav")}
+
+
 def discover_samples(seed_dir: str | Path) -> dict[str, bytes]:
     """Read every `*.wav` under `seed_dir`, keyed by the file stem (the clone name).
 
@@ -170,14 +192,10 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--backend", choices=("mac", "cuda"), default=None, help="override BACKEND")
     args = parser.parse_args(argv)
 
-    import os
-
     from ..obs import configure_logging
 
     configure_logging()
-    seed_dir = (
-        args.dir or Path(os.getenv("PERSONAVOICE_SEED_VOICES_DIR") or DEFAULT_SEED_DIR).expanduser()
-    )
+    seed_dir = _resolve_seed_dir(args.dir)
 
     try:
         settings = Settings.load(backend=args.backend)

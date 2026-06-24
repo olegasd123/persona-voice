@@ -149,6 +149,16 @@ def test_catalog_availability_cloning_backend(tmp_path: Path) -> None:
     assert "companion_soft" not in by_id
 
 
+def test_catalog_marks_only_unprotected_clones_removable(tmp_path: Path) -> None:
+    reg = _registry_with_stores(tmp_path)
+    reg.clones.record(ClonedVoice(name="female", sample_path="f.wav"))  # a bundled seed voice
+    by_id = {o.id: o for o in reg.catalog("f5_mlx", supports_cloning=True, protected={"female"})}
+    # A user clone is removable; the protected "inbox" voice and the fine-tune are not.
+    assert by_id["my_clone"].removable is True
+    assert by_id["female"].removable is False
+    assert by_id["my_ft"].removable is False
+
+
 def test_resolve_choice_precedence_finetuned_over_clone(tmp_path: Path) -> None:
     reg = _registry_with_stores(tmp_path)
     ref = reg.resolve_choice("my_ft", "f5_mlx", supports_cloning=True)

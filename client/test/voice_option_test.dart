@@ -10,6 +10,7 @@ void main() {
       'emotion': 'warm',
       'available': false,
       'reason': 'needs a cloning backend',
+      'removable': true,
     });
     expect(v.id, 'my_voice');
     expect(v.name, 'My Voice');
@@ -17,6 +18,7 @@ void main() {
     expect(v.kindLabel, 'Clone');
     expect(v.available, isFalse);
     expect(v.reason, 'needs a cloning backend');
+    expect(v.removable, isTrue);
   });
 
   test('VoiceOption falls back name to id and nulls blank fields', () {
@@ -25,6 +27,18 @@ void main() {
     expect(v.emotion, isNull);
     expect(v.available, isTrue); // defaults true when absent
     expect(v.isClone, isFalse);
+    expect(v.removable, isFalse); // presets aren't removable
+  });
+
+  test('removable falls back to "is a clone" when the server omits it', () {
+    // Old server (no `removable` field): any clone is removable, others are not.
+    expect(VoiceOption.fromJson({'id': 'c', 'kind': 'clone'}).removable, isTrue);
+    expect(VoiceOption.fromJson({'id': 'p', 'kind': 'preset'}).removable, isFalse);
+    // A protected seed clone from a new server sends removable:false explicitly.
+    expect(
+      VoiceOption.fromJson({'id': 'female', 'kind': 'clone', 'removable': false}).removable,
+      isFalse,
+    );
   });
 
   test('VoiceCatalog splits available vs unavailable and looks up by id', () {

@@ -14,6 +14,7 @@ registry tolerates a missing file (returns empty) so partial configs and tests s
 
 from __future__ import annotations
 
+from collections.abc import Collection
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -51,6 +52,10 @@ class VoiceOption(BaseModel):
     emotion: str | None = None
     available: bool = True
     reason: str | None = None
+    # Whether the user may delete this voice from the library. Only user-enrolled clones are
+    # removable; presets/fine-tunes and the bundled "inbox" seed clones are not (the UI hides
+    # their delete control and the server rejects a delete).
+    removable: bool = False
 
 
 class VoiceRegistry:
@@ -175,7 +180,9 @@ class VoiceRegistry:
             return self.resolve(key, tts_name, default_emotion=default_emotion)
         return None
 
-    def catalog(self, tts_name: str, *, supports_cloning: bool) -> list[VoiceOption]:
+    def catalog(
+        self, tts_name: str, *, supports_cloning: bool, protected: Collection[str] = ()
+    ) -> list[VoiceOption]:
         """The unified, selectable voice list for a picker on the active backend.
 
         Stable order: fine-tuned, then clones, then presets. Clones/fine-tunes are listed even
@@ -183,6 +190,9 @@ class VoiceRegistry:
         hint "switch to a cloning backend"). Presets, by contrast, are **omitted entirely**
         when they have no mapping for `tts_name`: an unmapped preset (e.g. a Kokoro preset on
         F5) is nothing the user can act on, so it's dropped rather than shown greyed-out.
+
+        `protected` names the clones the user may **not** delete (the bundled "inbox" seed
+        voices); those are marked `removable=False` like presets/fine-tunes.
         """
         options: list[VoiceOption] = []
         cloning_reason = None if supports_cloning else _NO_CLONING_REASON
@@ -206,6 +216,7 @@ class VoiceRegistry:
                         kind="clone",
                         available=supports_cloning,
                         reason=cloning_reason,
+                        removable=name not in protected,
                     )
                 )
         for vid in self.ids():

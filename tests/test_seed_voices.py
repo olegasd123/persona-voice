@@ -13,6 +13,7 @@ from personavoice.voice.seed import (
     discover_samples,
     make_enroller,
     seed_clones,
+    seed_voice_names,
 )
 
 from .fakes import make_backend
@@ -88,6 +89,26 @@ def test_bundled_seed_dir_has_female_and_male() -> None:
     repo_root = Path(__file__).resolve().parents[1]
     samples = discover_samples(repo_root / "assets" / "seed_voices")
     assert {"female", "male"} <= set(samples)
+
+
+# --- seed_voice_names (protected/"inbox" set) -----------------------------------------
+
+
+def test_seed_voice_names_returns_stems(tmp_path: Path) -> None:
+    (tmp_path / "female.wav").write_bytes(b"RIFF")
+    (tmp_path / "male.wav").write_bytes(b"RIFF")
+    (tmp_path / "notes.txt").write_text("ignore me")
+    assert seed_voice_names(tmp_path) == {"female", "male"}
+
+
+def test_seed_voice_names_missing_dir_is_empty(tmp_path: Path) -> None:
+    assert seed_voice_names(tmp_path / "nope") == set()
+
+
+def test_seed_voice_names_uses_env_dir(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    (tmp_path / "narrator.wav").write_bytes(b"RIFF")
+    monkeypatch.setenv("PERSONAVOICE_SEED_VOICES_DIR", str(tmp_path))
+    assert seed_voice_names() == {"narrator"}
 
 
 # --- make_enroller (per-backend) ------------------------------------------------------

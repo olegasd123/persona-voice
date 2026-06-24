@@ -76,6 +76,7 @@ def make_cloning_service(
     *,
     max_clones: int = 50,
     api_token: str | None = None,
+    protected_voices: tuple[str, ...] = (),
 ) -> tuple[TokenService, ClonesStore]:
     """A TokenService on a cloning backend with a fake cloner and a real clones store."""
     store = ClonesStore(tmp_path / "clones")
@@ -98,6 +99,7 @@ def make_cloning_service(
         supports_cloning=True,
         cloner_factory=lambda: _FakeCloner(store),
         max_clones=max_clones,
+        protected_voices=protected_voices,
     )
     return svc, store
 
@@ -256,6 +258,27 @@ def test_delete_unknown_voice(registry: PersonaRegistry, tmp_path: Path) -> None
     svc, _ = make_cloning_service(registry, tmp_path)
     with pytest.raises(BadRequest, match="unknown clone"):
         svc.delete_voice("ghost")
+
+
+async def test_delete_rejects_protected_seed_voice(
+    registry: PersonaRegistry, tmp_path: Path
+) -> None:
+    svc, store = make_cloning_service(registry, tmp_path, protected_voices=("female",))
+    await svc.enroll_voice(audio=b"x", name="female", authorized=True)
+    with pytest.raises(BadRequest, match="bundled voice"):
+        svc.delete_voice("female")
+    assert "female" in store  # still there
+
+
+async def test_catalog_marks_protected_voice_non_removable(
+    registry: PersonaRegistry, tmp_path: Path
+) -> None:
+    svc, _ = make_cloning_service(registry, tmp_path, protected_voices=("female",))
+    await svc.enroll_voice(audio=b"x", name="female", authorized=True)  # bundled seed
+    await svc.enroll_voice(audio=b"x", name="mine", authorized=True)  # user clone
+    by_id = {o["id"]: o for o in svc.voices_catalog()["voices"]}
+    assert by_id["female"]["removable"] is False
+    assert by_id["mine"]["removable"] is True
 
 
 # --- auth -----------------------------------------------------------------------------

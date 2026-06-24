@@ -8,6 +8,7 @@ class VoiceOption {
     this.emotion,
     this.available = true,
     this.reason,
+    this.removable = false,
   });
 
   final String id;
@@ -22,6 +23,11 @@ class VoiceOption {
   final bool available;
   final String? reason;
 
+  /// Whether the user may delete this voice. Only user-enrolled clones are removable; presets,
+  /// fine-tunes and the bundled "inbox" seed clones are not. The UI hides the delete control
+  /// when false (and the server rejects the delete anyway).
+  final bool removable;
+
   bool get isClone => kind == 'clone';
 
   /// Title-cased kind for section headers ("Clone", "Preset", "Finetuned").
@@ -30,14 +36,17 @@ class VoiceOption {
 
   factory VoiceOption.fromJson(Map<String, dynamic> json) {
     final id = json['id'] as String? ?? '';
+    final kind = json['kind'] as String? ?? 'preset';
     String? clean(String? s) => (s != null && s.trim().isNotEmpty) ? s.trim() : null;
     return VoiceOption(
       id: id,
       name: clean(json['name'] as String?) ?? id,
-      kind: json['kind'] as String? ?? 'preset',
+      kind: kind,
       emotion: clean(json['emotion'] as String?),
       available: json['available'] as bool? ?? true,
       reason: clean(json['reason'] as String?),
+      // Older servers don't send `removable`; fall back to "any clone is removable".
+      removable: json['removable'] as bool? ?? (kind == 'clone'),
     );
   }
 }

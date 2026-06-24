@@ -45,7 +45,7 @@ import os
 import re
 import ssl
 import uuid
-from collections.abc import Callable
+from collections.abc import Callable, Collection
 from dataclasses import dataclass
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -60,6 +60,7 @@ from ..persona.registry import PersonaRegistry
 from ..persona.store import UserPersonaStore
 from ..voice.clone import CloneError, VoiceCloner
 from ..voice.registry import VoiceRegistry
+from ..voice.seed import seed_voice_names
 from .config import Settings, load_user_persona_store, load_voice_registry
 from .ratelimit import RateLimiter, rate_limiter_from_env
 from .security import audit_security, has_errors
@@ -193,6 +194,7 @@ class TokenService:
         supports_cloning: bool = False,
         cloner_factory: ClonerFactory | None = None,
         max_clones: int = _DEFAULT_MAX_CLONES,
+        protected_voices: Collection[str] = (),
         user_personas: UserPersonaStore | None = None,
         max_user_personas: int = _DEFAULT_MAX_USER_PERSONAS,
         llm_name: str = "",
@@ -214,6 +216,9 @@ class TokenService:
         self._supports_cloning = supports_cloning
         self._cloner_factory = cloner_factory
         self._max_clones = max_clones
+        # The bundled "inbox" seed clones (e.g. male/female) the user can't delete: the catalog
+        # marks them `removable=False` and `delete_voice` rejects them.
+        self._protected_voices = frozenset(protected_voices)
         # Multi-user custom personas (N3): None disables the authoring routes. Scoped per
         # user id; curated personas always win on id clash and are never stored/deletable here.
         self._user_personas = user_personas
@@ -412,7 +417,11 @@ class TokenService:
     def voices_catalog(self) -> dict[str, Any]:
         """The selectable voice catalog for the active backend (for a client picker)."""
         options = (
-            self._voices.catalog(self._tts_name, supports_cloning=self._supports_cloning)
+            self._voices.catalog(
+                self._tts_name,
+                supports_cloning=self._supports_cloning,
+                protected=self._protected_voices,
+            )
             if self._voices is not None
             else []
         )
@@ -482,6 +491,8 @@ class TokenService:
         if store is None:
             raise ServerMisconfigured("voice library is not configured")
         name = (name or "").strip()
+        if name in self._protected_voices:
+            raise BadRequest(f"{name!r} is a bundled voice and can't be removed")
         if not store.remove(name):
             raise BadRequest(f"unknown clone {name!r}")
         return {"deleted": name}
@@ -716,6 +727,7 @@ def build_service(settings: Settings | None = None) -> TokenService:
         supports_cloning=supports_cloning,
         cloner_factory=cloner_factory,
         max_clones=max_clones,
+        protected_voices=seed_voice_names(),
         user_personas=user_personas,
         max_user_personas=max_user_personas,
         llm_name=llm_name,
