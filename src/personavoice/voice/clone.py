@@ -43,6 +43,32 @@ _NAME_RE = re.compile(r"[A-Za-z0-9_-]+")
 _MIN_SECONDS = 2.0
 _MAX_SECONDS = 60.0
 
+# Cap the *stored* reference length. F5 (Mac) regenerates the whole reference clip on every
+# sentence and then trims it, so a long reference inflates per-sentence latency: a ~9.6 s clip
+# roughly doubles it vs ~5 s. ~5 s is also the sweet spot for Chatterbox (CUDA) conditioning —
+# longer can even hurt — so one trimmed clip serves both backends and no per-backend copy is
+# needed. Transcription runs on the trimmed bytes, so F5's `ref_text` stays consistent. None
+# disables trimming.
+_TRIM_REF_SECONDS = 5.0
+
+
+def trim_wav(sample_wav: bytes, max_seconds: float) -> bytes:
+    """Return `sample_wav` trimmed to its first `max_seconds`.
+
+    Unchanged when it's already shorter, or when the bytes can't be decoded — trimming is a
+    best-effort latency optimization, so undecodable input is left for the backend to handle.
+    """
+    from ..audio import decode_wav, encode_wav
+
+    try:
+        samples, sr = decode_wav(sample_wav)
+    except Exception:  # not decodable here → let the backend deal with the raw bytes
+        return sample_wav
+    keep = int(max_seconds * sr)
+    if keep <= 0 or len(samples) <= keep:
+        return sample_wav
+    return encode_wav(samples[:keep], sr)
+
 
 class CloneError(ValueError):
     """A sample is unusable, a name/assignment is invalid, or the manifest is corrupt."""
@@ -232,12 +258,14 @@ class VoiceCloner:
         assign_to: str | None = None,
         min_seconds: float | None = _MIN_SECONDS,
         max_seconds: float | None = _MAX_SECONDS,
+        trim_ref_seconds: float | None = _TRIM_REF_SECONDS,
     ) -> VoiceRef:
         """Clone `sample_wav` as `name`, persist it, and optionally assign it to a persona.
 
-        Validates the sample, asks the TTS backend to persist it and produce a `VoiceRef`,
-        fills the reference transcript (given, or transcribed via the cascade's STT for
-        reference-text backends), records the clone, and assigns it when `assign_to` is set.
+        Validates the sample, caps its length (`trim_ref_seconds`, for responsiveness — see
+        `_TRIM_REF_SECONDS`), asks the TTS backend to persist it and produce a `VoiceRef`, fills
+        the reference transcript (given, or transcribed via the cascade's STT for reference-text
+        backends), records the clone, and assigns it when `assign_to` is set.
         """
         if not name or not _NAME_RE.fullmatch(name):
             raise CloneError(f"invalid clone name {name!r}; use letters, digits, '-' or '_' only")
@@ -249,6 +277,9 @@ class VoiceCloner:
             )
         if min_seconds is not None or max_seconds is not None:
             validate_sample(sample_wav, min_seconds=min_seconds, max_seconds=max_seconds)
+        # Trim before persisting *and* transcribing, so the stored clip and its ref_text agree.
+        if trim_ref_seconds is not None:
+            sample_wav = trim_wav(sample_wav, trim_ref_seconds)
 
         # Land the clone sample alongside the manifest so the catalog is self-contained.
         tts.options["clones_dir"] = str(self._store.dir)

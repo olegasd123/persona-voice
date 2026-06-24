@@ -49,6 +49,17 @@ def _wav(seconds: float, sr: int = 16000) -> bytes:
     return encode_wav(np.zeros(int(seconds * sr), dtype=np.float32), sr)
 
 
+def test_trim_wav_caps_length_and_passes_through() -> None:
+    from personavoice.voice.clone import trim_wav
+
+    # A 9 s clip is trimmed to ~5 s; a 3 s clip is returned unchanged (same bytes object).
+    assert validate_sample(trim_wav(_wav(9.0), 5.0)) == pytest.approx(5.0, abs=0.05)
+    short = _wav(3.0)
+    assert trim_wav(short, 5.0) is short
+    # Undecodable bytes are best-effort passed through, not raised on.
+    assert trim_wav(b"not a wav", 5.0) == b"not a wav"
+
+
 def test_validate_sample_returns_duration() -> None:
     assert validate_sample(_wav(5.0)) == pytest.approx(5.0, abs=0.05)
 
