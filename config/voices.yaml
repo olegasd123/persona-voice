@@ -30,3 +30,21 @@ pm_calm:
   emotion: neutral
   presets:
     kokoro: am_michael
+
+# Bundled out-of-the-box presets the user can pick per session (the seed wavs under
+# assets/seed_voices/). On a cloning backend (Chatterbox on CUDA) the `sample` wav is the
+# voice: the backend zero-shot-clones it. The `chatterbox` preset key only makes the catalog
+# list them and `has_preset` pass — Chatterbox speaks from `sample`, so its value is the
+# voice id, not a built-in preset name. They don't map onto Kokoro (preset-only), so they
+# don't appear on the Mac backend.
+Feminine:
+  description: Feminine
+  sample: assets/seed_voices/Feminine.wav
+  presets:
+    chatterbox: Feminine
+
+Masculine:
+  description: Masculine
+  sample: assets/seed_voices/Masculine.wav
+  presets:
+    chatterbox: Masculine

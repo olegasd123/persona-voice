@@ -32,6 +32,28 @@ _VOICE_PREFIX = "voices/"
 # Reason shown for a clone/fine-tune the active backend can't speak (no cloning capability).
 _NO_CLONING_REASON = "requires a cloning backend (f5_mlx on Mac, chatterbox on CUDA)"
 
+# Which fine-tune engine each cloning TTS backend can load a checkpoint for. A fine-tuned voice
+# trained with a different engine isn't loadable (an F5 checkpoint isn't a Chatterbox one) — left
+# selectable it crashes the synth, so it's gated out of resolution and shown unavailable.
+_TTS_FINETUNE_ENGINE = {"chatterbox": "chatterbox", "f5_mlx": "f5"}
+
+
+def _finetune_speakable(engine: str | None, tts_name: str) -> bool:
+    """True when a fine-tuned voice's `engine` can be loaded by the `tts_name` backend.
+
+    A voice with no recorded engine (legacy) is treated as loadable — we can't prove a mismatch,
+    so we don't hide it. A known engine must match the active backend's engine.
+    """
+    backend_engine = _TTS_FINETUNE_ENGINE.get(tts_name)
+    if backend_engine is None:
+        return False  # backend can't load any fine-tune checkpoint
+    return engine is None or engine == backend_engine
+
+
+def _engine_mismatch_reason(engine: str | None, tts_name: str) -> str:
+    """Why an engine-mismatched fine-tuned voice can't be spoken on the active backend."""
+    return f"trained with the {engine} engine; the active {tts_name} backend can't load it"
+
 
 class VoiceError(ValueError):
     """The voice registry file is missing data or fails validation."""
@@ -137,7 +159,9 @@ class VoiceRegistry:
         if supports_cloning:
             if self._finetuned is not None:
                 assigned = self._finetuned.assignment_for(persona.id)
-                if assigned:
+                # Skip an assigned fine-tune the active backend can't load (engine mismatch) so
+                # it falls through to a clone / static preset instead of crashing at synth time.
+                if assigned and _finetune_speakable(self._finetuned_engine(assigned), tts_name):
                     ref = self._finetuned.voice_ref(
                         assigned, tts_name, emotion=persona.voice.emotion
                     )
@@ -168,7 +192,11 @@ class VoiceRegistry:
         """
         key = self._key(voice_id)
         if supports_cloning:
-            if self._finetuned is not None and key in self._finetuned:
+            if (
+                self._finetuned is not None
+                and key in self._finetuned
+                and _finetune_speakable(self._finetuned_engine(key), tts_name)
+            ):
                 ref = self._finetuned.voice_ref(key, tts_name, emotion=default_emotion)
                 if ref is not None:
                     return ref
@@ -198,13 +226,21 @@ class VoiceRegistry:
         cloning_reason = None if supports_cloning else _NO_CLONING_REASON
         if self._finetuned is not None:
             for name in self._finetuned.names():
+                engine = self._finetuned_engine(name)
+                speakable = supports_cloning and _finetune_speakable(engine, tts_name)
+                if not supports_cloning:
+                    reason = cloning_reason
+                elif not speakable:
+                    reason = _engine_mismatch_reason(engine, tts_name)
+                else:
+                    reason = None
                 options.append(
                     VoiceOption(
                         id=name,
                         name=name,
                         kind="finetuned",
-                        available=supports_cloning,
-                        reason=cloning_reason,
+                        available=speakable,
+                        reason=reason,
                     )
                 )
         if self._clones is not None:
@@ -265,6 +301,21 @@ class VoiceRegistry:
     def finetuned_for_persona(self, persona_id: str) -> str | None:
         """Name of the fine-tuned voice assigned to `persona_id`, if any."""
         return self._finetuned.assignment_for(persona_id) if self._finetuned is not None else None
+
+    def _finetuned_engine(self, name: str) -> str | None:
+        """The training engine of fine-tuned voice `name` (None if unknown/absent)."""
+        fv = self._finetuned.get(name) if self._finetuned is not None else None
+        return fv.engine if fv is not None else None
+
+    def preset_sample_stems(self) -> set[str]:
+        """File stems of preset sample wavs (bundled voices shipped via `voices.yaml`).
+
+        The seeder excludes these so a bundled preset wav under the seed dir isn't *also*
+        enrolled as a duplicate clone; the token server excludes them from the protected-clone
+        set (a preset is already non-removable). Presets with no `sample` (Kokoro presets) and
+        clones/fine-tunes don't contribute.
+        """
+        return {Path(v.sample).stem for v in self._voices.values() if v.sample}
 
     def ids(self) -> list[str]:
         return sorted(self._voices)

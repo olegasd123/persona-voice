@@ -200,6 +200,74 @@ def test_choice_ids_spans_all_kinds(tmp_path: Path) -> None:
     assert reg.choice_ids() == ["companion_soft", "my_clone", "my_ft"]
 
 
+# --- fine-tune engine gating (an F5 checkpoint can't load on a Chatterbox backend) -----
+
+
+def _ft_registry(tmp_path: Path, *, engine: str | None, name: str = "trained") -> VoiceRegistry:
+    """A registry whose single fine-tuned voice carries `engine` (None = legacy/unknown)."""
+    finetuned = FinetunedVoicesStore(tmp_path / "ft")
+    finetuned.record(FinetunedVoice(name=name, checkpoint_path="ckpt", engine=engine))
+    return VoiceRegistry({}, finetuned=finetuned)
+
+
+def test_catalog_marks_engine_mismatched_finetune_unavailable(tmp_path: Path) -> None:
+    # An F5 fine-tune on the Chatterbox backend: listed, but greyed-out with an engine reason
+    # (selecting it would crash the synth) — even though Chatterbox *is* a cloning backend.
+    reg = _ft_registry(tmp_path, engine="f5")
+    opt = {o.id: o for o in reg.catalog("chatterbox", supports_cloning=True)}["trained"]
+    assert opt.available is False
+    assert opt.reason and "f5" in opt.reason
+
+
+def test_catalog_lists_matching_engine_finetune_available(tmp_path: Path) -> None:
+    reg = _ft_registry(tmp_path, engine="chatterbox")
+    opt = {o.id: o for o in reg.catalog("chatterbox", supports_cloning=True)}["trained"]
+    assert opt.available is True and opt.reason is None
+
+
+def test_catalog_legacy_finetune_without_engine_stays_available(tmp_path: Path) -> None:
+    # No recorded engine -> can't prove a mismatch, so it stays available (don't hide it).
+    reg = _ft_registry(tmp_path, engine=None)
+    opt = {o.id: o for o in reg.catalog("chatterbox", supports_cloning=True)}["trained"]
+    assert opt.available is True
+
+
+def test_resolve_choice_engine_mismatched_finetune_is_none(tmp_path: Path) -> None:
+    reg = _ft_registry(tmp_path, engine="f5")
+    # Mismatched engine -> not speakable here -> None (caller falls back to the persona default).
+    assert reg.resolve_choice("trained", "chatterbox", supports_cloning=True) is None
+    # The same voice resolves on its own engine's backend.
+    ref = reg.resolve_choice("trained", "f5_mlx", supports_cloning=True)
+    assert ref is not None and ref.model_path == "ckpt"
+
+
+def test_resolve_for_persona_skips_engine_mismatched_finetune(tmp_path: Path) -> None:
+    from .fakes import make_persona
+
+    finetuned = FinetunedVoicesStore(tmp_path / "ft")
+    finetuned.record(FinetunedVoice(name="trained", checkpoint_path="ckpt", engine="f5"))
+    finetuned.assign("p", "trained")
+    # The persona's ref maps to a chatterbox preset (with a sample) — what it falls back to.
+    voices = {"test": VoiceDef(presets={"chatterbox": "cb_voice"}, sample="s.wav")}
+    reg = VoiceRegistry(voices, finetuned=finetuned)
+    ref = reg.resolve_for_persona(make_persona("p"), "chatterbox", supports_cloning=True)
+    # Not the F5 checkpoint — fell through to the chatterbox preset's sample.
+    assert ref.model_path is None
+    assert ref.sample_path == "s.wav"
+
+
+def test_preset_sample_stems_only_counts_sample_backed_presets() -> None:
+    reg = VoiceRegistry(
+        {
+            "Feminine": VoiceDef(
+                sample="assets/seed_voices/Feminine.wav", presets={"chatterbox": "Feminine"}
+            ),
+            "companion_soft": VoiceDef(presets={"kokoro": "af_heart"}),  # no sample
+        }
+    )
+    assert reg.preset_sample_stems() == {"Feminine"}
+
+
 async def test_pipeline_speaks_each_persona_in_its_own_voice(config_dir: Path) -> None:
     """End-to-end: the registry threads through to the TTS call, distinctly per persona."""
     from personavoice.orchestrator.pipeline import Pipeline

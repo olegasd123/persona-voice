@@ -1,16 +1,18 @@
-"""Seed voices: enroll the bundled out-of-the-box clones so the library isn't empty.
+"""Seed voices: enroll user-supplied wavs in the seed dir as clones.
 
-N1 (the per-persona voice picker) and N2 (the Voice Library page) are only interesting
-once there's something to pick. This ships two ready clones — `female` / `male` — under
-`assets/seed_voices/`, enrolled on first run through the **same path a client upload uses**
-(`VoiceCloner` → `ClonesStore.record`), so they behave exactly like a user-enrolled voice.
+The bundled out-of-the-box voices (`Feminine` / `Masculine`) now ship as **presets**
+(`config/voices.yaml`, their `sample` field), so the library/picker isn't empty without any
+enrollment step. This seeder is for **additional** voices: drop a `*.wav` into
+`assets/seed_voices/` and it's enrolled as a clone named after the file stem, through the
+**same path a client upload uses** (`VoiceCloner` → `ClonesStore.record`).
 
-Each `*.wav` in the seed directory becomes a clone named after the file stem. Enrollment is
-**idempotent**: an already-present clone is skipped unless `--force`. On a cloning backend
-(`f5_mlx` on Mac, `chatterbox` on CUDA) the full cloner runs (auto-transcribing the
-reference text F5 needs); on a preset-only backend the sample is still recorded so it
-appears in `GET /voices` with `available=false` (the catalog already gates that). The clones
-land in the shared `ClonesStore`, so a multi-user deployment shows them to every user.
+Enrollment is **idempotent**: an already-present clone is skipped unless `--force`. A wav whose
+stem already ships as a preset is **excluded** (never enrolled as a clone) so it can't become a
+duplicate of the preset's voice id. On a cloning backend (`f5_mlx` on Mac, `chatterbox` on CUDA)
+the full cloner runs (auto-transcribing the reference text F5 needs); on a preset-only backend
+the sample is still recorded so it appears in `GET /voices` with `available=false` (the catalog
+already gates that). The clones land in the shared `ClonesStore`, so a multi-user deployment
+shows them to every user.
 """
 
 from __future__ import annotations
@@ -19,7 +21,7 @@ import argparse
 import asyncio
 import logging
 import sys
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Collection
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
@@ -33,6 +35,7 @@ from ..server.config import (
     load_clones_store,
 )
 from .clone import ClonedVoice, CloneError, ClonesStore, validate_sample
+from .registry import VoiceRegistry
 
 logger = logging.getLogger("personavoice.seed")
 
@@ -47,10 +50,14 @@ EnrollFn = Callable[[str, bytes], Awaitable[None]]
 
 @dataclass
 class SeedResult:
-    """What one seed run did: names enrolled, skipped (already present), and failed."""
+    """What one seed run did: names enrolled, skipped (already present), excluded (shipped as a
+    preset), and failed."""
 
     seeded: list[str] = field(default_factory=list)
     skipped: list[str] = field(default_factory=list)
+    excluded: list[str] = field(
+        default_factory=list
+    )  # bundled wavs that ship as voices.yaml presets
     failed: list[tuple[str, str]] = field(default_factory=list)  # (name, error)
 
     @property
@@ -67,12 +74,14 @@ def _resolve_seed_dir(seed_dir: str | Path | None) -> Path:
 
 
 def seed_voice_names(seed_dir: str | Path | None = None) -> set[str]:
-    """Names of the bundled "inbox" seed voices: the `*.wav` stems under the seed dir.
+    """Names of the "inbox" seed voices: the `*.wav` stems under the seed dir.
 
-    These ship with the deployment (e.g. `male`/`female`) and are protected from deletion in
-    the voice library — the catalog marks them `removable=False` and the server rejects a
-    delete. Derived live from the seed dir (resolved the same way the seeder does), so changing
-    the shipped set is just a matter of changing the files. A missing dir yields an empty set.
+    A user-dropped seed clone is protected from deletion in the voice library — the catalog
+    marks it `removable=False` and the server rejects a delete. Callers exclude any stem that
+    ships as a `voices.yaml` preset (those are already non-removable presets, not clones); see
+    `VoiceRegistry.preset_sample_stems`. Derived live from the seed dir (resolved the same way
+    the seeder does), so changing the set is just a matter of changing the files. A missing dir
+    yields an empty set.
     """
     base = _resolve_seed_dir(seed_dir)
     if not base.is_dir():
@@ -98,14 +107,21 @@ async def seed_clones(
     samples: dict[str, bytes],
     *,
     force: bool = False,
+    exclude: Collection[str] = (),
 ) -> SeedResult:
     """Enroll each sample as a clone, skipping ones already in `store` (unless `force`).
 
-    A `CloneError` for one sample (e.g. too short) is captured in `failed` rather than
-    aborting the run, so a single bad seed never blocks the others.
+    Names in `exclude` are bundled voices shipped as presets (`config/voices.yaml`); they're
+    never enrolled as clones — even with `force` — so a preset wav under the seed dir doesn't
+    become a duplicate clone with the same id. A `CloneError` for one sample (e.g. too short) is
+    captured in `failed` rather than aborting the run, so a single bad seed never blocks the others.
     """
+    excluded = set(exclude)
     result = SeedResult()
     for name in sorted(samples):
+        if name in excluded:
+            result.excluded.append(name)
+            continue
         if not force and name in store:
             result.skipped.append(name)
             continue
@@ -160,11 +176,14 @@ async def _run(settings: Settings, seed_dir: Path, *, force: bool) -> SeedResult
     if not samples:
         logger.warning("no seed wavs found in %s; nothing to seed", seed_dir)
         return SeedResult()
+    # Bundled wavs that ship as presets (config/voices.yaml) are skipped — they're already
+    # speakable out of the box, so enrolling them as clones too would duplicate the voice id.
+    preset_stems = VoiceRegistry.load(settings.voices_path).preset_sample_stems()
     store = load_clones_store(settings)
     backend = build_backend(load_backend_config(settings))
     supports_cloning = getattr(backend.tts, "supports_cloning", False)
     enroll = make_enroller(backend, store, supports_cloning=supports_cloning)
-    result = await seed_clones(enroll, store, samples, force=force)
+    result = await seed_clones(enroll, store, samples, force=force, exclude=preset_stems)
     if not supports_cloning and result.seeded:
         logger.warning(
             "active TTS %r can't clone; seeded %d voice(s) as catalog entries only "
@@ -211,9 +230,11 @@ def main(argv: list[str] | None = None) -> int:
         print(f"seeded {len(result.seeded)} voice(s): {', '.join(result.seeded)}")
     if result.skipped:
         print(f"skipped {len(result.skipped)} already present: {', '.join(result.skipped)}")
+    if result.excluded:
+        print(f"skipped {len(result.excluded)} shipped as preset(s): {', '.join(result.excluded)}")
     for name, err in result.failed:
         print(f"failed {name}: {err}", file=sys.stderr)
-    if not (result.seeded or result.skipped or result.failed):
+    if not (result.seeded or result.skipped or result.excluded or result.failed):
         print(f"no seed wavs found in {seed_dir}")
     return 0 if result.ok else 1
 

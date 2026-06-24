@@ -369,10 +369,15 @@ Because clones/fine-tunes are only **audible on a cloning backend**, the catalog
 on Kokoro but marks them `available:false` with a reason — a "bring your own voice"
 session should run `f5_mlx`/`chatterbox`.
 
-**Seed voices.** Ship the library non-empty so the picker has something to choose on first run:
-`personavoice-seed-voices` (`python scripts/seed_voices.py`) enrolls the wavs in
-`assets/seed_voices/` (bundled `female.wav` + `male.wav`; add more — each becomes a clone named
-after its file stem). It goes through the same path a client upload uses and is **idempotent**
+**Bundled voices.** The picker isn't empty on first run: `assets/seed_voices/` ships
+`Feminine.wav` + `Masculine.wav`, wired as **presets** in `config/voices.yaml` (their `sample`
+field). On a cloning backend (Chatterbox on CUDA) the backend zero-shot-clones the sample, so
+they're speakable out of the box with no enrollment step. They don't map onto Kokoro, so they
+don't appear on the Mac backend.
+
+To enroll **your own** wavs as clones, `personavoice-seed-voices`
+(`python scripts/seed_voices.py`) enrolls every wav in `assets/seed_voices/` as a clone named
+after its file stem. It goes through the same path a client upload uses and is **idempotent**
 (already-present clones are skipped; `--force` re-enrolls). On a preset-only backend the seeds
 still enroll but list `available:false`.
 

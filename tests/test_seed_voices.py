@@ -50,6 +50,18 @@ async def test_seed_clones_is_idempotent(tmp_path: Path) -> None:
     assert second.seeded == [] and second.skipped == ["female", "male"]
 
 
+async def test_seed_clones_excludes_presets(tmp_path: Path) -> None:
+    store = ClonesStore(tmp_path)
+    samples = {"Feminine": b"f", "userclone": b"u"}
+    # "Feminine" ships as a voices.yaml preset -> never enrolled as a clone, even with force.
+    result = await seed_clones(
+        _recording_enroller(store), store, samples, exclude={"Feminine"}, force=True
+    )
+    assert result.seeded == ["userclone"]
+    assert result.excluded == ["Feminine"]
+    assert "Feminine" not in store
+
+
 async def test_seed_clones_force_re_enrolls(tmp_path: Path) -> None:
     store = ClonesStore(tmp_path)
     store.record(ClonedVoice(name="female", sample_path="old.wav"))
@@ -84,11 +96,13 @@ def test_discover_samples_missing_dir_is_empty(tmp_path: Path) -> None:
     assert discover_samples(tmp_path / "nope") == {}
 
 
-def test_bundled_seed_dir_has_female_and_male() -> None:
-    # The repo ships both seeds so a fresh checkout demos with two real voices.
+def test_bundled_seed_dir_has_demo_voices() -> None:
+    # The repo ships two real voices so a fresh checkout demos with both. They're also wired
+    # as presets in config/voices.yaml (the `sample` field), so a cloning backend can speak
+    # them out of the box.
     repo_root = Path(__file__).resolve().parents[1]
     samples = discover_samples(repo_root / "assets" / "seed_voices")
-    assert {"female", "male"} <= set(samples)
+    assert {"Feminine", "Masculine"} <= set(samples)
 
 
 # --- seed_voice_names (protected/"inbox" set) -----------------------------------------

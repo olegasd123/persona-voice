@@ -219,8 +219,9 @@ class TokenService:
         self._supports_cloning = supports_cloning
         self._cloner_factory = cloner_factory
         self._max_clones = max_clones
-        # The bundled "inbox" seed clones (e.g. male/female) the user can't delete: the catalog
-        # marks them `removable=False` and `delete_voice` rejects them.
+        # User-dropped "inbox" seed clones the user can't delete: the catalog marks them
+        # `removable=False` and `delete_voice` rejects them. Bundled voices now ship as presets
+        # (already non-removable), so the builder excludes preset stems from this set.
         self._protected_voices = frozenset(protected_voices)
         # Multi-user custom personas (N3): None disables the authoring routes. Scoped per
         # user id; curated personas always win on id clash and are never stored/deletable here.
@@ -747,7 +748,9 @@ def build_service(settings: Settings | None = None) -> TokenService:
         supports_cloning=supports_cloning,
         cloner_factory=cloner_factory,
         max_clones=max_clones,
-        protected_voices=seed_voice_names(),
+        # Protect non-preset "inbox" seed clones from deletion. A bundled wav that ships as a
+        # voices.yaml preset is excluded — it's already a non-removable preset, not a clone.
+        protected_voices=seed_voice_names() - voices.preset_sample_stems(),
         user_personas=user_personas,
         max_user_personas=max_user_personas,
         llm_name=llm_name,
