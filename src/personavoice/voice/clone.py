@@ -1,9 +1,8 @@
 """Zero-shot voice cloning: clone a voice from a short sample and assign it to a persona.
 
-Cloning here is **reference conditioning**, not training: the cloning TTS backends
-(Chatterbox on CUDA, F5 on Mac) synthesize *in the voice of* a short reference WAV passed at
-generation time. So a "clone" is just a stored ~10 s sample plus, for reference-text models
-(F5), its transcript. The pieces:
+Cloning here is **reference conditioning**, not training: the cloning TTS backend
+synthesizes *in the voice of* a short reference WAV passed at generation time. So a "clone"
+is just a stored ~10 s sample plus its transcript. The pieces:
 
 - `validate_sample` — decode the WAV and bound its duration (clear-speech sanity check).
 - `ClonesStore` — persists clones (sample path + transcript + provenance) and **per-persona
@@ -47,12 +46,9 @@ _NAME_RE = re.compile(r"[A-Za-z0-9_-]+")
 _MIN_SECONDS = 2.0
 _MAX_SECONDS = 60.0
 
-# Cap the *stored* reference length. F5 (Mac) regenerates the whole reference clip on every
-# sentence and then trims it, so a long reference inflates per-sentence latency: a ~9.6 s clip
-# roughly doubles it vs ~5 s. ~5 s is also the sweet spot for Chatterbox (CUDA) conditioning —
-# longer can even hurt — so one trimmed clip serves both backends and no per-backend copy is
-# needed. Transcription runs on the trimmed bytes, so F5's `ref_text` stays consistent. None
-# disables trimming.
+# Cap the *stored* reference length. A clean ~5 s clip is the sweet spot for Chatterbox
+# conditioning; longer can even hurt. Transcription runs on the trimmed bytes, so `ref_text`
+# stays consistent. None disables trimming.
 _TRIM_REF_SECONDS = 5.0
 
 
@@ -66,11 +62,10 @@ def trim_wav(
 ) -> bytes:
     """Return `sample_wav` trimmed to about `max_seconds`, ending on a clean pause.
 
-    A naive hard cut at an arbitrary point ends the clip mid-word, which makes F5 emit a
-    transient at the start of every generated sentence (it has no natural boundary to begin
-    from). So we cut at the quietest point within the last `search_seconds` before the cap
-    (landing on a word gap when there is one), fade the tail to kill any click, and append a
-    short trailing silence so the reference ends on a pause.
+    A naive hard cut at an arbitrary point can end the clip mid-word, which gives the model
+    a poor reference boundary. So we cut at the quietest point within the last
+    `search_seconds` before the cap, fade the tail to kill any click, and append a short
+    trailing silence so the reference ends on a pause.
 
     Unchanged when it's already shorter, or when the bytes can't be decoded — trimming is a
     best-effort latency optimization, so undecodable input is left for the backend to handle.
@@ -323,7 +318,7 @@ class VoiceCloner:
         if not getattr(tts, "supports_cloning", False):
             raise CloneError(
                 f"the active TTS backend {tts.name!r} can't clone voices; switch to a cloning "
-                "backend (f5_mlx on Mac, chatterbox on CUDA) in config/backends/<backend>.yaml"
+                "backend (chatterbox on CUDA) in config/backends/<backend>.yaml"
             )
         if min_seconds is not None or max_seconds is not None:
             validate_sample(sample_wav, min_seconds=min_seconds, max_seconds=max_seconds)

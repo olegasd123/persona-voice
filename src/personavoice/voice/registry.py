@@ -3,9 +3,9 @@
 A persona declares a *logical* voice (`voice.ref: voices/companion_soft`). The registry
 (`config/voices.yaml`) maps that logical voice to a backend-native preset per TTS adapter,
 so the four personas sound **distinct** on whichever backend is active — `af_heart` vs
-`am_michael` on Kokoro (Mac). Clone-only backends
-(Chatterbox/F5) have no preset; they fall back to their own default voice until zero-shot
-cloning is wired up separately, at which point the `sample` field feeds the clone.
+`am_michael` on Kokoro (Mac). Clone-only backends like Chatterbox have no preset; they
+fall back to their own default voice until zero-shot cloning is wired up separately, at
+which point the `sample` field feeds the clone.
 
 `resolve()` always returns a usable `VoiceRef`: a concrete preset when one exists for the
 backend, otherwise the original ref passed through (the adapter then uses its default). The
@@ -30,12 +30,12 @@ if TYPE_CHECKING:
 _VOICE_PREFIX = "voices/"
 
 # Reason shown for a clone/fine-tune the active backend can't speak (no cloning capability).
-_NO_CLONING_REASON = "requires a cloning backend (f5_mlx on Mac, chatterbox on CUDA)"
+_NO_CLONING_REASON = "requires a cloning backend (chatterbox on CUDA)"
 
 # Which fine-tune engine each cloning TTS backend can load a checkpoint for. A fine-tuned voice
-# trained with a different engine isn't loadable (an F5 checkpoint isn't a Chatterbox one) — left
-# selectable it crashes the synth, so it's gated out of resolution and shown unavailable.
-_TTS_FINETUNE_ENGINE = {"chatterbox": "chatterbox", "f5_mlx": "f5"}
+# trained with a different engine isn't loadable. Left selectable it crashes the synth, so it's
+# gated out of resolution and shown unavailable.
+_TTS_FINETUNE_ENGINE = {"chatterbox": "chatterbox"}
 
 
 def _finetune_speakable(engine: str | None, tts_name: str) -> bool:
@@ -216,8 +216,8 @@ class VoiceRegistry:
         Stable order: fine-tuned, then clones, then presets. Clones/fine-tunes are listed even
         on a non-cloning backend but marked `available=False` with a `reason` (so the UI can
         hint "switch to a cloning backend"). Presets, by contrast, are **omitted entirely**
-        when they have no mapping for `tts_name`: an unmapped preset (e.g. a Kokoro preset on
-        F5) is nothing the user can act on, so it's dropped rather than shown greyed-out.
+        when they have no mapping for `tts_name`: an unmapped preset is nothing the user can
+        act on, so it's dropped rather than shown greyed-out.
 
         `protected` names the clones the user may **not** delete (the bundled "inbox" seed
         voices); those are marked `removable=False` like presets/fine-tunes.

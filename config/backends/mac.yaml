@@ -1,6 +1,5 @@
-# M4 Max (dev) backend. Adapters: whisper_mlx (STT), lmstudio (LLM), kokoro (TTS), plus
-# f5_mlx for voice cloning. Kokoro is the fast default; swap the TTS to f5_mlx to use cloned
-# voices (`personavoice-clone`).
+# M4 Max (dev) backend. Adapters: whisper_mlx (STT), lmstudio (LLM), kokoro (TTS).
+# Kokoro is fast and preset-only. Use the CUDA backend with Chatterbox for voice cloning.
 backend: mac
 
 stt:
@@ -23,25 +22,6 @@ llm:
       reasoning_effort: low
 
 tts:
-  # Kokoro = fast dev TTS, no cloning. To switch back to Kokoro, use:
-  #   adapter: kokoro
-  #   model: hexgrad/Kokoro-82M
-  #   options:
-  #     voice: af_heart
-  #     lang_code: a
-  #     sample_rate: 24000
-  #     speed: 1.0
-  #
-  # F5 = slower TTS with zero-shot voice cloning. To use F5, use:
-  #   adapter: f5_mlx
-  #   model: lucasnewman/f5-tts-mlx   (needs `pip install -e '.[clone-mac]'`)
-  #   options:
-  #     sample_rate: 24000
-  #
-  # Then: docker compose -f docker-compose.livekit.yml build token-server
-  #
-  # A clone assigned to a persona (e.g. female01 -> companion) speaks only on f5_mlx; on
-  # kokoro the persona falls back to its registry preset.
   adapter: kokoro
   model: hexgrad/Kokoro-82M
   options:

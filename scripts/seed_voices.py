@@ -6,8 +6,8 @@ Usage:
     python scripts/seed_voices.py --force         # re-enroll even if already present
     python scripts/seed_voices.py --dir my_voices --backend cuda
 
-Equivalent to the `personavoice-seed-voices` console script. Runs against the active backend
-(f5_mlx on Mac, chatterbox on CUDA); see the module docstring for the preset-only behavior.
+Equivalent to the `personavoice-seed-voices` console script. Runs against the active backend;
+see the module docstring for the preset-only behavior.
 """
 
 from __future__ import annotations

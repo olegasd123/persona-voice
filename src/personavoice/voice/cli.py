@@ -5,7 +5,7 @@
     personavoice-clone --list
     personavoice-clone --unassign companion
 
-It runs the configured cloning backend (f5_mlx on Mac, chatterbox on CUDA), stores the clone
+It runs the configured cloning backend (chatterbox on CUDA), stores the clone
 under the clones dir, and (with `--assign`) makes the persona speak in that voice everywhere —
 the demos and the live LiveKit agent pick it up via the voice registry. `--say ... --play`
 synthesizes a line in the new voice right away as a quick check.

@@ -270,8 +270,8 @@ Ship two ready clones so N1/N2 demo with real voices on first run.
   to mono + resamples).
 - A `make seed-voices` / `scripts/seed_voices.py` that enrolls them through the **same path** a
   client upload uses (`VoiceCloner` → `ClonesStore.record`), names clones after the wav stem,
-  auto-transcribing `ref_text` via the active STT (F5 needs it). **Idempotent** (skip if present).
-- Runs against the **active cloning backend** (f5_mlx / chatterbox); on a preset-only backend they
+  auto-transcribing `ref_text` via the active STT. **Idempotent** (skip if present).
+- Runs against the **active cloning backend** (chatterbox); on a preset-only backend they
   enroll but list `available=false`. Multi-user: seed under a shared/global namespace visible to
   all users.
 
@@ -451,7 +451,7 @@ class VoiceOption(BaseModel):
     kind: str            # "preset" | "clone" | "finetuned"
     emotion: str | None = None
     available: bool      # speakable on the active TTS backend?
-    reason: str | None = None   # e.g. "clone requires a cloning backend (f5_mlx/chatterbox)"
+    reason: str | None = None   # e.g. "clone requires a cloning backend"
 
 class VoiceRegistry:
     def catalog(self, tts_name: str, *, supports_cloning: bool) -> list[VoiceOption]:
@@ -477,22 +477,21 @@ New routes on the token/HTTP server (auth-gated by the existing `PERSONAVOICE_AP
 | Route | Body / params | Action |
 |-------|---------------|--------|
 | `GET /voices` | `?backend=` (optional) | return `catalog(...)` for the active backend |
-| `POST /voices/clone` | multipart: `audio` (wav ~10 s) + `name` + optional `text` | `validate_sample` → store under clones dir → if a reference-text backend (F5), auto-transcribe `ref_text` via STT → `ClonesStore.record` + `save` → return the new `VoiceOption` |
+| `POST /voices/clone` | multipart: `audio` (wav ~10 s) + `name` + optional `text` | `validate_sample` → store under clones dir → auto-transcribe `ref_text` via STT → `ClonesStore.record` + `save` → return the new `VoiceOption` |
 | `DELETE /voices/clone/{name}` | — | remove from store + save |
 
 Notes / constraints:
 - **Validation:** reuse `validate_sample` (duration / format checks already in `clone.py`); cap
   upload size and clamp the number of clones per deployment (abuse surface).
-- **Reference text:** F5 needs a transcript of the sample; the server already has an STT in the
-  active backend — transcribe on enroll and store as `ClonedVoice.ref_text` (mirrors what the
-  cascade does on the CLI path).
+- **Reference text:** the server already has an STT in the active backend — transcribe on enroll
+  and store as `ClonedVoice.ref_text` (mirrors what the cascade does on the CLI path).
 - **Persistence:** clones land in `PERSONAVOICE_CLONES_DIR` with the `clones.json` manifest, so the
   live agent picks them up at startup (already true) and across restarts.
 
 ### 3.4 Capability truth to surface
 
-Clones/fine-tunes are only **audible on a cloning backend** (`f5_mlx` on Mac, `chatterbox` on
-CUDA). On Kokoro the catalog still lists them but with `available=false` + `reason`. The
+Clones/fine-tunes are only **audible on a cloning backend** (`chatterbox` on CUDA). On Kokoro
+the catalog still lists them but with `available=false` + `reason`. The
 product implication: a "bring your own voice" session should run a cloning backend. Document this
 in the README voice section and have `--check` already-style warnings extend to "N clones present
 but active TTS cannot speak them."
@@ -511,8 +510,7 @@ but active TTS cannot speak them."
 - **Enrollment auth & quotas.** Who may add a clone, and how many? Recommend: require auth, cap
   count + sample size, and (if multi-user) namespace clones per user id.
 - **Consent / likeness.** Cloning a real person's voice is sensitive — add an explicit
-  "I'm authorized to use this voice" acknowledgement on the client enroll flow, and keep the
-  existing licensing caveats (F5 = CC-BY-NC; Chatterbox = MIT) visible.
+  "I'm authorized to use this voice" acknowledgement on the client enroll flow.
 
 ---
 

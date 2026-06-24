@@ -34,11 +34,6 @@ class Model:
 # Revisions left as "main" are intentionally TODO: pin to a specific commit before relying
 # on reproducibility. Licenses verified against each model card (2026-06); see the caveats.
 #
-# License caveats (matter for redistribution / commercial use):
-#   * F5-TTS pretrained weights (the Mac cloning option, f5-tts-mlx) are CC-BY-NC
-#     (non-commercial) because of the Emilia training set, even though the CODE is MIT.
-#     For commercial use prefer Kokoro (Apache-2.0, no clone) or an Apache-licensed
-#     OpenF5 checkpoint, or do cloning on the CUDA side with Chatterbox (MIT).
 MANIFEST: dict[str, list[Model]] = {
     "mac": [
         Model("stt", "mlx-community/whisper-large-v3-turbo", "main", "MIT", "hf"),
@@ -51,7 +46,6 @@ MANIFEST: dict[str, list[Model]] = {
             note="run: ollama pull qwen2.5:7b-instruct",
         ),
         Model("tts", "hexgrad/Kokoro-82M", "main", "Apache-2.0", "hf"),
-        # f5-tts-mlx (cloning) is fetched on first use; weights are CC-BY-NC (see above).
     ],
     "cuda": [
         Model("stt", "Systran/faster-whisper-large-v3", "main", "MIT", "hf"),

@@ -132,7 +132,7 @@ def run_check(settings: Settings) -> CheckReport:
         n = len(report.clones) + len(report.finetuned)
         report.warnings.append(
             f"{n} cloned/fine-tuned voice(s) present but the active TTS {backend.tts.name!r} "
-            "can't speak them — switch to a cloning backend (f5_mlx on Mac, chatterbox on CUDA)"
+            "can't speak them — switch to a cloning backend (chatterbox on CUDA)"
         )
 
     # 4. Memory. Surfaces the store location, at-rest encryption, and #users so a

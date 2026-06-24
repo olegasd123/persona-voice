@@ -175,9 +175,8 @@ class _VoiceLibraryScreenState extends State<VoiceLibraryScreen> {
     final widgets = <Widget>[];
     for (final kind in order) {
       // Hide "Your clones" *and* "Fine-tuned" entirely on a backend that can't clone — both
-      // need a cloning backend (f5_mlx / chatterbox), so on a preset-only backend (kokoro /
-      // kokoro) everything there would be greyed-out as unavailable. Presets stay: they're
-      // the only voices actionable there.
+      // need a cloning backend, so on a preset-only backend everything there would be
+      // greyed-out as unavailable. Presets stay: they're the only voices actionable there.
       if ((kind == 'clone' || kind == 'finetuned') && !_catalog.supportsCloning) continue;
       final group = _catalog.voices.where((v) => v.kind == kind).toList();
       if (group.isEmpty) continue;
@@ -297,7 +296,7 @@ class _NoCloningBanner extends StatelessWidget {
           Expanded(
             child: Text(
               "$backend can't speak or record clones. Switch to a cloning backend "
-              '(f5_mlx on Mac, chatterbox on CUDA) to add and use your own voices.',
+              '(chatterbox on CUDA) to add and use your own voices.',
               style: TextStyle(fontSize: 13, color: scheme.onSurfaceVariant),
             ),
           ),

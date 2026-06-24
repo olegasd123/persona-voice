@@ -2,12 +2,12 @@
 
 Trains a high-fidelity voice for a target speaker, beyond the zero-shot clone. Same
 discipline as the persona-LoRA stack: light, pure, unit-testable logic here; the heavy
-trainers (F5-TTS / Chatterbox, CUDA) are shelled out to and lazy-checked, so this package
+trainers (Chatterbox, CUDA) are shelled out to and lazy-checked, so this package
 imports and tests on any machine without a GPU or training libs.
 
 - `dataset`  — the target-speaker dataset (`metadata.csv` of `audio|text`) + validation and
   STT auto-transcription.
-- `config`   — `VoiceTrainConfig` + builders that turn it into an F5 / Chatterbox plan.
+- `config`   — `VoiceTrainConfig` + builders that turn it into a Chatterbox plan.
 - `finetune` — write any config and run the prep + trainer commands (`--dry-run` to preview).
 - `evaluate` — speaker-similarity A/B of the fine-tuned voice vs the zero-shot clone.
 

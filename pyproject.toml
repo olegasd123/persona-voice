@@ -54,11 +54,6 @@ livekit = [
 clone = [
     "chatterbox-tts>=0.1",
 ]
-# F5-TTS-mlx is the Apple-Silicon cloning backend. Its default checkpoint's *weights* are
-# CC-BY-NC (non-commercial) — fine for Mac dev, but ship with Chatterbox. See the README.
-clone-mac = [
-    "f5-tts-mlx>=0.2",
-]
 # --- Persona LoRA fine-tuning -------------------------------------------
 # Mac LoRA training via mlx-lm (also in the `mac` extra). The CUDA QLoRA trainer
 # (LLaMA-Factory / Unsloth) is heavy + needs a CUDA toolchain, so it's installed in the
@@ -68,8 +63,8 @@ train = [
 ]
 # --- Voice fine-tuning A/B eval -----------------------------------------
 # Speaker-similarity scoring for the fine-tuned-vs-clone A/B. The voice trainers themselves
-# (F5-TTS / Chatterbox, CUDA) are heavy + need a CUDA toolchain, so they live in the training
-# image, not here — see training/voice/README.md.
+# are heavy + need a CUDA toolchain, so they live in the training image, not here — see
+# training/voice/README.md.
 voice-eval = [
     "resemblyzer>=0.1",     # speaker embeddings for the voice-quality A/B (PERSONAVOICE eval)
 ]

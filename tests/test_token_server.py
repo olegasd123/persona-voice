@@ -95,7 +95,7 @@ def make_cloning_service(
         default_persona="companion",
         backend="mac",
         voices=voices,
-        tts_name="f5_mlx",
+        tts_name="chatterbox",
         supports_cloning=True,
         cloner_factory=lambda: _FakeCloner(store),
         max_clones=max_clones,
@@ -220,7 +220,7 @@ def test_voices_catalog_reports_backend_capability(
     svc, _ = make_cloning_service(registry, tmp_path)
     catalog = svc.voices_catalog()
     assert catalog["supports_cloning"] is True
-    assert catalog["tts"] == "f5_mlx"
+    assert catalog["tts"] == "chatterbox"
     assert isinstance(catalog["voices"], list)
 
 
@@ -322,8 +322,9 @@ def test_personas_lists_ids_and_default(registry: PersonaRegistry) -> None:
     data = svc.personas()
     ids = {p["id"] for p in data["personas"]}
     assert {"companion", "hr_interviewer"} <= ids
-    assert all({"name", "description", "voice", "cefr", "demeanor"} <= p.keys()
-               for p in data["personas"])
+    assert all(
+        {"name", "description", "voice", "cefr", "demeanor"} <= p.keys() for p in data["personas"]
+    )
     assert data["default"] == "companion"
 
 

@@ -8,8 +8,8 @@ enrollment step. This seeder is for **additional** voices: drop a `*.wav` into
 
 Enrollment is **idempotent**: an already-present clone is skipped unless `--force`. A wav whose
 stem already ships as a preset is **excluded** (never enrolled as a clone) so it can't become a
-duplicate of the preset's voice id. On a cloning backend (`f5_mlx` on Mac, `chatterbox` on CUDA)
-the full cloner runs (auto-transcribing the reference text F5 needs); on a preset-only backend
+duplicate of the preset's voice id. On a cloning backend (`chatterbox` on CUDA)
+the full cloner runs and auto-transcribes the reference text; on a preset-only backend
 the sample is still recorded so it appears in `GET /voices` with `available=false` (the catalog
 already gates that). The clones land in the shared `ClonesStore`, so a multi-user deployment
 shows them to every user.

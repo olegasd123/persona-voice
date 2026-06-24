@@ -2,7 +2,7 @@
 #
 # Each maps to a backend-native preset when the active backend offers presets. Kokoro presets
 # (af_*/am_* - female/male) keep the four personas distinct on the Mac. Clone-only backends
-# (Chatterbox/F5) have no preset and fall back to their default voice until a clone is assigned,
+# like Chatterbox have no preset and fall back to their default voice until a clone is assigned,
 # which then uses the `sample` field (a ~10 s wav) added here per voice.
 #
 # Personas reference these as `voices/<id>`; the `voices/` prefix is stripped on lookup.

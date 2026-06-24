@@ -2,7 +2,7 @@
 
 A voice fine-tune learns one speaker from a small set of **(clip, transcript)** pairs. The
 shared, human-readable manifest is a `metadata.csv` of pipe-separated `audio_path|text` lines
-(the LJSpeech / F5-TTS `prepare_csv_wavs` shape), which both trainer engines consume.
+(the `audio_file|text` metadata shape), which the trainer consumes.
 
 Everything here is pure and unit-tested except `transcribe_clips`, which — like curation's
 self-chat — takes an injected STT adapter to auto-fill missing transcripts. Reading and

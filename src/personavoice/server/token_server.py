@@ -467,7 +467,7 @@ class TokenService:
         if not self._supports_cloning or self._cloner_factory is None:
             raise BadRequest(
                 f"the active TTS backend {self._tts_name or '(unknown)'!r} can't clone voices; "
-                "switch to a cloning backend (f5_mlx on Mac, chatterbox on CUDA)"
+                "switch to a cloning backend (chatterbox on CUDA)"
             )
         if not authorized:
             raise BadRequest(

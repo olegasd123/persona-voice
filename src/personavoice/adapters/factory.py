@@ -21,7 +21,6 @@ from .stt.parakeet import ParakeetSTT
 from .stt.whisper_mlx import WhisperMLXSTT
 from .tts.base import TTSAdapter
 from .tts.chatterbox import ChatterboxTTS
-from .tts.f5_mlx import F5MLXTTS
 from .tts.kokoro import KokoroTTS
 
 STT_ADAPTERS: dict[str, type[STTAdapter]] = {
@@ -30,9 +29,7 @@ STT_ADAPTERS: dict[str, type[STTAdapter]] = {
 LLM_ADAPTERS: dict[str, type[LLMAdapter]] = {
     cls.name: cls for cls in (LMStudioLLM, OllamaLLM, VLLMAdapter, MLXLMAdapter)
 }
-TTS_ADAPTERS: dict[str, type[TTSAdapter]] = {
-    cls.name: cls for cls in (KokoroTTS, F5MLXTTS, ChatterboxTTS)
-}
+TTS_ADAPTERS: dict[str, type[TTSAdapter]] = {cls.name: cls for cls in (KokoroTTS, ChatterboxTTS)}
 
 
 @dataclass

@@ -1,13 +1,13 @@
 """`personavoice-voice-train`: build a dataset, fine-tune, A/B, and register a voice.
 
     personavoice-voice-train dataset  --voice my_voice --audio-dir clips/        # build metadata.csv
-    personavoice-voice-train run      --voice my_voice --engine f5 [--dry-run]   # fine-tune (CUDA)
+    personavoice-voice-train run      --voice my_voice [--dry-run]              # fine-tune (CUDA)
     personavoice-voice-train eval     --voice my_voice --clone my_clone --target-dir held_out/
     personavoice-voice-train register --voice my_voice --checkpoint ckpt/ --assign companion
     personavoice-voice-train list     [--unassign companion]
 
 `dataset` uses the configured backend's STT to auto-transcribe clips; `run` shells out to the
-engine's trainer (F5-TTS / Chatterbox) and is safe to preview with `--dry-run`; `eval` synthesizes
+Chatterbox trainer and is safe to preview with `--dry-run`; `eval` synthesizes
 probes with the fine-tuned voice and the zero-shot clone and scores speaker similarity to held-out
 target clips; `register` folds a trained checkpoint into the voice registry (it then takes
 precedence over a clone for the assigned persona). Data lands under `training/voice/datasets/<voice>/`,
@@ -129,9 +129,7 @@ def _train_config(settings: Settings, args: argparse.Namespace) -> VoiceTrainCon
 
 def _run_finetune(settings: Settings, args: argparse.Namespace) -> int:
     cfg = _train_config(settings, args)
-    plan = run_finetune(cfg, dry_run=args.dry_run, skip_prepare=args.skip_prepare)
-    if plan.prepare_command:
-        print(f"prepare: {' '.join(plan.prepare_command)}")
+    plan = run_finetune(cfg, dry_run=args.dry_run)
     print(f"command: {' '.join(plan.command)}")
     if plan.config_filename:
         print(f"trainer config: {plan.config_filename}")
@@ -186,7 +184,7 @@ async def _eval(settings: Settings, args: argparse.Namespace) -> int:
     if not getattr(backend.tts, "supports_cloning", False):
         print(
             f"the active TTS backend {backend.tts.name!r} can't load fine-tuned/cloned voices; "
-            "switch to a cloning backend (f5_mlx on Mac, chatterbox on CUDA)",
+            "switch to a cloning backend (chatterbox on CUDA)",
             file=sys.stderr,
         )
         return 2
@@ -320,14 +318,13 @@ def _build_parser() -> argparse.ArgumentParser:
         "--min-seconds", type=float, default=120.0, help="min total audio (with --probe-durations)"
     )
 
-    r = sub.add_parser("run", help="run the voice trainer (f5-tts / chatterbox; CUDA)")
+    r = sub.add_parser("run", help="run the voice trainer (chatterbox; CUDA)")
     r.add_argument("--voice", required=True)
-    r.add_argument("--engine", choices=("f5", "chatterbox"), default="f5")
+    r.add_argument("--engine", choices=("chatterbox",), default="chatterbox")
     r.add_argument("--config", default=None, help="a training/voice/configs/*.yaml")
     r.add_argument("--data-dir", default=None)
     r.add_argument("--output", default=None, help="checkpoint output dir")
     r.add_argument("--base-model", default=None, help="override the base model / exp_name")
-    r.add_argument("--skip-prepare", action="store_true", help="skip the dataset-prep step")
     r.add_argument(
         "--dry-run", action="store_true", help="write config + print commands, don't launch"
     )
@@ -350,7 +347,7 @@ def _build_parser() -> argparse.ArgumentParser:
     rg.add_argument(
         "--checkpoint", default=None, help="checkpoint dir (default <models>/finetuned/<voice>)"
     )
-    rg.add_argument("--engine", choices=("f5", "chatterbox"), default="f5")
+    rg.add_argument("--engine", choices=("chatterbox",), default="chatterbox")
     rg.add_argument("--base-model", default=None)
     rg.add_argument("--speaker", default=None, help="target speaker label (provenance)")
     rg.add_argument("--output", default=None, help="checkpoint output dir (for the default path)")

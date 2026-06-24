@@ -60,7 +60,7 @@ def test_resolve_sets_emotion_and_backend(config_dir: Path) -> None:
 
 
 def test_backend_without_a_preset_passes_the_ref_through() -> None:
-    # Chatterbox/F5 are clone-only: no preset entry, so the raw ref is returned and the
+    # Chatterbox is clone-only: no preset entry, so the raw ref is returned and the
     # adapter falls back to its default (until a clone uses `sample`).
     reg = VoiceRegistry(
         {"hr_warm": VoiceDef(emotion="warm", presets={"kokoro": "af_sarah"}, sample="s.wav")}
@@ -140,11 +140,11 @@ def test_catalog_order_and_availability_non_cloning(tmp_path: Path) -> None:
 
 def test_catalog_availability_cloning_backend(tmp_path: Path) -> None:
     reg = _registry_with_stores(tmp_path)
-    catalog = reg.catalog("f5_mlx", supports_cloning=True)
+    catalog = reg.catalog("chatterbox", supports_cloning=True)
     by_id = {o.id: o for o in catalog}
     assert by_id["my_clone"].available is True and by_id["my_clone"].reason is None
     assert by_id["my_ft"].available is True
-    # F5 has no preset mapping, so the unmapped preset is omitted entirely (not greyed-out).
+    # Chatterbox has no preset mapping, so the unmapped preset is omitted entirely.
     assert "companion_soft" not in by_id
 
 
@@ -152,7 +152,7 @@ def test_catalog_marks_only_unprotected_clones_removable(tmp_path: Path) -> None
     reg = _registry_with_stores(tmp_path)
     reg.clones.record(ClonedVoice(name="Feminine", sample_path="f.wav"))  # a bundled seed voice
     by_id = {
-        o.id: o for o in reg.catalog("f5_mlx", supports_cloning=True, protected={"Feminine"})
+        o.id: o for o in reg.catalog("chatterbox", supports_cloning=True, protected={"Feminine"})
     }
     # A user clone is removable; the protected "inbox" voice and the fine-tune are not.
     assert by_id["my_clone"].removable is True
@@ -162,13 +162,15 @@ def test_catalog_marks_only_unprotected_clones_removable(tmp_path: Path) -> None
 
 def test_resolve_choice_precedence_finetuned_over_clone(tmp_path: Path) -> None:
     reg = _registry_with_stores(tmp_path)
-    ref = reg.resolve_choice("my_ft", "f5_mlx", supports_cloning=True)
+    ref = reg.resolve_choice("my_ft", "chatterbox", supports_cloning=True)
     assert ref is not None and ref.model_path == "ckpt"
 
 
 def test_resolve_choice_clone_on_cloning_backend(tmp_path: Path) -> None:
     reg = _registry_with_stores(tmp_path)
-    ref = reg.resolve_choice("my_clone", "f5_mlx", supports_cloning=True, default_emotion="warm")
+    ref = reg.resolve_choice(
+        "my_clone", "chatterbox", supports_cloning=True, default_emotion="warm"
+    )
     assert ref is not None
     assert ref.sample_path == "s.wav"
     assert ref.emotion == "warm"
@@ -188,8 +190,8 @@ def test_resolve_choice_preset(tmp_path: Path) -> None:
 
 def test_resolve_choice_preset_without_mapping_is_none(tmp_path: Path) -> None:
     reg = _registry_with_stores(tmp_path)
-    # Known preset, but no mapping for f5_mlx -> not speakable as that choice -> None.
-    assert reg.resolve_choice("companion_soft", "f5_mlx", supports_cloning=True) is None
+    # Known preset, but no mapping for chatterbox -> not speakable as that choice -> None.
+    assert reg.resolve_choice("companion_soft", "chatterbox", supports_cloning=True) is None
 
 
 def test_resolve_choice_unknown_is_none(tmp_path: Path) -> None:
@@ -202,7 +204,7 @@ def test_choice_ids_spans_all_kinds(tmp_path: Path) -> None:
     assert reg.choice_ids() == ["companion_soft", "my_clone", "my_ft"]
 
 
-# --- fine-tune engine gating (an F5 checkpoint can't load on a Chatterbox backend) -----
+# --- fine-tune engine gating ---------------------------------------------------------
 
 
 def _ft_registry(tmp_path: Path, *, engine: str | None, name: str = "trained") -> VoiceRegistry:
@@ -213,12 +215,11 @@ def _ft_registry(tmp_path: Path, *, engine: str | None, name: str = "trained") -
 
 
 def test_catalog_marks_engine_mismatched_finetune_unavailable(tmp_path: Path) -> None:
-    # An F5 fine-tune on the Chatterbox backend: listed, but greyed-out with an engine reason
-    # (selecting it would crash the synth) — even though Chatterbox *is* a cloning backend.
-    reg = _ft_registry(tmp_path, engine="f5")
+    # A fine-tune from another engine is listed, but greyed-out with an engine reason.
+    reg = _ft_registry(tmp_path, engine="other")
     opt = {o.id: o for o in reg.catalog("chatterbox", supports_cloning=True)}["trained"]
     assert opt.available is False
-    assert opt.reason and "f5" in opt.reason
+    assert opt.reason and "other" in opt.reason
 
 
 def test_catalog_lists_matching_engine_finetune_available(tmp_path: Path) -> None:
@@ -235,25 +236,22 @@ def test_catalog_legacy_finetune_without_engine_stays_available(tmp_path: Path) 
 
 
 def test_resolve_choice_engine_mismatched_finetune_is_none(tmp_path: Path) -> None:
-    reg = _ft_registry(tmp_path, engine="f5")
+    reg = _ft_registry(tmp_path, engine="other")
     # Mismatched engine -> not speakable here -> None (caller falls back to the persona default).
     assert reg.resolve_choice("trained", "chatterbox", supports_cloning=True) is None
-    # The same voice resolves on its own engine's backend.
-    ref = reg.resolve_choice("trained", "f5_mlx", supports_cloning=True)
-    assert ref is not None and ref.model_path == "ckpt"
 
 
 def test_resolve_for_persona_skips_engine_mismatched_finetune(tmp_path: Path) -> None:
     from .fakes import make_persona
 
     finetuned = FinetunedVoicesStore(tmp_path / "ft")
-    finetuned.record(FinetunedVoice(name="trained", checkpoint_path="ckpt", engine="f5"))
+    finetuned.record(FinetunedVoice(name="trained", checkpoint_path="ckpt", engine="other"))
     finetuned.assign("p", "trained")
     # The persona's ref maps to a chatterbox preset (with a sample) — what it falls back to.
     voices = {"test": VoiceDef(presets={"chatterbox": "cb_voice"}, sample="s.wav")}
     reg = VoiceRegistry(voices, finetuned=finetuned)
     ref = reg.resolve_for_persona(make_persona("p"), "chatterbox", supports_cloning=True)
-    # Not the F5 checkpoint — fell through to the chatterbox preset's sample.
+    # Not the mismatched checkpoint — fell through to the chatterbox preset's sample.
     assert ref.model_path is None
     assert ref.sample_path == "s.wav"
 

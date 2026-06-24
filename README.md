@@ -76,9 +76,9 @@ Five design ideas hold it together:
 |-------|-----------|-------------|-------------|
 | **STT** | `whisper_mlx` | `faster_whisper` / `parakeet` | ~2 GB |
 | **LLM** | `lmstudio` / `ollama` / `mlx_lm` | `vllm` | ~5–6 GB |
-| **TTS** | `kokoro` (fast, no clone) / `f5_mlx` (clone) | `chatterbox` (clone) | ~3–4 GB |
+| **TTS** | `kokoro` (fast, no clone) | `chatterbox` (clone) | ~3–4 GB |
 | **Glue** | LiveKit Agents | LiveKit Agents (identical) | — |
-| **Train** | `mlx-lm` LoRA | LLaMA-Factory QLoRA / F5-TTS | — |
+| **Train** | `mlx-lm` LoRA | LLaMA-Factory QLoRA / Chatterbox voice tuning | — |
 
 Select a backend with `BACKEND=mac|cuda`. Each backend's `config/backends/<backend>.yaml` names
 the adapter, the model, and the per-adapter options. Environment interpolation
@@ -308,7 +308,7 @@ pm_calm:
   presets: { kokoro: am_michael }
 ```
 
-A cloning backend (Chatterbox / F5) has no preset and falls back to its default voice, unless a
+A cloning backend like Chatterbox has no preset and falls back to its default voice, unless a
 **clone is assigned** to the persona (see below). `python -m personavoice.server --check` lists
 the loaded personas, voices, and clones, and warns if a persona will not sound distinct on the
 active backend.
@@ -336,14 +336,12 @@ is merged into the base model at train time).
 ### Voice cloning (zero-shot)
 
 Clone a voice from a short sample and make a persona speak in it. Cloning needs a cloning TTS
-backend — `f5_mlx` on Mac or `chatterbox` on CUDA (Kokoro is preset-only):
+backend — `chatterbox` on CUDA (Kokoro is preset-only):
 
 ```bash
-# Install a cloning backend (one-time):
-pip install -e '.[clone-mac]'        # F5-TTS-mlx (Apple Silicon; CC-BY-NC weights)
-#   ...or, cross-platform / CUDA:  pip install -e '.[clone]'   # Chatterbox (MIT)
-# Then set the TTS adapter to the cloning backend in config/backends/<backend>.yaml
-# (mac: adapter: f5_mlx;  cuda: adapter: chatterbox).
+# Install the cloning backend (one-time):
+pip install -e '.[clone]'            # Chatterbox
+# Then set the CUDA TTS adapter to chatterbox in config/backends/cuda.yaml.
 
 # Clone from a wav (or --record 10 from the mic) and assign it to a persona:
 personavoice-clone --sample me.wav --name my_voice --assign companion
@@ -353,8 +351,8 @@ personavoice-clone --list             # cloned voices + their assignments
 personavoice-clone --unassign companion
 ```
 
-A clone is a stored reference sample plus, for reference-text models (F5), its transcript
-(auto-filled by the cascade's STT). It lands under the clones directory
+A clone is a stored reference sample plus its transcript (auto-filled by the cascade's STT).
+It lands under the clones directory
 (`PERSONAVOICE_CLONES_DIR`, default `<models>/clones`) with a `clones.json` manifest, so it
 **survives restarts** and the live agent picks it up at startup. Assigning a clone is
 non-destructive: it overlays the voice registry at resolve time and is only honored on a backend
@@ -366,8 +364,8 @@ flag per the active backend, `POST /voices/clone` enrolls one from an uploaded w
 `authorized=1`, since cloning a real person's voice is sensitive), and `DELETE /voices/clone/{name}`
 removes it. A picked voice is then chosen per session via the **voice** session option above.
 Because clones/fine-tunes are only **audible on a cloning backend**, the catalog still lists them
-on Kokoro but marks them `available:false` with a reason — a "bring your own voice"
-session should run `f5_mlx`/`chatterbox`.
+on Kokoro but marks them `available:false` with a reason. A "bring your own voice" session
+should run `chatterbox`.
 
 **Bundled voices.** The picker isn't empty on first run: `assets/seed_voices/` ships
 `Feminine.wav` + `Masculine.wav`, wired as **presets** in `config/voices.yaml` (their `sample`
@@ -380,10 +378,6 @@ To enroll **your own** wavs as clones, `personavoice-seed-voices`
 after its file stem. It goes through the same path a client upload uses and is **idempotent**
 (already-present clones are skipped; `--force` re-enrolls). On a preset-only backend the seeds
 still enroll but list `available:false`.
-
-> **Licensing:** F5's default checkpoint has **CC-BY-NC** weights (non-commercial) — fine for Mac
-> dev. For anything you redistribute, clone with **Chatterbox** (MIT) on CUDA. See
-> **Models and licenses**.
 
 ### Persona fine-tuning (LoRA)
 
@@ -464,9 +458,9 @@ pip install -e '.[voice-eval]'        # speaker-similarity A/B (Resemblyzer)
 # 1. Build the target-speaker dataset (metadata.csv of audio|text; auto-transcribe with the STT).
 personavoice-voice-train dataset --voice my_voice --audio-dir clips/ --probe-durations
 
-# 2. Fine-tune (F5-TTS by default; Chatterbox for the MIT path). Preview, then launch on the GPU.
-personavoice-voice-train run --voice my_voice --engine f5 --dry-run
-personavoice-voice-train run --voice my_voice --engine f5 --config training/voice/configs/my_voice.f5.yaml
+# 2. Fine-tune with Chatterbox. Preview, then launch on the GPU.
+personavoice-voice-train run --voice my_voice --dry-run
+personavoice-voice-train run --voice my_voice --config training/voice/configs/my_voice.chatterbox.yaml
 
 # 3. A/B vs the zero-shot clone — speaker similarity to held-out real target clips.
 personavoice-voice-train eval --voice my_voice --clone my_clone --target-dir held_out/ --margin 0.02 --register
@@ -478,13 +472,11 @@ personavoice-voice-train list
 
 A fine-tuned voice lands under `<models>/finetuned` with a `finetuned.json` manifest. Once
 assigned, it takes precedence in the registry — **fine-tuned ▶ clone ▶ preset** — and the cloning
-adapters (Chatterbox / F5) load the trained checkpoint via `VoiceRef.model_path`. For the
-engines, the dataset format, the verified F5 runner, and the licensing trade-off, see
+adapter loads the trained checkpoint via `VoiceRef.model_path`. For the dataset format and
+trainer config, see
 [training/voice/README.md](training/voice/README.md).
 
-> **Licensing:** a voice fine-tuned with F5 inherits **CC-BY-NC** weights — fine for dev /
-> personal personas, not commercial redistribution. Fine-tune **Chatterbox** (MIT) for anything
-> you ship, and only fine-tune voices you are authorized to use. See **Models and licenses**.
+Only fine-tune voices you are authorized to use.
 
 ### Run on CUDA (production)
 
@@ -600,13 +592,7 @@ tests/
 | LLM | LM Studio / Ollama (any loaded model) | `Qwen/Qwen2.5-7B-Instruct` (vLLM) | model-dependent |
 | TTS | `hexgrad/Kokoro-82M` | `ResembleAI/chatterbox` | MIT |
 
-Licenses were verified against each model card (2026-06). One caveat affects redistribution and
-commercial use:
-
-- **F5-TTS** weights (the Mac cloning option and the default fine-tune engine) are **CC-BY-NC**
-  (non-commercial) because of the Emilia training set, even though the F5 *code* is MIT. So a
-  voice **fine-tuned** with F5 inherits CC-BY-NC too. For commercial cloning or fine-tuning, use
-  **Chatterbox** (MIT) on CUDA, or an Apache-licensed OpenF5 checkpoint.
+Licenses were verified against each model card (2026-06).
 
 > Licenses drift — **re-verify before any redistribution.**
 

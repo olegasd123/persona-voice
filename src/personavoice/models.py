@@ -55,7 +55,7 @@ class VoiceRef(BaseModel):
     sample_path: str | None = None
     # Cached speaker embedding / conditioning produced by `clone_voice`.
     embedding_path: str | None = None
-    # Transcript of `sample_path`, for reference-text cloning backends (e.g. F5).
+    # Transcript of `sample_path`, when a cloning backend needs one.
     ref_text: str | None = None
     emotion: str | None = None
     # Backend that produced/owns this voice (e.g. "kokoro", "chatterbox").
@@ -70,8 +70,8 @@ class VoiceDef(BaseModel):
 
     A *logical* voice (e.g. `companion_soft`) that personas reference, mapped to a
     backend-native preset per TTS adapter so the personas sound distinct on each backend.
-    `sample` is a clone source used by cloning-capable backends (Chatterbox/F5); until
-    then a backend with no `presets` entry falls back to its own default voice.
+    `sample` is a clone source used by cloning-capable backends; until then a backend with
+    no `presets` entry falls back to its own default voice.
     """
 
     model_config = ConfigDict(extra="forbid")

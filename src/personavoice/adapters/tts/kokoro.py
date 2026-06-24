@@ -3,7 +3,7 @@
 Implements one-shot `synthesize` (text → WAV bytes) for the file-based pipeline.
 Streaming (`stream_tts`) is handled by the live agent. Kokoro has no zero-shot cloning, so personas whose
 voice ref points at a clone (`voices/...`) fall back to the configured preset until the
-cloning backend (f5_mlx / Chatterbox) is wired up separately.
+cloning backend is wired up separately.
 
 `kokoro` is imported lazily and the pipeline is built once per adapter and cached.
 """

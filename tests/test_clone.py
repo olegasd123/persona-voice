@@ -9,8 +9,6 @@ import pytest
 
 from personavoice.adapters.factory import Backend
 from personavoice.adapters.tts.base import TTSAdapter
-from personavoice.adapters.tts.f5_mlx import _f5_kwargs
-from personavoice.models import VoiceRef
 from personavoice.persona import load_personas
 from personavoice.voice import (
     ClonedVoice,
@@ -63,7 +61,7 @@ def test_trim_wav_caps_length_and_passes_through() -> None:
 
 
 def test_trim_wav_ends_on_silence() -> None:
-    """The trimmed reference ends in a silent pause (the fix for F5's per-sentence transient)."""
+    """The trimmed reference ends in a silent pause."""
     np = pytest.importorskip("numpy")
     pytest.importorskip("soundfile")
     from personavoice.audio import decode_wav
@@ -163,7 +161,7 @@ def test_store_corrupt_manifest_raises(tmp_path: Path) -> None:
 
 
 # --------------------------------------------------------------------------------------
-# TTSAdapter.clone_voice (base) + F5 kwargs
+# TTSAdapter.clone_voice (base)
 # --------------------------------------------------------------------------------------
 
 
@@ -184,56 +182,6 @@ async def test_base_clone_voice_rejected_when_not_supported() -> None:
 
     with pytest.raises(NotImplementedError, match="does not support voice cloning"):
         await NoClone().clone_voice(b"x", "v")
-
-
-def test_f5_kwargs_with_and_without_sample() -> None:
-    # No sample → F5's built-in default voice; with no explicit duration we fall back to f5's
-    # own text-length heuristic so the clip isn't truncated.
-    bare = _f5_kwargs("hi", VoiceRef(id="x"), model="m")
-    assert bare == {"generation_text": "hi", "model_name": "m", "estimate_duration": True}
-
-    cloned = _f5_kwargs("hi", VoiceRef(id="v", sample_path="/s/v.wav", ref_text="ref"), model="m")
-    assert cloned["ref_audio_path"] == "/s/v.wav"
-    assert cloned["ref_audio_text"] == "ref"  # f5_tts_mlx names it ref_audio_text
-
-    # An explicit duration forces f5's single-generation path (no heuristic flag).
-    sized = _f5_kwargs("hi", VoiceRef(id="v"), model="m", duration=7.5)
-    assert sized["duration"] == 7.5 and "estimate_duration" not in sized
-
-
-def test_estimate_total_seconds_scales_with_text() -> None:
-    from personavoice.adapters.tts.f5_mlx import _estimate_total_seconds
-
-    # 4 s reference for an 8-byte transcript → 0.5 s/byte; an 8-byte generation adds ~4 s on top
-    # of the trimmed-off reference, for ~8 s total.
-    total = _estimate_total_seconds(4.0, "12345678", "abcdefgh", speed=1.0)
-    assert total == pytest.approx(8.0)
-    # Faster speed → shorter generated portion.
-    assert _estimate_total_seconds(4.0, "12345678", "abcdefgh", speed=2.0) == pytest.approx(6.0)
-
-
-def test_f5_ref_at_24k_resamples_when_needed(tmp_path: Path) -> None:
-    np = pytest.importorskip("numpy")
-    pytest.importorskip("soundfile")
-    from personavoice.adapters.tts.f5_mlx import _F5_REF_RATE, F5MLXTTS
-    from personavoice.audio import decode_wav, encode_wav
-
-    adapter = F5MLXTTS()
-    # 44.1 kHz reference → resampled to a 24 kHz temp file f5 will accept (1 s clip → ~1 s).
-    ref = tmp_path / "ref.wav"
-    ref.write_bytes(encode_wav(np.zeros(44100, dtype=np.float32), 44100))
-    out, tmp, seconds = adapter._ref_at_24k(str(ref))
-    assert tmp is not None and out == tmp
-    assert seconds == pytest.approx(1.0, abs=0.01)
-    _, sr = decode_wav(Path(out).read_bytes())
-    assert sr == _F5_REF_RATE
-
-    # Already 24 kHz → passed through unchanged (no temp file to clean up), duration reported.
-    ref24 = tmp_path / "ref24.wav"
-    ref24.write_bytes(encode_wav(np.zeros(48000, dtype=np.float32), 24000))
-    assert adapter._ref_at_24k(str(ref24)) == (str(ref24), None, 2.0)
-    # No sample → nothing to do.
-    assert adapter._ref_at_24k(None) == (None, None, None)
 
 
 # --------------------------------------------------------------------------------------
