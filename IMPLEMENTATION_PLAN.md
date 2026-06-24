@@ -490,7 +490,7 @@ Notes / constraints:
 ### 3.4 Capability truth to surface
 
 Clones/fine-tunes are only **audible on a cloning backend** (`f5_mlx` on Mac, `chatterbox` on
-CUDA). On Kokoro/Orpheus the catalog still lists them but with `available=false` + `reason`. The
+CUDA). On Kokoro the catalog still lists them but with `available=false` + `reason`. The
 product implication: a "bring your own voice" session should run a cloning backend. Document this
 in the README voice section and have `--check` already-style warnings extend to "N clones present
 but active TTS cannot speak them."
@@ -610,7 +610,7 @@ Eval scores the *system*; nothing scores the *user*. For `pm_interviewer` / `hr_
 ### 7.1 Motivation
 
 Emotion is **static** today — resolved once from the voice registry (`registry.py` `resolve`,
-`VoiceSettings.emotion` default `"neutral"`). Orpheus has emotion tags and Chatterbox has
+`VoiceSettings.emotion` default `"neutral"`). Chatterbox has
 exaggeration control that go unused per-utterance.
 
 ### 7.2 Design
@@ -618,7 +618,7 @@ exaggeration control that go unused per-utterance.
 - Let the LLM emit a lightweight per-reply emotion hint (a leading tag stripped before TTS, or a
   structured side-channel), or infer it cheaply from the reply.
 - Thread it into `VoiceRef.emotion` at synth time (the field already exists) so
-  `tts/orpheus.py` / `tts/chatterbox.py` render it; Kokoro ignores it gracefully.
+  `tts/chatterbox.py` renders it; Kokoro ignores it gracefully.
 
 ### 7.3 Files / tests
 

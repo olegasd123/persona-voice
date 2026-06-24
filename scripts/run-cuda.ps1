@@ -110,7 +110,7 @@ $env:PERSONAVOICE_LLM_MODEL = $VllmModel
 $env:PERSONAVOICE_LLM_BASE_URL = 'http://localhost:8000/v1'
 $env:PERSONAVOICE_STT_DEVICE = 'cuda'
 $env:PERSONAVOICE_STT_COMPUTE = 'float16'
-$env:PERSONAVOICE_TTS_ADAPTER = 'chatterbox'   # Windows-native; Orpheus needs its own in-process vLLM
+$env:PERSONAVOICE_TTS_ADAPTER = 'chatterbox'
 $env:PERSONAVOICE_TTS_DEVICE = 'cuda'
 
 # --- preflight (cheap checks only; the one-time work lives in setup-cuda.ps1) ---------------

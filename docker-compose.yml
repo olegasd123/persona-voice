@@ -9,9 +9,7 @@
 #   TTS    Chatterbox (torch)                          : ~2-3 GB
 #                                                  total ≈ 10-12 GB, with headroom.
 #
-# Orpheus TTS runs its OWN in-process vLLM (+~6 GB) and is too tight alongside the LLM vLLM
-# on a single 4080 — prefer Chatterbox here (set `adapter: chatterbox` in
-# config/backends/cuda.yaml), or give Orpheus a second GPU.
+# Chatterbox is the CUDA TTS backend for this stack.
 
 # `name:` pins the Compose project so Docker Desktop's Containers view always groups this
 # stack under "persona-voice" (independent of the directory name).

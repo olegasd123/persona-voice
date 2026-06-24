@@ -1,6 +1,6 @@
 """Chatterbox TTS (CUDA; MPS on Mac) — emotion-exaggeration control, zero-shot cloning.
 
-The clean-license (MIT) alternative to Orpheus, and the genuine cloning backend on CUDA.
+The clean-license (MIT) cloning backend on CUDA.
 Implements one-shot `synthesize` (text -> WAV bytes); `model.generate(text)` returns a
 float waveform tensor at the model's native sample rate (`model.sr`, 24 kHz). Cloning adds
 zero-shot cloning: when the voice carries a reference sample, we pass it as

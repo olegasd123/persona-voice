@@ -36,11 +36,10 @@ def test_shipped_registry_covers_every_persona_voice(config_dir: Path) -> None:
         assert persona.voice.ref in voices, f"{persona.id} voice unregistered"
 
 
-@pytest.mark.parametrize("tts", ["kokoro", "orpheus"])
-def test_personas_resolve_to_distinct_presets(config_dir: Path, tts: str) -> None:
+def test_personas_resolve_to_distinct_kokoro_presets(config_dir: Path) -> None:
     voices = _registry(config_dir)
-    presets = [voices.resolve(ref, tts).id for ref in PERSONA_REFS.values()]
-    # The whole point: each persona gets its own concrete preset on each backend.
+    presets = [voices.resolve(ref, "kokoro").id for ref in PERSONA_REFS.values()]
+    # The whole point: each persona gets its own concrete preset on preset-capable backends.
     assert len(set(presets)) == len(presets)
     assert all("/" not in p for p in presets)  # concrete preset, not a clone-style ref
 

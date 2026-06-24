@@ -3,7 +3,7 @@
 A persona declares a *logical* voice (`voice.ref: voices/companion_soft`). The registry
 (`config/voices.yaml`) maps that logical voice to a backend-native preset per TTS adapter,
 so the four personas sound **distinct** on whichever backend is active — `af_heart` vs
-`am_michael` on Kokoro (Mac), `tara` vs `leo` on Orpheus (CUDA). Clone-only backends
+`am_michael` on Kokoro (Mac). Clone-only backends
 (Chatterbox/F5) have no preset; they fall back to their own default voice until zero-shot
 cloning is wired up separately, at which point the `sample` field feeds the clone.
 

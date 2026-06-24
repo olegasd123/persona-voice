@@ -18,7 +18,7 @@ def _backend_config(backend: str) -> BackendConfig:
         backend=backend,
         stt=StageConfig(adapter="whisper_mlx" if backend == "mac" else "faster_whisper"),
         llm=StageConfig(adapter="ollama" if backend == "mac" else "vllm"),
-        tts=StageConfig(adapter="kokoro" if backend == "mac" else "orpheus"),
+        tts=StageConfig(adapter="kokoro" if backend == "mac" else "chatterbox"),
     )
 
 

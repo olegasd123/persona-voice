@@ -23,7 +23,6 @@ from .tts.base import TTSAdapter
 from .tts.chatterbox import ChatterboxTTS
 from .tts.f5_mlx import F5MLXTTS
 from .tts.kokoro import KokoroTTS
-from .tts.orpheus import OrpheusTTS
 
 STT_ADAPTERS: dict[str, type[STTAdapter]] = {
     cls.name: cls for cls in (WhisperMLXSTT, FasterWhisperSTT, ParakeetSTT)
@@ -32,7 +31,7 @@ LLM_ADAPTERS: dict[str, type[LLMAdapter]] = {
     cls.name: cls for cls in (LMStudioLLM, OllamaLLM, VLLMAdapter, MLXLMAdapter)
 }
 TTS_ADAPTERS: dict[str, type[TTSAdapter]] = {
-    cls.name: cls for cls in (KokoroTTS, F5MLXTTS, OrpheusTTS, ChatterboxTTS)
+    cls.name: cls for cls in (KokoroTTS, F5MLXTTS, ChatterboxTTS)
 }
 
 

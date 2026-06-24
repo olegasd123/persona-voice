@@ -126,7 +126,7 @@ def run_check(settings: Settings) -> CheckReport:
     report.warnings.extend(_validate_personas(personas, backend, voices))
 
     # Clones/fine-tunes exist but the active TTS can't speak them (e.g. enrolled a voice, then
-    # ran Kokoro/Orpheus): the catalog lists them as unavailable and a session voice override
+    # ran Kokoro): the catalog lists them as unavailable and a session voice override
     # would silently fall back. Flag it so the misconfig is visible.
     if not getattr(backend.tts, "supports_cloning", False) and (report.clones or report.finetuned):
         n = len(report.clones) + len(report.finetuned)

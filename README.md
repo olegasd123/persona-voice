@@ -76,7 +76,7 @@ Five design ideas hold it together:
 |-------|-----------|-------------|-------------|
 | **STT** | `whisper_mlx` | `faster_whisper` / `parakeet` | ~2 GB |
 | **LLM** | `lmstudio` / `ollama` / `mlx_lm` | `vllm` | ~5–6 GB |
-| **TTS** | `kokoro` (fast, no clone) / `f5_mlx` (clone) | `orpheus` (presets) / `chatterbox` (clone) | ~3–4 GB |
+| **TTS** | `kokoro` (fast, no clone) / `f5_mlx` (clone) | `chatterbox` (clone) | ~3–4 GB |
 | **Glue** | LiveKit Agents | LiveKit Agents (identical) | — |
 | **Train** | `mlx-lm` LoRA | LLaMA-Factory QLoRA / F5-TTS | — |
 
@@ -303,9 +303,9 @@ sound distinct on whichever backend is active:
 # config/voices.yaml
 companion_soft:
   emotion: warm
-  presets: { kokoro: af_heart, orpheus: tara }   # Mac / CUDA
+  presets: { kokoro: af_heart }   # Mac preset
 pm_calm:
-  presets: { kokoro: am_michael, orpheus: leo }
+  presets: { kokoro: am_michael }
 ```
 
 A cloning backend (Chatterbox / F5) has no preset and falls back to its default voice, unless a
@@ -336,7 +336,7 @@ is merged into the base model at train time).
 ### Voice cloning (zero-shot)
 
 Clone a voice from a short sample and make a persona speak in it. Cloning needs a cloning TTS
-backend — `f5_mlx` on Mac or `chatterbox` on CUDA (Kokoro and Orpheus are preset-only):
+backend — `f5_mlx` on Mac or `chatterbox` on CUDA (Kokoro is preset-only):
 
 ```bash
 # Install a cloning backend (one-time):
@@ -358,7 +358,7 @@ A clone is a stored reference sample plus, for reference-text models (F5), its t
 (`PERSONAVOICE_CLONES_DIR`, default `<models>/clones`) with a `clones.json` manifest, so it
 **survives restarts** and the live agent picks it up at startup. Assigning a clone is
 non-destructive: it overlays the voice registry at resolve time and is only honored on a backend
-that can clone. Switching back to Kokoro/Orpheus simply restores the persona's preset voice.
+that can clone. Switching back to Kokoro simply restores the persona's preset voice.
 
 **Enroll from a client.** Besides the CLI, the token server exposes the library over HTTP:
 `GET /voices` lists every selectable voice (presets + clones + fine-tunes) with an `available`
@@ -366,7 +366,7 @@ flag per the active backend, `POST /voices/clone` enrolls one from an uploaded w
 `authorized=1`, since cloning a real person's voice is sensitive), and `DELETE /voices/clone/{name}`
 removes it. A picked voice is then chosen per session via the **voice** session option above.
 Because clones/fine-tunes are only **audible on a cloning backend**, the catalog still lists them
-on Kokoro/Orpheus but marks them `available:false` with a reason — a "bring your own voice"
+on Kokoro but marks them `available:false` with a reason — a "bring your own voice"
 session should run `f5_mlx`/`chatterbox`.
 
 **Seed voices.** Ship the library non-empty so the picker has something to choose on first run:
@@ -484,7 +484,7 @@ engines, the dataset format, the verified F5 runner, and the licensing trade-off
 ### Run on CUDA (production)
 
 The `cuda` backend mirrors the Mac cascade: `faster_whisper`/`parakeet` (STT), `vllm` (LLM),
-`orpheus`/`chatterbox` (TTS). The LLM is served by a separate **vLLM** process so the app image
+`chatterbox` (TTS). The LLM is served by a separate **vLLM** process so the app image
 stays light; the STT and TTS models run in the persona-voice container.
 
 ```bash
@@ -496,9 +496,7 @@ docker compose up --build
 
 Both services share one GPU. The compose file documents the VRAM budget (about 10–12 GB: vLLM
 4-bit ~6–7 GB + STT ~2 GB + Chatterbox ~2–3 GB, within 16 GB) and caps vLLM's
-`--gpu-memory-utilization` so STT/TTS fit. Orpheus is more expressive but runs its own in-process
-vLLM (tight on one card) — prefer **Chatterbox** (MIT) for the single-GPU stack by setting
-`adapter: chatterbox` in `config/backends/cuda.yaml`.
+`--gpu-memory-utilization` so STT/TTS fit.
 
 Without Docker, run the pieces directly: `vllm serve Qwen/Qwen2.5-7B-Instruct-AWQ --quantization
 awq`, then `BACKEND=cuda personavoice-demo --wav question.wav` (needs the `cuda` extra plus
@@ -595,14 +593,11 @@ tests/
 |-------|-----|------|---------|
 | STT | `mlx-community/whisper-large-v3-turbo` | `Systran/faster-whisper-large-v3` | MIT |
 | LLM | LM Studio / Ollama (any loaded model) | `Qwen/Qwen2.5-7B-Instruct` (vLLM) | model-dependent |
-| TTS | `hexgrad/Kokoro-82M` | `canopylabs/orpheus-3b-0.1-ft` | Apache-2.0 (see caveats) |
+| TTS | `hexgrad/Kokoro-82M` | `ResembleAI/chatterbox` | MIT |
 
-Licenses were verified against each model card (2026-06). Two caveats affect redistribution and
+Licenses were verified against each model card (2026-06). One caveat affects redistribution and
 commercial use:
 
-- **Orpheus-3b-0.1-ft** is tagged Apache-2.0, but its weights are fine-tuned from
-  **Llama-3.2-3B**, so Meta's Llama 3.2 Community License also applies. **Chatterbox**
-  (`ResembleAI/chatterbox`, MIT) is the clean-license CUDA alternative.
 - **F5-TTS** weights (the Mac cloning option and the default fine-tune engine) are **CC-BY-NC**
   (non-commercial) because of the Emilia training set, even though the F5 *code* is MIT. So a
   voice **fine-tuned** with F5 inherits CC-BY-NC too. For commercial cloning or fine-tuning, use

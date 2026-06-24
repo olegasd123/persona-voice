@@ -58,7 +58,7 @@ class VoiceRef(BaseModel):
     # Transcript of `sample_path`, for reference-text cloning backends (e.g. F5).
     ref_text: str | None = None
     emotion: str | None = None
-    # Backend that produced/owns this voice (e.g. "kokoro", "orpheus").
+    # Backend that produced/owns this voice (e.g. "kokoro", "chatterbox").
     backend: str | None = None
     # Fine-tuned checkpoint a cloning backend should load instead of its base weights
     # (voice fine-tuning). None → use the backend's base model.
@@ -78,7 +78,7 @@ class VoiceDef(BaseModel):
 
     description: str = ""
     emotion: str | None = None
-    # tts adapter name ("kokoro" | "orpheus" | ...) -> that backend's preset id.
+    # tts adapter name ("kokoro" | "chatterbox" | ...) -> that backend's preset id.
     presets: dict[str, str] = Field(default_factory=dict)
     # Path to a ~10 s clone sample, resolved by cloning backends.
     sample: str | None = None

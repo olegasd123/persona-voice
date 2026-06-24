@@ -1,10 +1,9 @@
-# Voice registry — the logical voices personas reference (config/personas/*.yaml: voice.ref).
+# Voice registry - the logical voices personas reference (config/personas/*.yaml: voice.ref).
 #
-# Each maps to a backend-native preset so the four personas sound DISTINCT on whichever
-# backend is active: Kokoro presets (af_*/am_* — female/male) on the Mac, Orpheus presets
-# (tara/leah/jess/leo/...) on the 4080. Clone-only backends (Chatterbox/F5) have no preset
-# and fall back to their default voice until a clone is assigned, which then uses the
-# `sample` field (a ~10 s wav) added here per voice.
+# Each maps to a backend-native preset when the active backend offers presets. Kokoro presets
+# (af_*/am_* - female/male) keep the four personas distinct on the Mac. Clone-only backends
+# (Chatterbox/F5) have no preset and fall back to their default voice until a clone is assigned,
+# which then uses the `sample` field (a ~10 s wav) added here per voice.
 #
 # Personas reference these as `voices/<id>`; the `voices/` prefix is stripped on lookup.
 
@@ -13,53 +12,21 @@ companion_soft:
   emotion: warm
   presets:
     kokoro: af_heart
-    orpheus: tara
 
 hr_warm:
   description: warm, professional, feminine
   emotion: neutral-warm
   presets:
     kokoro: af_sarah
-    orpheus: leah
 
 teacher_clear:
   description: clear, friendly, feminine
   emotion: friendly
   presets:
     kokoro: af_nicole
-    orpheus: jess
 
 pm_calm:
   description: calm, measured, masculine
   emotion: neutral
   presets:
     kokoro: am_michael
-    orpheus: leo
-
-# The remaining Orpheus presets (Orpheus ships 8: tara/leah/jess/leo above, plus these). They
-# have no Kokoro mapping, so on Mac (kokoro/f5_mlx) the catalog hides them; they're selectable
-# only on the CUDA/Orpheus backend. Add a `kokoro:` preset to any of these to surface it on the
-# Mac too.
-orpheus_dan:
-  description: warm, grounded, masculine
-  emotion: neutral-warm
-  presets:
-    orpheus: dan
-
-orpheus_mia:
-  description: bright, expressive, feminine
-  emotion: friendly
-  presets:
-    orpheus: mia
-
-orpheus_zac:
-  description: energetic, youthful, masculine
-  emotion: upbeat
-  presets:
-    orpheus: zac
-
-orpheus_zoe:
-  description: playful, light, feminine
-  emotion: warm
-  presets:
-    orpheus: zoe

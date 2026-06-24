@@ -58,7 +58,7 @@ from .turn import TurnController
 # (and type-checkable) without it.
 logger = logging.getLogger("personavoice.agent")
 
-# Output track format. 24 kHz mono matches Kokoro/Orpheus output and is a common WebRTC
+# Output track format. 24 kHz mono matches Kokoro/Chatterbox output and is a common WebRTC
 # rate; per-sentence TTS wavs are resampled to this before being captured as frames.
 _OUT_SAMPLE_RATE = 24000
 _FRAME_MS = 20  # frame size pushed to the AudioSource (WebRTC-typical)
