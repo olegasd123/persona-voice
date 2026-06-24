@@ -22,13 +22,15 @@ Endpoints (all JSON, permissive CORS so a browser client / Playground can call t
     DELETE /personas/{id}?user=   -> delete one of the user's own personas
     GET    /loras            -> {"loras": [LoraOption...], "llm", "supports_lora"}
     GET    /voices           -> {"voices": [VoiceOption...], "tts", "supports_cloning"}
-    POST   /token            -> mint a token; body: {"room"?, "identity"?, "persona"?,
+    POST   /token            -> mint a token; body: {"room"?, "identity"?, "name"?, "persona"?,
                                 "voice"?, "cefr"?, "demeanor"?, "user"?}
-    GET    /token?room=&identity=&persona=&voice=&cefr=&demeanor=&user=  (same, for manual testing)
+    GET    /token?room=&identity=&name=&persona=&voice=&cefr=&demeanor=&user=  (manual testing)
     POST   /voices/clone?name=&text=&authorized=  -> enroll a clone; raw wav as the body
     DELETE /voices/clone/{name}                   -> remove a cloned voice
 
-`/token` returns `{"url","token","room","identity","persona","voice","cefr","demeanor","user"}`.
+`identity` is the unique LiveKit participant id (`sub`); `name` is the cosmetic display name
+(falls back to `identity`). `/token` returns
+`{"url","token","room","identity","name","persona","voice","cefr","demeanor","user"}`.
 Persona and session-options selection on the live agent ride the existing data-message path:
 the client connects, then publishes a `{"persona": <id>, "voice": ..., "cefr": ...,
 "demeanor": ...}` data message which the agent's `on("data_received")` handler applies (see
@@ -351,6 +353,7 @@ class TokenService:
         *,
         room: str | None = None,
         identity: str | None = None,
+        name: str | None = None,
         persona: str | None = None,
         voice: str | None = None,
         cefr: str | None = None,
@@ -359,7 +362,11 @@ class TokenService:
     ) -> dict[str, Any]:
         """Mint a LiveKit token for a room, validating the persona and session options.
 
-        Missing `room`/`identity` are generated. A requested persona must exist (else
+        Missing `room`/`identity` are generated. `identity` is the LiveKit participant id
+        (`sub`) — it should be stable and unique; `name` is the human-facing display name (the
+        JWT `name` claim), which may change freely and need not be unique. They're separate so
+        renaming a participant doesn't change its identity; `name` falls back to `identity`
+        when omitted. A requested persona must exist (else
         `BadRequest`); none requested falls back to the default. A `user` scopes custom-persona
         resolution: it lets a caller request one of their *own* personas (curated win on clash)
         and is embedded in the token metadata so the agent resolves it at call time (and keys
@@ -375,6 +382,8 @@ class TokenService:
 
         room = (room or "").strip() or _new_room()
         identity = (identity or "").strip() or _new_identity()
+        # The display name (`name` claim) is cosmetic; fall back to the participant id.
+        display_name = (name or "").strip() or identity
 
         user = (user or "").strip()
         if user and not _USER_ID_RE.fullmatch(user):
@@ -406,7 +415,7 @@ class TokenService:
             api_secret=self._config.api_secret,
             identity=identity,
             room=room,
-            name=identity,
+            name=display_name,
             metadata=json.dumps(meta) if meta else None,
             ttl_seconds=self._config.token_ttl,
         )
@@ -415,6 +424,7 @@ class TokenService:
             "token": token,
             "room": room,
             "identity": identity,
+            "name": display_name,
             "persona": persona_id,
             "voice": options.voice,
             "cefr": options.cefr.value if options.cefr else None,
@@ -855,6 +865,7 @@ def _make_handler(
                     result = service.issue(
                         room=body.get("room") or query.get("room"),
                         identity=body.get("identity") or query.get("identity"),
+                        name=body.get("name") or query.get("name"),
                         persona=body.get("persona") or query.get("persona"),
                         voice=body.get("voice") or query.get("voice"),
                         cefr=body.get("cefr") or query.get("cefr"),

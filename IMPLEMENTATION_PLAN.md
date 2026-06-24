@@ -31,7 +31,7 @@ session-options behavior (voice override / CEFR / demeanor) or voice cloning is 
   persona cards (avatar, name, `description`, voice blurb, default / last-used tags, connecting
   spinner); last-used persona floats to the top; connection chip + pull-to-refresh.
 - **Settings screen** split out (`client/lib/screens/settings_screen.dart`): server URL, API token,
-  display name, test-connection, default mic mode, theme.
+  account id, display name, test-connection, default mic mode, theme.
 - **`AppPreferences`** model (`client/lib/models/app_preferences.dart`): default mic mode, theme,
   last-called persona — persisted via `shared_preferences`. Owned at the app root
   (`client/lib/main.dart`); light/dark theming.
@@ -130,7 +130,8 @@ device + LiveKit call run still pending.
 
 These four turn the done server work into user-facing controls. Locked decisions: custom
 personas live in a **JSON store**; the deployment is **multi-user** (clones *and* personas are
-namespaced per `user_id`, derived from the token identity/metadata); **LoRA stays vLLM-only**
+namespaced per `user_id`, taken from the `user` token-metadata key — the participant identity is
+only a fallback when it's absent); **LoRA stays vLLM-only**
 (see the backend note in **N3**).
 
 ### N1 — Per-persona session selectors (client) — *client-only* `[Done]`
@@ -207,8 +208,11 @@ kinds/availability; delete round-trip (fake `http.Client`).
 > `TokenClient` CRUD + `/loras`, a `PersonaFormScreen` (name, system prompt, base voice, turn
 > style, memory, session-default CEFR/demeanor, LoRA dropdown — empty on Mac with the reason), and
 > a home-shelf "New persona" FAB + per-card edit/delete on custom personas. The scoping user is
-> `identity` or `"default"` when unset (`ConnectionSettings.effectiveUser`), used for both the CRUD
-> routes and the `/token` body so authoring and calling hit the same bucket.
+> the normalized **account id** (`ConnectionSettings.userId`), or `"default"` when unset
+> (`ConnectionSettings.effectiveUser`), used for both the CRUD routes and the `/token` body so
+> authoring and calling hit the same bucket. The `/token` body also carries a stable, opaque
+> participant `identity` (`sub`) and a cosmetic display `name`, both independent of the account id
+> — see the field split in `client/lib/models/connection_settings.dart` / `server/tokens.py`.
 
 This was the only item that needed **new server endpoints**.
 

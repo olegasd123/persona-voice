@@ -121,11 +121,25 @@ def test_issued_token_is_valid_and_scoped(registry: PersonaRegistry) -> None:
     result = svc.issue(room="my-room", identity="alice", persona="hr_interviewer")
     claims = decode_token(result["token"], SECRET)
     assert claims["sub"] == "alice"
+    # No display name given → the `name` claim falls back to the participant id.
+    assert claims["name"] == "alice"
+    assert result["name"] == "alice"
     assert claims["video"]["room"] == "my-room"
     assert claims["video"]["roomJoin"] is True
     # Persona is embedded in metadata for observability and echoed back to the client.
     assert json.loads(claims["metadata"]) == {"persona": "hr_interviewer"}
     assert result["persona"] == "hr_interviewer"
+
+
+def test_issue_separates_display_name_from_identity(registry: PersonaRegistry) -> None:
+    svc = make_service(registry)
+    # A stable, opaque participant id with a separate, free-text display name.
+    result = svc.issue(identity="pv-abc123", name="Oleg Smith", persona="companion")
+    claims = decode_token(result["token"], SECRET)
+    assert claims["sub"] == "pv-abc123"  # unique participant identity
+    assert claims["name"] == "Oleg Smith"  # cosmetic, may contain spaces / collide
+    assert result["identity"] == "pv-abc123"
+    assert result["name"] == "Oleg Smith"
 
 
 def test_issue_rejects_unknown_persona(registry: PersonaRegistry) -> None:
@@ -787,10 +801,11 @@ def test_http_token_happy_path(live_server: tuple[str, TokenService]) -> None:
 def test_http_token_get_with_query(live_server: tuple[str, TokenService]) -> None:
     base, _ = live_server
     auth = {"Authorization": "Bearer sekret"}
-    status, body = _get(f"{base}/token?room=q-room&identity=bob", auth)
+    status, body = _get(f"{base}/token?room=q-room&identity=bob&name=Bob", auth)
     assert status == 200
     assert body["room"] == "q-room"
     assert body["identity"] == "bob"
+    assert body["name"] == "Bob"
 
 
 def test_http_personas(live_server: tuple[str, TokenService]) -> None:

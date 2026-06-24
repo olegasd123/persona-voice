@@ -48,7 +48,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
         ..tokenServerUrl = s.tokenServerUrl
         ..apiToken = s.apiToken
         ..displayName = s.displayName
-        ..userId = s.userId;
+        ..userId = s.userId
+        ..participantId = s.participantId;
       _urlCtrl.text = s.tokenServerUrl;
       _tokenCtrl.text = s.apiToken;
       _displayNameCtrl.text = s.displayName;

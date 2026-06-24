@@ -63,4 +63,32 @@ void main() {
       expect(s.userId, 'personal');
     });
   });
+
+  group('participantId', () {
+    test('is minted on first run and stays stable across loads', () async {
+      SharedPreferences.setMockInitialValues({});
+      final first = await ConnectionSettings.load();
+      expect(first.participantId, startsWith('pv-'));
+      // A second load reuses the persisted id rather than minting a new one.
+      final second = await ConnectionSettings.load();
+      expect(second.participantId, first.participantId);
+    });
+
+    test('reuses an existing persisted id', () async {
+      SharedPreferences.setMockInitialValues({'connection.participantId': 'pv-fixed'});
+      final s = await ConnectionSettings.load();
+      expect(s.participantId, 'pv-fixed');
+    });
+
+    test('is independent of a display-name / account rename', () async {
+      SharedPreferences.setMockInitialValues({'connection.participantId': 'pv-fixed'});
+      final s = await ConnectionSettings.load();
+      s
+        ..displayName = 'Someone Else'
+        ..userId = 'work';
+      await s.save();
+      final reloaded = await ConnectionSettings.load();
+      expect(reloaded.participantId, 'pv-fixed'); // unchanged by the rename
+    });
+  });
 }

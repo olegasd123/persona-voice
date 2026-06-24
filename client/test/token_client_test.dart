@@ -14,6 +14,7 @@ ConnectionSettings _settings({String token = ''}) => ConnectionSettings(
       apiToken: token,
       displayName: 'oleg',
       userId: 'oleg',
+      participantId: 'pv-test',
     );
 
 String? _contentType(http.BaseRequest req) {
@@ -60,7 +61,8 @@ void main() {
       expect(req.method, 'POST');
       final body = jsonDecode(req.body) as Map<String, dynamic>;
       expect(body['persona'], 'hr_interviewer');
-      expect(body['identity'], 'oleg');
+      expect(body['identity'], 'pv-test'); // stable participant id, not the display name
+      expect(body['name'], 'oleg'); // display name rides the separate `name` field
       return http.Response(
         jsonEncode({
           'url': 'wss://lk.local:7880',
@@ -166,8 +168,7 @@ void main() {
     await TokenClient(_settings(), httpClient: mock).requestToken(persona: 'x');
   });
 
-  test('requestToken sends the display name as identity and the normalized id as user',
-      () async {
+  test('requestToken keeps participant id, display name, and account id distinct', () async {
     late Map<String, dynamic> body;
     final mock = MockClient((req) async {
       body = jsonDecode(req.body) as Map<String, dynamic>;
@@ -177,19 +178,22 @@ void main() {
         200,
       );
     });
-    // A display name with a space (the old crash case) rides verbatim as `identity`, while the
-    // account id is sanitized to the server's charset for `user`.
+    // A display name with a space (the old crash case) rides verbatim as `name`; the account
+    // id is sanitized to the server's charset for `user`; the participant id is the stable
+    // `identity`.
     final settings = ConnectionSettings(
       tokenServerUrl: 'http://localhost:8080',
       displayName: 'Oleg Smith',
       userId: 'Oleg Smith',
+      participantId: 'pv-stable',
     );
     await TokenClient(settings, httpClient: mock).requestToken(persona: 'x');
-    expect(body['identity'], 'Oleg Smith');
+    expect(body['identity'], 'pv-stable');
+    expect(body['name'], 'Oleg Smith');
     expect(body['user'], 'Oleg-Smith');
   });
 
-  test('an empty account id falls back to the default bucket', () async {
+  test('omits identity/name when unset and falls back to the default bucket', () async {
     late Map<String, dynamic> body;
     final mock = MockClient((req) async {
       body = jsonDecode(req.body) as Map<String, dynamic>;
@@ -199,13 +203,11 @@ void main() {
         200,
       );
     });
-    // Display name set, no account id → addressed by name but pooled in the shared bucket.
-    final settings = ConnectionSettings(
-      tokenServerUrl: 'http://localhost:8080',
-      displayName: 'Oleg',
-    );
+    // Nothing set → the server generates a participant id, and data pools in the shared bucket.
+    final settings = ConnectionSettings(tokenServerUrl: 'http://localhost:8080');
     await TokenClient(settings, httpClient: mock).requestToken(persona: 'x');
-    expect(body['identity'], 'Oleg');
+    expect(body.containsKey('identity'), isFalse);
+    expect(body.containsKey('name'), isFalse);
     expect(body['user'], 'default');
   });
 

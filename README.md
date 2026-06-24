@@ -228,11 +228,13 @@ personavoice --token-server          # HTTP on PERSONAVOICE_HOST:PERSONAVOICE_PO
 | `PUT /personas/{id}?user=` / `DELETE /personas/{id}?user=` | edit / delete one of the user's own personas (curated are read-only) |
 | `GET /loras` | served LoRA adapters for a custom persona's `llm.lora` (`{"loras": [...], "supports_lora"}`) |
 | `GET /voices` | selectable voice catalog for the active backend (`{"voices": [...], "supports_cloning"}`) |
-| `POST /token` | body `{"room"?, "identity"?, "persona"?, "voice"?, "cefr"?, "demeanor"?}` → `{"url","token","room","identity","persona","voice","cefr","demeanor"}` |
+| `POST /token` | body `{"room"?, "identity"?, "name"?, "persona"?, "voice"?, "cefr"?, "demeanor"?, "user"?}` → `{"url","token","room","identity","name","persona","voice","cefr","demeanor","user"}` |
 | `POST /voices/clone` | `?name=&text=&authorized=1` + the wav as the raw body → enroll a clone |
 | `DELETE /voices/clone/{name}` | remove a cloned voice |
 
-`room`/`identity` are generated when omitted. The persona and the per-session options (voice /
+`room`/`identity` are generated when omitted. `identity` is the unique LiveKit participant id
+(`sub`); `name` is a cosmetic display-name claim that falls back to `identity`; `user` scopes a
+caller's custom personas and memory (see below). The persona and the per-session options (voice /
 CEFR / demeanor — see below) are validated, embedded in the token metadata, and echoed back, so
 the client can apply them with a data message after connecting. If `PERSONAVOICE_API_TOKEN` is
 set, requests need `Authorization: Bearer …`. Tokens are standard HS256 JWTs in LiveKit's
@@ -320,7 +322,7 @@ and the registry reloads from disk first, so editing a persona file takes effect
 restart.
 
 **Custom personas (multi-user).** Beyond the curated YAML, users can author their own personas at
-runtime over HTTP, scoped per `user_id` (the token identity / `{"user": …}` metadata): `POST
+runtime over HTTP, scoped per `user_id` (the `?user=` query / `{"user": …}` token metadata): `POST
 /personas?user=`, `PUT`/`DELETE /personas/{id}?user=`, and `GET /personas?user=` (which merges the
 curated set with that user's own, each tagged `custom`). A draft is just a persona body — `name`
 and `system_prompt` are enough; the voice ref and LLM base model default to the curated default,
