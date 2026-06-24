@@ -54,6 +54,12 @@ services:
       - PERSONAVOICE_HOST=0.0.0.0
       - PERSONAVOICE_PORT=8080
     volumes:
+      # Config (backends + personas + voices.yaml) is data, not code: bind-mount it read-only so
+      # the /voices catalog reflects the host's current config without rebuilding the image. A
+      # baked-in copy goes stale the moment voices.yaml changes (e.g. the bundled Feminine/
+      # Masculine chatterbox presets) and silently serves an empty picker. Restart the container
+      # to reload after editing config.
+      - ./config:/app/config:ro
       # Cloned / fine-tuned voices are written host-side (the agent worker, the seed script
       # `personavoice-seed-voices`). Mount them so the token-server's /voices catalog lists
       # them — otherwise the container sees an empty store and the picker shows no clones.
