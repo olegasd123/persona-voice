@@ -277,21 +277,21 @@ def test_delete_unknown_voice(registry: PersonaRegistry, tmp_path: Path) -> None
 async def test_delete_rejects_protected_seed_voice(
     registry: PersonaRegistry, tmp_path: Path
 ) -> None:
-    svc, store = make_cloning_service(registry, tmp_path, protected_voices=("female",))
-    await svc.enroll_voice(audio=b"x", name="female", authorized=True)
+    svc, store = make_cloning_service(registry, tmp_path, protected_voices=("Feminine",))
+    await svc.enroll_voice(audio=b"x", name="Feminine", authorized=True)
     with pytest.raises(BadRequest, match="bundled voice"):
-        svc.delete_voice("female")
-    assert "female" in store  # still there
+        svc.delete_voice("Feminine")
+    assert "Feminine" in store  # still there
 
 
 async def test_catalog_marks_protected_voice_non_removable(
     registry: PersonaRegistry, tmp_path: Path
 ) -> None:
-    svc, _ = make_cloning_service(registry, tmp_path, protected_voices=("female",))
-    await svc.enroll_voice(audio=b"x", name="female", authorized=True)  # bundled seed
+    svc, _ = make_cloning_service(registry, tmp_path, protected_voices=("Feminine",))
+    await svc.enroll_voice(audio=b"x", name="Feminine", authorized=True)  # bundled seed
     await svc.enroll_voice(audio=b"x", name="mine", authorized=True)  # user clone
     by_id = {o["id"]: o for o in svc.voices_catalog()["voices"]}
-    assert by_id["female"]["removable"] is False
+    assert by_id["Feminine"]["removable"] is False
     assert by_id["mine"]["removable"] is True
 
 

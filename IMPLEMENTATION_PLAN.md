@@ -97,10 +97,10 @@ routes, and Features **D–L**.
 | **N1** | **Per-persona session selectors** — voice / CEFR / demeanor, chosen per persona, applied *before* a call | A `[Done]` | none | `[Done]` (client; device run pending) |
 | **N2** | **Voice Library page** — list voices + clone by file upload or device mic | B `[Done]` | none | `[Done]` (client; device run pending) |
 | **N3** | **Custom personas** — multi-user **JSON store**, create / edit / delete + LoRA pick | K | **new routes** | `[Done]` (server + agent + client form done & tested; device run pending) |
-| **N4** | **Seed voices** — two ready clones out of the box (`temp_voices/`) | B `[Done]` | seed script | `[Done]` (script + bundled `female`/`male` wavs) |
+| **N4** | **Seed voices** — two ready voices out of the box (`assets/seed_voices/`) | B `[Done]` | seed script | `[Done]` (script + bundled `Feminine`/`Masculine` wavs) |
 
 **Order: N1 → N2 → N4 → N3.** N1+N2 are built (Flutter client; `flutter analyze` clean, unit tests
-green — no on-device run yet). **N4 done** (seed script + bundled female voice). **N3 done**:
+green — no on-device run yet). **N4 done** (seed script + bundled Feminine/Masculine voices). **N3 done**:
 server (`UserPersonaStore`, `POST/PUT/DELETE/GET /personas`, full-body `GET /personas/{id}`,
 `GET /loras`, `user`-scoped `/token`, agent resolution, persona `session_defaults`) **and** the
 client New/Edit-persona form — `flutter analyze` clean, 86 client + 633 server tests green; live
@@ -256,18 +256,20 @@ user-authored system prompts get a safety pass (ties to Feature C).
 ### N4 — Seed voices (two out-of-the-box clones) — *seed script* `[Done]`
 
 > **Done.** `voice/seed.py` (`personavoice-seed-voices` / `scripts/seed_voices.py`) enrolls every
-> wav in `assets/seed_voices/` (real `female.wav` + `male.wav` bundled) as a clone
-> named after the file stem, through the same `VoiceCloner` → `ClonesStore` path a client upload
-> uses — **idempotent** (skip-if-present; `--force` re-enrolls). On a preset-only backend the seed
-> still records (catalog-visible as `available=false`). `PERSONAVOICE_SEED_VOICES_DIR` overrides
-> the dir. Tested: idempotency, discovery, both per-backend enrollers, bad-sample rejection.
+> wav in `assets/seed_voices/` as a clone named after the file stem, through the same
+> `VoiceCloner` → `ClonesStore` path a client upload uses — **idempotent** (skip-if-present;
+> `--force` re-enrolls). The bundled `Feminine.wav` + `Masculine.wav` ship as presets in
+> `config/voices.yaml`, so the seeder skips them as duplicate clone IDs. On a preset-only backend
+> a non-preset seed still records (catalog-visible as `available=false`).
+> `PERSONAVOICE_SEED_VOICES_DIR` overrides the dir. Tested: idempotency, discovery, both
+> per-backend enrollers, bad-sample rejection.
 
 Ship two ready clones so N1/N2 demo with real voices on first run.
 
-- Source: `temp_voices/{female,male}.wav` (44.1 kHz stereo — fine; the codec mixes to mono +
-  resamples). Move into the repo (e.g. `assets/seed_voices/`).
+- Source: `assets/seed_voices/{Feminine,Masculine}.wav` (44.1 kHz stereo — fine; the codec mixes
+  to mono + resamples).
 - A `make seed-voices` / `scripts/seed_voices.py` that enrolls them through the **same path** a
-  client upload uses (`VoiceCloner` → `ClonesStore.record`), names `female` / `male`,
+  client upload uses (`VoiceCloner` → `ClonesStore.record`), names clones after the wav stem,
   auto-transcribing `ref_text` via the active STT (F5 needs it). **Idempotent** (skip if present).
 - Runs against the **active cloning backend** (f5_mlx / chatterbox); on a preset-only backend they
   enroll but list `available=false`. Multi-user: seed under a shared/global namespace visible to

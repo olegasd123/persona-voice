@@ -36,7 +36,7 @@ void main() {
     expect(VoiceOption.fromJson({'id': 'p', 'kind': 'preset'}).removable, isFalse);
     // A protected seed clone from a new server sends removable:false explicitly.
     expect(
-      VoiceOption.fromJson({'id': 'female', 'kind': 'clone', 'removable': false}).removable,
+      VoiceOption.fromJson({'id': 'Feminine', 'kind': 'clone', 'removable': false}).removable,
       isFalse,
     );
   });

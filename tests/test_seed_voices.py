@@ -34,20 +34,22 @@ def _recording_enroller(store: ClonesStore):
 
 async def test_seed_clones_enrolls_all(tmp_path: Path) -> None:
     store = ClonesStore(tmp_path)
-    result = await seed_clones(_recording_enroller(store), store, {"female": b"f", "male": b"m"})
-    assert result.seeded == ["female", "male"]
+    result = await seed_clones(
+        _recording_enroller(store), store, {"Feminine": b"f", "Masculine": b"m"}
+    )
+    assert result.seeded == ["Feminine", "Masculine"]
     assert result.skipped == [] and result.ok
-    assert "female" in store and "male" in store
+    assert "Feminine" in store and "Masculine" in store
 
 
 async def test_seed_clones_is_idempotent(tmp_path: Path) -> None:
     store = ClonesStore(tmp_path)
-    samples = {"female": b"f", "male": b"m"}
+    samples = {"Feminine": b"f", "Masculine": b"m"}
     first = await seed_clones(_recording_enroller(store), store, samples)
-    assert first.seeded == ["female", "male"]
+    assert first.seeded == ["Feminine", "Masculine"]
     # A second run skips what's already present rather than re-enrolling.
     second = await seed_clones(_recording_enroller(store), store, samples)
-    assert second.seeded == [] and second.skipped == ["female", "male"]
+    assert second.seeded == [] and second.skipped == ["Feminine", "Masculine"]
 
 
 async def test_seed_clones_excludes_presets(tmp_path: Path) -> None:
@@ -64,9 +66,9 @@ async def test_seed_clones_excludes_presets(tmp_path: Path) -> None:
 
 async def test_seed_clones_force_re_enrolls(tmp_path: Path) -> None:
     store = ClonesStore(tmp_path)
-    store.record(ClonedVoice(name="female", sample_path="old.wav"))
-    result = await seed_clones(_recording_enroller(store), store, {"female": b"f"}, force=True)
-    assert result.seeded == ["female"] and result.skipped == []
+    store.record(ClonedVoice(name="Feminine", sample_path="old.wav"))
+    result = await seed_clones(_recording_enroller(store), store, {"Feminine": b"f"}, force=True)
+    assert result.seeded == ["Feminine"] and result.skipped == []
 
 
 async def test_seed_clones_captures_failures(tmp_path: Path) -> None:
@@ -75,8 +77,8 @@ async def test_seed_clones_captures_failures(tmp_path: Path) -> None:
     async def _bad(name: str, wav: bytes) -> None:
         raise CloneError("sample too short (1.0s)")
 
-    result = await seed_clones(_bad, store, {"female": b"f"})
-    assert result.seeded == [] and result.failed == [("female", "sample too short (1.0s)")]
+    result = await seed_clones(_bad, store, {"Feminine": b"f"})
+    assert result.seeded == [] and result.failed == [("Feminine", "sample too short (1.0s)")]
     assert not result.ok
 
 
@@ -84,12 +86,12 @@ async def test_seed_clones_captures_failures(tmp_path: Path) -> None:
 
 
 def test_discover_samples_reads_wavs_keyed_by_stem(tmp_path: Path) -> None:
-    (tmp_path / "female.wav").write_bytes(b"RIFFfemale")
-    (tmp_path / "male.wav").write_bytes(b"RIFFmale")
+    (tmp_path / "Feminine.wav").write_bytes(b"RIFFFeminine")
+    (tmp_path / "Masculine.wav").write_bytes(b"RIFFMasculine")
     (tmp_path / "notes.txt").write_text("ignore me")
     samples = discover_samples(tmp_path)
-    assert set(samples) == {"female", "male"}
-    assert samples["female"] == b"RIFFfemale"
+    assert set(samples) == {"Feminine", "Masculine"}
+    assert samples["Feminine"] == b"RIFFFeminine"
 
 
 def test_discover_samples_missing_dir_is_empty(tmp_path: Path) -> None:
@@ -109,10 +111,10 @@ def test_bundled_seed_dir_has_demo_voices() -> None:
 
 
 def test_seed_voice_names_returns_stems(tmp_path: Path) -> None:
-    (tmp_path / "female.wav").write_bytes(b"RIFF")
-    (tmp_path / "male.wav").write_bytes(b"RIFF")
+    (tmp_path / "Feminine.wav").write_bytes(b"RIFF")
+    (tmp_path / "Masculine.wav").write_bytes(b"RIFF")
     (tmp_path / "notes.txt").write_text("ignore me")
-    assert seed_voice_names(tmp_path) == {"female", "male"}
+    assert seed_voice_names(tmp_path) == {"Feminine", "Masculine"}
 
 
 def test_seed_voice_names_missing_dir_is_empty(tmp_path: Path) -> None:
@@ -134,9 +136,9 @@ async def test_enroller_cloning_backend_uses_cloner(tmp_path: Path) -> None:
     store = ClonesStore(tmp_path / "clones")
     backend = dataclasses.replace(make_backend(stt_text="my voice"), tts=CloningTTS())
     enroll = make_enroller(backend, store, supports_cloning=True)
-    await enroll("female", _wav(5.0))
+    await enroll("Feminine", _wav(5.0))
     # The full cloner path persisted the clone with a reference transcript.
-    cv = store.get("female")
+    cv = store.get("Feminine")
     assert cv is not None and cv.ref_text == "my voice"
 
 
@@ -146,8 +148,8 @@ async def test_enroller_preset_only_records_catalog_entry(tmp_path: Path) -> Non
     store = ClonesStore(tmp_path / "clones")
     backend = make_backend()  # FakeTTS.supports_cloning is False
     enroll = make_enroller(backend, store, supports_cloning=False)
-    await enroll("male", _wav(5.0))
-    cv = store.get("male")
+    await enroll("Masculine", _wav(5.0))
+    cv = store.get("Masculine")
     assert cv is not None
     # Sample was persisted under the clones dir so the catalog can list it (available=false).
     assert Path(cv.sample_path).is_file()
@@ -159,7 +161,7 @@ async def test_enroller_preset_only_rejects_bad_sample(tmp_path: Path) -> None:
     store = ClonesStore(tmp_path / "clones")
     enroll = make_enroller(make_backend(), store, supports_cloning=False)
     with pytest.raises(CloneError, match="too short"):
-        await enroll("female", _wav(1.0))
+        await enroll("Feminine", _wav(1.0))
 
 
 def test_seed_result_ok_default() -> None:
