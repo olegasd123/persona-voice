@@ -4,31 +4,68 @@ class ConnectionSettings {
   ConnectionSettings({
     this.tokenServerUrl = 'http://localhost:8080',
     this.apiToken = '',
-    this.identity = '',
+    this.displayName = '',
+    this.userId = '',
   });
 
   static const _tokenServerUrlKey = 'connection.tokenServerUrl';
   static const _apiTokenKey = 'connection.apiToken';
-  static const _identityKey = 'connection.identity';
+  static const _displayNameKey = 'connection.displayName';
+  static const _userIdKey = 'connection.userId';
+  // Legacy single field that doubled as both display name and scope key (pre-split).
+  static const _legacyIdentityKey = 'connection.identity';
 
   String tokenServerUrl;
   String apiToken;
-  String identity;
 
-  /// The id that scopes custom personas (and memory). Falls back to `"default"` when no
-  /// identity is set, so a single-user device still has a stable, shareable persona bucket.
-  /// The same value rides the `/token` body so a custom persona resolves at call time.
+  /// Cosmetic. Rides the `/token` body as the LiveKit `identity` (participant label + the
+  /// name the assistant addresses you by). Free text — editing it never changes which
+  /// personas or memory you see. Empty lets the server generate a throwaway participant id.
+  String displayName;
+
+  /// The account selector. Scopes your custom personas and memory server-side: type the same
+  /// id again — even on another device — to pick up where you left off. Switching is
+  /// non-destructive (the old id's data stays put). Empty falls back to the shared
+  /// [defaultUser] bucket. Normalized to the server's charset via [normalizeUserId] before
+  /// it leaves the device.
+  String userId;
+
+  /// The shared bucket for a user who hasn't claimed an account id.
   static const defaultUser = 'default';
-  String get effectiveUser =>
-      identity.trim().isNotEmpty ? identity.trim() : defaultUser;
+
+  /// The normalized scope key sent to the server (`user`), or [defaultUser] when unset.
+  String get effectiveUser {
+    final id = normalizeUserId(userId);
+    return id.isNotEmpty ? id : defaultUser;
+  }
+
+  /// Coerce free text into a valid account id. The server accepts
+  /// `[A-Za-z0-9][A-Za-z0-9._@-]{0,127}` (and uses it as a directory name for memory), so we
+  /// map anything else to `-`, collapse repeats, drop leading non-alphanumerics, and cap the
+  /// length. Case is preserved on purpose — lowercasing would silently merge a returning
+  /// user's existing bucket into a different one. Returns `''` when nothing usable remains.
+  static String normalizeUserId(String raw) {
+    var s = raw.trim();
+    if (s.isEmpty) return '';
+    s = s.replaceAll(RegExp(r'[^A-Za-z0-9._@-]'), '-');
+    s = s.replaceAll(RegExp(r'-{2,}'), '-');
+    s = s.replaceFirst(RegExp(r'^[^A-Za-z0-9]+'), '');
+    if (s.length > 128) s = s.substring(0, 128);
+    return s;
+  }
 
   static Future<ConnectionSettings> load() async {
     final prefs = await SharedPreferences.getInstance();
+    // Migrate the legacy `connection.identity` field into the split fields. Preserve its exact
+    // value as the userId so a returning user keeps the same personas/memory bucket; it was
+    // already constrained to the valid charset (the old client couldn't have sent otherwise).
+    final legacy = prefs.getString(_legacyIdentityKey);
     return ConnectionSettings(
       tokenServerUrl:
           prefs.getString(_tokenServerUrlKey) ?? 'http://localhost:8080',
       apiToken: prefs.getString(_apiTokenKey) ?? '',
-      identity: prefs.getString(_identityKey) ?? '',
+      displayName: prefs.getString(_displayNameKey) ?? legacy ?? '',
+      userId: prefs.getString(_userIdKey) ?? legacy ?? '',
     );
   }
 
@@ -36,6 +73,7 @@ class ConnectionSettings {
     final prefs = await SharedPreferences.getInstance();
     await prefs.setString(_tokenServerUrlKey, tokenServerUrl);
     await prefs.setString(_apiTokenKey, apiToken);
-    await prefs.setString(_identityKey, identity);
+    await prefs.setString(_displayNameKey, displayName);
+    await prefs.setString(_userIdKey, userId);
   }
 }

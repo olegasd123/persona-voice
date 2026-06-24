@@ -12,7 +12,8 @@ import 'package:personavoice_client/services/token_client.dart';
 ConnectionSettings _settings({String token = ''}) => ConnectionSettings(
       tokenServerUrl: 'http://localhost:8080/',
       apiToken: token,
-      identity: 'oleg',
+      displayName: 'oleg',
+      userId: 'oleg',
     );
 
 String? _contentType(http.BaseRequest req) {
@@ -163,6 +164,49 @@ void main() {
       );
     });
     await TokenClient(_settings(), httpClient: mock).requestToken(persona: 'x');
+  });
+
+  test('requestToken sends the display name as identity and the normalized id as user',
+      () async {
+    late Map<String, dynamic> body;
+    final mock = MockClient((req) async {
+      body = jsonDecode(req.body) as Map<String, dynamic>;
+      return http.Response(
+        jsonEncode(
+            {'url': 'wss://lk', 'token': 't', 'room': 'r', 'identity': 'x', 'persona': 'x'}),
+        200,
+      );
+    });
+    // A display name with a space (the old crash case) rides verbatim as `identity`, while the
+    // account id is sanitized to the server's charset for `user`.
+    final settings = ConnectionSettings(
+      tokenServerUrl: 'http://localhost:8080',
+      displayName: 'Oleg Smith',
+      userId: 'Oleg Smith',
+    );
+    await TokenClient(settings, httpClient: mock).requestToken(persona: 'x');
+    expect(body['identity'], 'Oleg Smith');
+    expect(body['user'], 'Oleg-Smith');
+  });
+
+  test('an empty account id falls back to the default bucket', () async {
+    late Map<String, dynamic> body;
+    final mock = MockClient((req) async {
+      body = jsonDecode(req.body) as Map<String, dynamic>;
+      return http.Response(
+        jsonEncode(
+            {'url': 'wss://lk', 'token': 't', 'room': 'r', 'identity': 'x', 'persona': 'x'}),
+        200,
+      );
+    });
+    // Display name set, no account id → addressed by name but pooled in the shared bucket.
+    final settings = ConnectionSettings(
+      tokenServerUrl: 'http://localhost:8080',
+      displayName: 'Oleg',
+    );
+    await TokenClient(settings, httpClient: mock).requestToken(persona: 'x');
+    expect(body['identity'], 'Oleg');
+    expect(body['user'], 'default');
   });
 
   test('createPersona posts the draft and parses the stored body', () async {

@@ -176,8 +176,12 @@ class TokenClient {
   }) async {
     final payload = <String, dynamic>{
       'persona': persona,
-      if (settings.identity.trim().isNotEmpty) 'identity': settings.identity.trim(),
-      // Scopes custom-persona resolution + memory in the agent (falls back to "default").
+      // The cosmetic display name (LiveKit participant label); omitted when blank so the
+      // server generates a throwaway participant id.
+      if (settings.displayName.trim().isNotEmpty)
+        'identity': settings.displayName.trim(),
+      // The account selector — scopes custom-persona resolution + memory in the agent
+      // (normalized to the server's charset; falls back to "default").
       'user': settings.effectiveUser,
       if (room != null && room.trim().isNotEmpty) 'room': room.trim(),
       ...options.toWireMap(),

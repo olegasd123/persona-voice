@@ -55,7 +55,8 @@ class _HomeScreenState extends State<HomeScreen> {
     _settings
       ..tokenServerUrl = s.tokenServerUrl
       ..apiToken = s.apiToken
-      ..identity = s.identity;
+      ..displayName = s.displayName
+      ..userId = s.userId;
     await _loadPersonas();
   }
 

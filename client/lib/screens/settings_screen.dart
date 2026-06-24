@@ -6,7 +6,8 @@ import '../services/token_client.dart';
 import '../services/voice_session.dart' show MicMode;
 import 'voice_library_screen.dart';
 
-/// Connection details (server URL, API token, your name) + app defaults (mic mode, theme).
+/// Connection details (server URL, API token, account id, display name) + app defaults
+/// (mic mode, theme).
 /// This is where the config that used to clutter the home screen now lives — you only come
 /// here on first run or when something needs changing.
 class SettingsScreen extends StatefulWidget {
@@ -27,7 +28,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
   final _settings = ConnectionSettings();
   final _urlCtrl = TextEditingController();
   final _tokenCtrl = TextEditingController();
-  final _identityCtrl = TextEditingController();
+  final _displayNameCtrl = TextEditingController();
+  final _userIdCtrl = TextEditingController();
 
   bool _testing = false;
   ({bool ok, String message})? _testResult;
@@ -45,10 +47,12 @@ class _SettingsScreenState extends State<SettingsScreen> {
       _settings
         ..tokenServerUrl = s.tokenServerUrl
         ..apiToken = s.apiToken
-        ..identity = s.identity;
+        ..displayName = s.displayName
+        ..userId = s.userId;
       _urlCtrl.text = s.tokenServerUrl;
       _tokenCtrl.text = s.apiToken;
-      _identityCtrl.text = s.identity;
+      _displayNameCtrl.text = s.displayName;
+      _userIdCtrl.text = s.userId;
     });
   }
 
@@ -58,10 +62,20 @@ class _SettingsScreenState extends State<SettingsScreen> {
     _settings
       ..tokenServerUrl = _urlCtrl.text
       ..apiToken = _tokenCtrl.text
-      ..identity = _identityCtrl.text;
+      ..displayName = _displayNameCtrl.text
+      ..userId = _userIdCtrl.text;
     _settings.save();
     // A changed server invalidates the last test result.
     if (_testResult != null) setState(() => _testResult = null);
+  }
+
+  /// What the account-id field resolves to once normalized — shown live so a typo (which
+  /// silently switches buckets) is visible rather than mistaken for lost data.
+  String get _accountHelper {
+    final id = ConnectionSettings.normalizeUserId(_userIdCtrl.text);
+    return id.isEmpty
+        ? 'Anonymous — using the shared “default” space.'
+        : 'Active account: $id  ·  reuse this id on any device.';
   }
 
   Future<void> _testConnection() async {
@@ -92,7 +106,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
   void dispose() {
     _urlCtrl.dispose();
     _tokenCtrl.dispose();
-    _identityCtrl.dispose();
+    _displayNameCtrl.dispose();
+    _userIdCtrl.dispose();
     super.dispose();
   }
 
@@ -147,10 +162,30 @@ class _SettingsScreenState extends State<SettingsScreen> {
           const SizedBox(height: 24),
           _SectionLabel('You'),
           TextField(
-            controller: _identityCtrl,
+            controller: _userIdCtrl,
+            decoration: InputDecoration(
+              labelText: 'Account ID (optional)',
+              hintText: 'e.g. “personal” or “work”',
+              helperText: _accountHelper,
+              helperMaxLines: 2,
+              border: const OutlineInputBorder(),
+              prefixIcon: const Icon(Icons.badge_outlined),
+            ),
+            autocorrect: false,
+            enableSuggestions: false,
+            // Rebuild so the resolved-account helper tracks the field as you type.
+            onChanged: (_) {
+              _persistConnection();
+              setState(() {});
+            },
+          ),
+          const SizedBox(height: 12),
+          TextField(
+            controller: _displayNameCtrl,
             decoration: const InputDecoration(
               labelText: 'Display name (optional)',
               hintText: 'How the assistant addresses you',
+              helperText: 'Cosmetic — changing it won’t switch your account.',
               border: OutlineInputBorder(),
               prefixIcon: Icon(Icons.person_outline),
             ),
