@@ -26,10 +26,14 @@ import logging
 import re
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from ..models import VoiceRef
+
+if TYPE_CHECKING:
+    import numpy as np  # annotations only; the runtime import is lazy inside functions
 
 logger = logging.getLogger("personavoice.clone")
 
@@ -52,22 +56,68 @@ _MAX_SECONDS = 60.0
 _TRIM_REF_SECONDS = 5.0
 
 
-def trim_wav(sample_wav: bytes, max_seconds: float) -> bytes:
-    """Return `sample_wav` trimmed to its first `max_seconds`.
+def trim_wav(
+    sample_wav: bytes,
+    max_seconds: float,
+    *,
+    search_seconds: float = 1.2,
+    tail_silence_seconds: float = 0.2,
+    fade_seconds: float = 0.015,
+) -> bytes:
+    """Return `sample_wav` trimmed to about `max_seconds`, ending on a clean pause.
+
+    A naive hard cut at an arbitrary point ends the clip mid-word, which makes F5 emit a
+    transient at the start of every generated sentence (it has no natural boundary to begin
+    from). So we cut at the quietest point within the last `search_seconds` before the cap
+    (landing on a word gap when there is one), fade the tail to kill any click, and append a
+    short trailing silence so the reference ends on a pause.
 
     Unchanged when it's already shorter, or when the bytes can't be decoded — trimming is a
     best-effort latency optimization, so undecodable input is left for the backend to handle.
     """
+    import numpy as np
+
     from ..audio import decode_wav, encode_wav
 
     try:
         samples, sr = decode_wav(sample_wav)
     except Exception:  # not decodable here → let the backend deal with the raw bytes
         return sample_wav
-    keep = int(max_seconds * sr)
-    if keep <= 0 or len(samples) <= keep:
+    target = int(max_seconds * sr)
+    if target <= 0 or len(samples) <= target:
         return sample_wav
-    return encode_wav(samples[:keep], sr)
+
+    cut = _quiet_cut(samples, max(0, target - int(search_seconds * sr)), target, sr)
+    clip = samples[:cut].astype(np.float32, copy=True)
+    fade = min(int(fade_seconds * sr), len(clip))
+    if fade > 0:
+        clip[-fade:] *= np.linspace(1.0, 0.0, fade, dtype=np.float32)
+    pad = int(tail_silence_seconds * sr)
+    if pad > 0:
+        clip = np.concatenate([clip, np.zeros(pad, dtype=np.float32)])
+    return encode_wav(clip, sr)
+
+
+def _quiet_cut(
+    samples: np.ndarray, lo: int, hi: int, sr: int, *, frame_seconds: float = 0.02
+) -> int:
+    """Index of a low-energy cut point in `samples[lo:hi]`, biased toward `hi`.
+
+    Splits the window into short frames, then picks the *latest* frame whose RMS is within ~1.5x
+    of the quietest (so we cut at a pause near the cap rather than the earliest dip). Falls back
+    to `hi` when the window is too small to frame.
+    """
+    import numpy as np
+
+    frame = max(1, int(frame_seconds * sr))
+    region = samples[lo:hi]
+    n = len(region) // frame
+    if n == 0:
+        return hi
+    energy = np.sqrt((region[: n * frame].reshape(n, frame).astype(np.float32) ** 2).mean(axis=1))
+    quiet = np.where(energy <= energy.min() * 1.5 + 1e-6)[0]
+    q = int(quiet[-1]) if len(quiet) else int(energy.argmin())
+    return lo + (q + 1) * frame
 
 
 class CloneError(ValueError):

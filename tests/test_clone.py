@@ -52,12 +52,29 @@ def _wav(seconds: float, sr: int = 16000) -> bytes:
 def test_trim_wav_caps_length_and_passes_through() -> None:
     from personavoice.voice.clone import trim_wav
 
-    # A 9 s clip is trimmed to ~5 s; a 3 s clip is returned unchanged (same bytes object).
-    assert validate_sample(trim_wav(_wav(9.0), 5.0)) == pytest.approx(5.0, abs=0.05)
+    # A 9 s clip is capped near 5 s (cut point in the last ~1.2 s + a short trailing silence);
+    # a clip already under the cap is returned unchanged (same bytes object).
+    capped = validate_sample(trim_wav(_wav(9.0), 5.0))
+    assert 3.8 <= capped <= 5.6
     short = _wav(3.0)
     assert trim_wav(short, 5.0) is short
     # Undecodable bytes are best-effort passed through, not raised on.
     assert trim_wav(b"not a wav", 5.0) == b"not a wav"
+
+
+def test_trim_wav_ends_on_silence() -> None:
+    """The trimmed reference ends in a silent pause (the fix for F5's per-sentence transient)."""
+    np = pytest.importorskip("numpy")
+    pytest.importorskip("soundfile")
+    from personavoice.audio import decode_wav
+    from personavoice.voice.clone import trim_wav
+
+    sr = 16000
+    tone = 0.5 * np.sin(np.linspace(0, 1000.0, 9 * sr, dtype=np.float32))  # 9 s of non-silence
+    from personavoice.audio import encode_wav
+
+    samples, _ = decode_wav(trim_wav(encode_wav(tone, sr), 5.0))
+    assert float(np.abs(samples[-int(0.1 * sr) :]).max()) < 1e-3  # last 100 ms is silent
 
 
 def test_validate_sample_returns_duration() -> None:
