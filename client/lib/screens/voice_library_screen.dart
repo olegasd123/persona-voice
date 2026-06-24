@@ -174,9 +174,11 @@ class _VoiceLibraryScreenState extends State<VoiceLibraryScreen> {
     const order = ['finetuned', 'clone', 'preset'];
     final widgets = <Widget>[];
     for (final kind in order) {
-      // Hide "Your clones" entirely on a backend that can't clone — nothing there is
-      // actionable (the clones would all be greyed-out as unavailable).
-      if (kind == 'clone' && !_catalog.supportsCloning) continue;
+      // Hide "Your clones" *and* "Fine-tuned" entirely on a backend that can't clone — both
+      // need a cloning backend (f5_mlx / chatterbox), so on a preset-only backend (kokoro /
+      // orpheus) everything there would be greyed-out as unavailable. Presets stay: they're
+      // the only voices actionable there.
+      if ((kind == 'clone' || kind == 'finetuned') && !_catalog.supportsCloning) continue;
       final group = _catalog.voices.where((v) => v.kind == kind).toList();
       if (group.isEmpty) continue;
       widgets.add(_SectionHeader('${_kindHeading(kind)} (${group.length})'));
