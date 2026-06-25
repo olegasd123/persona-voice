@@ -9,10 +9,11 @@ CLIs just call them.
 
 from __future__ import annotations
 
-from .logging_setup import JsonFormatter, configure_logging, log_level_from_env
+from .logging_setup import TRACE, JsonFormatter, configure_logging, log_level_from_env
 from .metrics import TurnMetrics, turn_metrics_from_stream
 
 __all__ = [
+    "TRACE",
     "JsonFormatter",
     "TurnMetrics",
     "configure_logging",

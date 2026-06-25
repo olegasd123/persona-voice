@@ -25,6 +25,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import os
 from collections.abc import AsyncIterator, Sequence
 from dataclasses import dataclass, field
@@ -32,13 +33,36 @@ from pathlib import Path
 from typing import Any
 
 from ...models import Msg, Persona
+from ...obs.logging_setup import TRACE
 from .base import LLMAdapter, Tool
+
+logger = logging.getLogger("personavoice.llm")
 
 _DEFAULT_TIMEOUT = 120.0
 # Tool loop bounds (latency-sensitive). Overridable per-deployment via env; an out-of-range or
 # unparsable value falls back to the default rather than failing the turn.
 _DEFAULT_TOOL_MAX_ITERS = 4
 _DEFAULT_TOOL_TIMEOUT = 10.0
+
+
+def trace_enabled() -> bool:
+    """Whether to log full LLM request/response payloads — i.e. `PERSONAVOICE_LOG_LEVEL=TRACE`.
+
+    Each chat-completions round-trip (the request body, the reassembled spoken reply, and any
+    tool call/result) is dumped at the custom TRACE level to the worker's log — the terminal
+    running `run-cuda`. TRACE shows these on top of INFO without DEBUG's library-wide noise;
+    DEBUG includes them too. Verbose and unredacted: a debugging aid, never for production.
+    """
+    return logger.isEnabledFor(TRACE)
+
+
+def _trace_json(obj: Any) -> str:
+    return json.dumps(obj, indent=2, ensure_ascii=False, default=str)
+
+
+def _emit_trace(label: str, body: str) -> None:
+    """Log one traced LLM payload at TRACE. Callers gate on `trace_enabled()` first."""
+    logger.log(TRACE, "LLM %s\n%s", label, body)
 
 
 def chat_url(base_url: str) -> str:
@@ -315,6 +339,11 @@ class OpenAICompatLLM(LLMAdapter):
             self.model, messages, persona, stream=True, extra_body=extra_body, lora=lora
         )
 
+        trace = trace_enabled()
+        if trace:
+            _emit_trace("request →", _trace_json(payload))
+        reply: list[str] = []
+
         async with (
             httpx.AsyncClient(timeout=timeout) as client,
             client.stream("POST", chat_url(base_url), json=payload) as resp,
@@ -323,7 +352,11 @@ class OpenAICompatLLM(LLMAdapter):
             async for line in resp.aiter_lines():
                 token = token_from_sse_line(line)
                 if token:
+                    if trace:
+                        reply.append(token)
                     yield token
+        if trace:
+            _emit_trace("response ←", "".join(reply))
 
     async def stream_chat_with_tools(
         self, messages: list[Msg], persona: Persona, tools: Sequence[Tool]
@@ -359,9 +392,10 @@ class OpenAICompatLLM(LLMAdapter):
         by_name: dict[str, Tool] = {t.name: t for t in tools}
         schemas = [t.schema() for t in tools]
         wire = _to_wire(messages)
+        trace = trace_enabled()
 
         async with httpx.AsyncClient(timeout=timeout) as client:
-            for _ in range(max_iters):
+            for i in range(max_iters):
                 payload = _chat_payload(
                     self.model,
                     wire,
@@ -371,8 +405,11 @@ class OpenAICompatLLM(LLMAdapter):
                     lora=lora,
                     tools=schemas,
                 )
+                if trace:
+                    _emit_trace(f"request → (tool loop {i + 1}/{max_iters})", _trace_json(payload))
                 buffer = _ToolCallBuffer()
                 spoke = False
+                reply: list[str] = []
                 async with client.stream("POST", chat_url(base_url), json=payload) as resp:
                     resp.raise_for_status()
                     async for line in resp.aiter_lines():
@@ -381,11 +418,15 @@ class OpenAICompatLLM(LLMAdapter):
                             continue
                         if delta.content:
                             spoke = True
+                            if trace:
+                                reply.append(delta.content)
                             yield delta.content
                         elif delta.tool_calls and not spoke:
                             buffer.add(delta.tool_calls)
                 # The model spoke (terminal answer) or asked for nothing actionable → we're done.
                 if spoke or buffer.empty():
+                    if trace and spoke:
+                        _emit_trace("response ←", "".join(reply))
                     return
                 calls = buffer.calls()
                 if not calls:
@@ -393,6 +434,11 @@ class OpenAICompatLLM(LLMAdapter):
                 wire.append(_assistant_tool_calls_message(calls))
                 for call in calls:
                     result = await _execute_tool(by_name, call, tool_timeout)
+                    if trace:
+                        _emit_trace(
+                            f"tool call: {call.name}",
+                            f"args: {call.arguments or '{}'}\nresult: {result}",
+                        )
                     wire.append({"role": "tool", "tool_call_id": call.id, "content": result})
 
             # Iteration cap reached: take the tool results we have and ask for a plain spoken
@@ -400,9 +446,16 @@ class OpenAICompatLLM(LLMAdapter):
             final = _chat_payload(
                 self.model, wire, persona, stream=True, extra_body=extra_body, lora=lora
             )
+            if trace:
+                _emit_trace("request → (tool loop final, no tools)", _trace_json(final))
+            reply = []
             async with client.stream("POST", chat_url(base_url), json=final) as resp:
                 resp.raise_for_status()
                 async for line in resp.aiter_lines():
                     token = token_from_sse_line(line)
                     if token:
+                        if trace:
+                            reply.append(token)
                         yield token
+            if trace:
+                _emit_trace("response ←", "".join(reply))

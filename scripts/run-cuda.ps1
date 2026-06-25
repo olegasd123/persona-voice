@@ -113,6 +113,11 @@ $env:PERSONAVOICE_STT_COMPUTE = 'float16'
 $env:PERSONAVOICE_TTS_ADAPTER = 'chatterbox'
 $env:PERSONAVOICE_TTS_DEVICE = 'cuda'
 
+$env:PERSONAVOICE_LOG_LEVEL = 'TRACE'
+$env:PERSONAVOICE_DYNAMIC_EMOTION = 'true'
+$env:PERSONAVOICE_TOOL_MAX_ITERS = '4'
+$env:PERSONAVOICE_TOOL_TIMEOUT = '10'
+
 # --- preflight (cheap checks only; the one-time work lives in setup-cuda.ps1) ---------------
 $dockerOk = $false
 try { docker info 2>$null | Out-Null; $dockerOk = ($LASTEXITCODE -eq 0) } catch { $dockerOk = $false }

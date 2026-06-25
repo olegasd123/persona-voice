@@ -7,6 +7,7 @@ import logging
 from dataclasses import dataclass
 
 from personavoice.obs import (
+    TRACE,
     JsonFormatter,
     TurnMetrics,
     configure_logging,
@@ -41,6 +42,14 @@ def test_log_level_from_env() -> None:
     assert log_level_from_env({"PERSONAVOICE_LOG_LEVEL": "DEBUG"}) == logging.DEBUG
     assert log_level_from_env({"PERSONAVOICE_LOG_LEVEL": "nonsense"}) == logging.INFO
     assert log_level_from_env({}) == logging.INFO
+
+
+def test_trace_level_sits_between_debug_and_info() -> None:
+    # Custom TRACE is loud enough to show on top of INFO but quieter than DEBUG's library noise.
+    assert logging.DEBUG < TRACE < logging.INFO
+    assert logging.getLevelName(TRACE) == "TRACE"
+    assert log_level_from_env({"PERSONAVOICE_LOG_LEVEL": "TRACE"}) == TRACE
+    assert log_level_from_env({"PERSONAVOICE_LOG_LEVEL": "trace"}) == TRACE  # case-insensitive
 
 
 def test_configure_logging_is_idempotent() -> None:

@@ -6,6 +6,10 @@ line-delimited JSON when `PERSONAVOICE_LOG_FORMAT=json` for log shippers. Level 
 `PERSONAVOICE_LOG_LEVEL` (default INFO). It's idempotent so calling it from multiple entry
 points doesn't stack duplicate handlers.
 
+We add one custom level, `TRACE` (15), that sits between DEBUG and INFO. It turns on our own
+verbose diagnostics (notably the full LLM request/response trace) on top of INFO, *without*
+DEBUG's library-wide firehose — so the accepted levels are DEBUG|TRACE|INFO|WARNING|ERROR.
+
 The `JsonFormatter` is pure (a `LogRecord` in, a JSON string out) so it's unit-testable; any
 keys passed via `logger.info(..., extra={"context": {...}})` are merged into the JSON object.
 """
@@ -17,7 +21,21 @@ import logging
 import os
 from collections.abc import Mapping
 
-_VALID_LEVELS = {"CRITICAL", "ERROR", "WARNING", "INFO", "DEBUG", "NOTSET"}
+# Custom level between DEBUG (10) and INFO (20). Setting PERSONAVOICE_LOG_LEVEL=TRACE shows our
+# TRACE diagnostics + INFO and above, but hides chatty third-party DEBUG records (level 10).
+TRACE = 15
+logging.addLevelName(TRACE, "TRACE")
+
+# Accepted PERSONAVOICE_LOG_LEVEL names → numeric level (loudest-first for readability).
+_LEVELS: dict[str, int] = {
+    "CRITICAL": logging.CRITICAL,
+    "ERROR": logging.ERROR,
+    "WARNING": logging.WARNING,
+    "INFO": logging.INFO,
+    "TRACE": TRACE,
+    "DEBUG": logging.DEBUG,
+    "NOTSET": logging.NOTSET,
+}
 
 # Attributes the stdlib sets on every LogRecord; anything else is a caller-supplied `extra`.
 _RESERVED = set(vars(logging.makeLogRecord({})).keys()) | {"message", "asctime", "taskName"}
@@ -43,12 +61,13 @@ class JsonFormatter(logging.Formatter):
 
 
 def log_level_from_env(env: Mapping[str, str] | None = None) -> int:
-    """Resolve the numeric log level from `PERSONAVOICE_LOG_LEVEL` (default INFO)."""
+    """Resolve the numeric log level from `PERSONAVOICE_LOG_LEVEL` (default INFO).
+
+    Accepts DEBUG|TRACE|INFO|WARNING|ERROR (+ CRITICAL/NOTSET); an unknown value falls back to INFO.
+    """
     env = os.environ if env is None else env
     name = (env.get("PERSONAVOICE_LOG_LEVEL") or "INFO").strip().upper()
-    if name not in _VALID_LEVELS:
-        name = "INFO"
-    return getattr(logging, name, logging.INFO)
+    return _LEVELS.get(name, logging.INFO)
 
 
 def configure_logging(
