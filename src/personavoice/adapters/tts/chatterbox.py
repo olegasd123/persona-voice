@@ -26,14 +26,21 @@ _DEFAULT_EXAGGERATION = 0.5
 # Chatterbox accepts roughly this range; clamp so a stray value never destabilizes synthesis.
 _EXAGGERATION_RANGE = (0.25, 2.0)
 # Map the descriptive `emotion` strings personas/voices use to an exaggeration level. A bare
-# number ("0.7") is taken literally instead; an unknown word falls back to the default.
+# number ("0.7") is taken literally instead; an unknown word falls back to the default. The
+# canonical per-utterance emotions (`personavoice.emotion.EMOTIONS`, used by Feature F's dynamic
+# tags) are all covered here; `tests/test_emotion.py` guards that coupling.
 _EMOTION_EXAGGERATION: dict[str, float] = {
     "calm": 0.4,
+    "sad": 0.4,
+    "serious": 0.45,
     "neutral": 0.5,
     "neutral-warm": 0.55,
+    "sympathetic": 0.55,
     "warm": 0.6,
     "friendly": 0.6,
     "kind": 0.6,
+    "curious": 0.65,
+    "happy": 0.7,
     "expressive": 0.75,
     "excited": 0.8,
 }

@@ -90,6 +90,16 @@ def test_build_messages_threads_options(config_dir: Path) -> None:
     assert "brusque" in messages[0].content
 
 
+def test_emotion_directive_only_when_enabled(config_dir: Path) -> None:
+    persona = load_persona(config_dir / "personas" / "companion.yaml")
+    needle = "emotion tag in square brackets"
+    assert needle not in render_system_prompt(persona)  # off by default
+    prompt = render_system_prompt(persona, dynamic_emotion=True)
+    assert needle in prompt
+    # The spoken-output guardrail still comes last, after the emotion directive.
+    assert prompt.rstrip().endswith("without markdown, lists, or emoji.")
+
+
 def test_unknown_persona_raises(config_dir: Path) -> None:
     registry = PersonaRegistry(config_dir / "personas")
     with pytest.raises(PersonaError):

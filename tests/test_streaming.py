@@ -135,6 +135,53 @@ async def test_voice_choice_override(config_dir: Path) -> None:
     assert backend.tts.last_voice.id == "alt_preset"  # type: ignore[attr-defined]
 
 
+# --- dynamic emotion (Feature F) ------------------------------------------------------
+
+
+async def test_dynamic_emotion_strips_tag_and_applies_to_voice(config_dir: Path) -> None:
+    backend = make_backend(llm_reply="[excited] Hello there.")
+    pipe = StreamingPipeline(backend, _companion(config_dir), dynamic_emotion=True)
+    metrics = StreamMetrics()
+
+    async for _ in pipe.stream_response("hi", metrics=metrics):
+        pass
+
+    # The tag is parsed off: TTS, the assembled reply, and history never see it...
+    assert backend.tts.chunks == ["Hello there."]  # type: ignore[attr-defined]
+    assert metrics.reply == "Hello there."
+    assert pipe.history[-1].content == "Hello there."
+    # ...and it drives the voice for this turn.
+    assert backend.tts.last_voice.emotion == "excited"  # type: ignore[attr-defined]
+
+
+async def test_dynamic_emotion_off_leaves_tag_and_voice_untouched(config_dir: Path) -> None:
+    # With the feature off (default), a stray tag is just spoken text and the voice is unchanged.
+    backend = make_backend(llm_reply="[excited] Hello there.")
+    pipe = StreamingPipeline(backend, _companion(config_dir))
+
+    async for _ in pipe.stream_response("hi"):
+        pass
+
+    assert "".join(backend.tts.chunks) == "[excited] Hello there."  # type: ignore[attr-defined]
+    assert backend.tts.last_voice.emotion != "excited"  # type: ignore[attr-defined]
+
+
+async def test_dynamic_emotion_directive_only_when_enabled(config_dir: Path) -> None:
+    needle = "emotion tag in square brackets"
+
+    on = make_backend(llm_reply="hi")
+    async for _ in StreamingPipeline(
+        on, _companion(config_dir), dynamic_emotion=True
+    ).stream_response("hello"):
+        pass
+    assert needle in on.llm.last_messages[0].content  # type: ignore[attr-defined]
+
+    off = make_backend(llm_reply="hi")
+    async for _ in StreamingPipeline(off, _companion(config_dir)).stream_response("hello"):
+        pass
+    assert needle not in off.llm.last_messages[0].content  # type: ignore[attr-defined]
+
+
 async def test_moderation_input_short_circuits(config_dir: Path) -> None:
     backend = make_backend(llm_reply="THIS SHOULD NOT BE SPOKEN")
     pipe = StreamingPipeline(backend, _companion(config_dir), moderator=KeywordModerator())

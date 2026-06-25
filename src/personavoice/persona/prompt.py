@@ -7,6 +7,7 @@ assembles system + prior history + the new user turn.
 
 from __future__ import annotations
 
+from ..emotion import EMOTION_DIRECTIVE
 from ..models import CEFRLevel, Demeanor, Msg, Persona, Role, SessionOptions, TurnStyle
 
 _TURN_STYLE_DIRECTIVE = {
@@ -61,11 +62,19 @@ _CEFR_DIRECTIVE = {
 }
 
 
-def render_system_prompt(persona: Persona, options: SessionOptions | None = None) -> str:
+def render_system_prompt(
+    persona: Persona,
+    options: SessionOptions | None = None,
+    *,
+    dynamic_emotion: bool = False,
+) -> str:
     """The authored system prompt plus derived behavior and per-session directives.
 
     `options`, if given, layers session-level overrides (demeanor, CEFR) on top of the
-    persona. The spoken-language nudge always comes last so it stays closest to generation.
+    persona. When `dynamic_emotion` is on, the per-utterance emotion-tag directive is added too
+    (Feature F) so the model prefixes each reply with a `[emotion]` tag the pipeline strips and
+    applies to the voice. The spoken-language nudge always comes last so it stays closest to
+    generation.
     """
     parts = [persona.system_prompt.strip()]
 
@@ -78,6 +87,9 @@ def render_system_prompt(persona: Persona, options: SessionOptions | None = None
             parts.append(d)
         if options.cefr and (c := _CEFR_DIRECTIVE.get(options.cefr)):
             parts.append(c)
+
+    if dynamic_emotion:
+        parts.append(EMOTION_DIRECTIVE)
 
     # This is a spoken assistant: nudge the model away from markdown/formatting that
     # would read poorly through TTS.
@@ -95,6 +107,7 @@ def build_messages(
     *,
     memory_context: str | None = None,
     options: SessionOptions | None = None,
+    dynamic_emotion: bool = False,
 ) -> list[Msg]:
     """Assemble system + history (+ optional new user turn) into the message list.
 
@@ -103,9 +116,15 @@ def build_messages(
     message (not folded into the persona prompt) so it can vary per turn without rebuilding
     the persona's base prompt.
 
-    `options` carries per-session overrides (demeanor, CEFR) into the rendered system prompt.
+    `options` carries per-session overrides (demeanor, CEFR) into the rendered system prompt;
+    `dynamic_emotion` adds the per-utterance emotion-tag directive (Feature F).
     """
-    messages: list[Msg] = [Msg(role=Role.system, content=render_system_prompt(persona, options))]
+    messages: list[Msg] = [
+        Msg(
+            role=Role.system,
+            content=render_system_prompt(persona, options, dynamic_emotion=dynamic_emotion),
+        )
+    ]
     if memory_context and memory_context.strip():
         messages.append(Msg(role=Role.system, content=memory_context.strip()))
     if history:

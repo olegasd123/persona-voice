@@ -107,6 +107,31 @@ async def test_unavailable_voice_choice_falls_back_to_persona_default(config_dir
     assert backend.tts.last_voice.id == "af_heart"  # type: ignore[attr-defined]
 
 
+# --- dynamic emotion (Feature F) ------------------------------------------------------
+
+
+async def test_dynamic_emotion_strips_tag_and_applies_to_voice(config_dir: Path) -> None:
+    backend = make_backend(stt_text="hi", llm_reply="[sad] I'm here for you.")
+    pipe = Pipeline(backend, _companion(config_dir), dynamic_emotion=True)
+
+    result = await pipe.run_turn(b"x")
+
+    # The reply (and the synthesized text) is the spoken words only — no tag.
+    assert result.reply == "I'm here for you."
+    assert backend.tts.last_text == "I'm here for you."  # type: ignore[attr-defined]
+    assert backend.tts.last_voice.emotion == "sad"  # type: ignore[attr-defined]
+
+
+async def test_dynamic_emotion_off_leaves_tag_in_reply(config_dir: Path) -> None:
+    backend = make_backend(stt_text="hi", llm_reply="[sad] I'm here for you.")
+    pipe = Pipeline(backend, _companion(config_dir))  # off by default
+
+    result = await pipe.run_turn(b"x")
+
+    assert result.reply == "[sad] I'm here for you."  # untouched
+    assert backend.tts.last_voice.emotion != "sad"  # type: ignore[attr-defined]
+
+
 async def test_moderation_input_short_circuits_the_llm(config_dir: Path) -> None:
     backend = make_backend(stt_text="I want to die", llm_reply="THIS SHOULD NOT BE SPOKEN")
     pipe = Pipeline(backend, _companion(config_dir), moderator=KeywordModerator())

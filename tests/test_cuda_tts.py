@@ -23,6 +23,9 @@ def test_resolve_exaggeration_maps_emotion_words() -> None:
     # Known descriptive words map to their configured intensity; case/space-insensitive.
     assert _resolve_exaggeration("neutral", _DEFAULT_EXAGGERATION) == 0.5
     assert _resolve_exaggeration("  Excited ", _DEFAULT_EXAGGERATION) == 0.8
+    # The dynamic-emotion vocabulary (Feature F) is covered too.
+    assert _resolve_exaggeration("sad", _DEFAULT_EXAGGERATION) == 0.4
+    assert _resolve_exaggeration("happy", _DEFAULT_EXAGGERATION) == 0.7
 
 
 def test_resolve_exaggeration_accepts_literal_number_and_clamps() -> None:

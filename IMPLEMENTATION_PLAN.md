@@ -116,7 +116,7 @@ device + LiveKit call run still pending.
 | C | **Safety / moderation layer** `[Done]` | Trust | M | Low | — (enables "rude") |
 | D | **Tool / function calling** | Capability | L | Med | — |
 | E | **Post-session feedback report** | Capability | M | Low | memory/transcript |
-| F | **Dynamic emotion / prosody** | Naturalness | M | Med | A (emotion plumbing) |
+| F | **Dynamic emotion / prosody** `[Done]` | Naturalness | M | Med | A (emotion plumbing) |
 | G | **Semantic endpointing** | Naturalness | M | Med | — |
 | H | **Prometheus `/metrics`** | Ops | S | Low | obs/metrics |
 | I | **Concurrency / admission control** | Ops | M | Med | — |
@@ -603,7 +603,20 @@ Eval scores the *system*; nothing scores the *user*. For `pm_interviewer` / `hr_
 
 ---
 
-## 7. Feature F — Dynamic emotion / prosody
+## 7. Feature F — Dynamic emotion / prosody `[Done]`
+
+> **Status:** Implemented and unit-tested, opt-in via `PERSONAVOICE_DYNAMIC_EMOTION` (default off,
+> so behavior is unchanged). New pure module `emotion.py` (top-level, next to `audio.py`): a closed
+> emotion vocabulary + aliases, the `EMOTION_DIRECTIVE` prompt text, `canonical_emotion`,
+> `split_emotion_hint` (full-reply parse for the turn-based `Pipeline`) and `split_leading_emotion`
+> (streaming parse that buffers only the leading token window). When on, `render_system_prompt`
+> appends the tag directive; both pipelines strip the leading `[emotion]` tag off the reply (before
+> TTS, history, transcript, and the output guard) and apply it to that turn's `VoiceRef.emotion`
+> via `model_copy`. Chatterbox's `_EMOTION_EXAGGERATION` map was extended to cover the whole
+> vocabulary (a test guards the coupling); Kokoro ignores `emotion`, so it degrades to a no-op on a
+> preset-only backend. The static per-persona `emotion` baseline is untouched (used when no tag is
+> emitted). `.env.example` + README updated. The optional "infer the emotion from the reply"
+> alternative was not taken — the LLM-emitted tag is lower-latency and needs no extra inference.
 
 ### 7.1 Motivation
 

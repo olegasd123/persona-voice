@@ -14,6 +14,7 @@ import time
 from dataclasses import dataclass, field
 
 from ..adapters.factory import Backend
+from ..emotion import dynamic_emotion_enabled, split_emotion_hint
 from ..models import Msg, Persona, Role, SessionOptions, Transcript, VoiceRef
 from ..persona.prompt import build_messages
 from ..safety import Moderator
@@ -89,6 +90,7 @@ class Pipeline:
         *,
         options: SessionOptions | None = None,
         moderator: Moderator | None = None,
+        dynamic_emotion: bool | None = None,
     ) -> None:
         self.backend = backend
         self.persona = persona
@@ -97,6 +99,11 @@ class Pipeline:
         self.options = options
         # Optional input/output guard. None = no moderation (behavior unchanged).
         self.moderator = moderator
+        # Per-utterance emotion (Feature F): off by default (the env toggle), so behavior is
+        # unchanged unless an operator opts in. See `StreamingPipeline.dynamic_emotion`.
+        self.dynamic_emotion = (
+            dynamic_emotion if dynamic_emotion is not None else dynamic_emotion_enabled()
+        )
         self.history: list[Msg] = []
 
     async def run_turn(self, audio_in: bytes, history: list[Msg] | None = None) -> TurnResult:
@@ -113,6 +120,7 @@ class Pipeline:
 
         # Input moderation: a flagged utterance (crisis especially) short-circuits the LLM
         # with a safe reply instead of running the normal turn.
+        emotion: str | None = None
         reply = await self._safe_input_reply(transcript.text)
         if reply is None:
             messages = build_messages(
@@ -120,8 +128,13 @@ class Pipeline:
                 history=history,
                 user_input=transcript.text,
                 options=self.options,
+                dynamic_emotion=self.dynamic_emotion,
             )
             reply = await self.backend.llm.chat(messages, self.persona)
+            # Per-utterance emotion (Feature F): strip the leading `[emotion]` tag off the reply
+            # before it reaches the output guard, TTS, history, or the transcript.
+            if self.dynamic_emotion:
+                emotion, reply = split_emotion_hint(reply)
             reply = await self._bound_output(reply)
         t_llm = time.perf_counter()
         timings["llm"] = t_llm - t_stt
@@ -129,6 +142,8 @@ class Pipeline:
         voice = voice_ref_for(
             self.persona, self.backend, self.voices, voice_choice=self._voice_choice
         )
+        if emotion is not None:
+            voice = voice.model_copy(update={"emotion": emotion})
         audio_out = await self.backend.tts.synthesize(reply, voice)
         t_tts = time.perf_counter()
         timings["tts"] = t_tts - t_llm

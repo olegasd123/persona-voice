@@ -21,6 +21,7 @@ from collections.abc import AsyncIterator, Awaitable, Callable
 from dataclasses import dataclass
 
 from ..adapters.factory import Backend
+from ..emotion import dynamic_emotion_enabled, split_leading_emotion
 from ..memory import ConversationMemory
 from ..models import Msg, Persona, Role, SessionOptions
 from ..persona.prompt import build_messages
@@ -59,12 +60,19 @@ class StreamingPipeline:
         memory: ConversationMemory | None = None,
         user_id: str | None = None,
         chunk_kwargs: dict[str, int | None] | None = None,
+        dynamic_emotion: bool | None = None,
     ) -> None:
         self.backend = backend
         self.persona = persona
         self.voices = voices
         # Per-session overrides (voice / cefr / demeanor). None = persona defaults.
         self.options = options
+        # Per-utterance emotion (Feature F): when on, the persona prompt gains the emotion-tag
+        # directive and each reply's leading `[emotion]` tag is stripped and applied to the voice.
+        # Defaults to the env toggle (off) so behavior is unchanged unless an operator opts in.
+        self.dynamic_emotion = (
+            dynamic_emotion if dynamic_emotion is not None else dynamic_emotion_enabled()
+        )
         # Optional input guard. None = no moderation (behavior unchanged). On the streaming
         # path the guard runs on *input* (a flagged/crisis utterance short-circuits to a safe
         # spoken reply); the bounded `rude` prompt and the turn-based output guard cover the
@@ -115,6 +123,7 @@ class StreamingPipeline:
                 user_input=user_text,
                 memory_context=memory_context,
                 options=self.options,
+                dynamic_emotion=self.dynamic_emotion,
             )
         else:
             messages = []
@@ -124,16 +133,21 @@ class StreamingPipeline:
         collected: list[str] = []
         t0 = time.perf_counter()
 
-        async def _tokens() -> AsyncIterator[str]:
+        async def _raw() -> AsyncIterator[str]:
+            """The reply token stream — a canned safe reply, or the LLM — timing the first token."""
             if canned is not None:
                 if metrics is not None and metrics.first_token is None:
                     metrics.first_token = time.perf_counter() - t0
-                collected.append(canned)
                 yield canned
                 return
             async for tok in self.backend.llm.stream_chat(messages, self.persona):
                 if metrics is not None and metrics.first_token is None:
                     metrics.first_token = time.perf_counter() - t0
+                yield tok
+
+        async def _collect(it: AsyncIterator[str]) -> AsyncIterator[str]:
+            """Tap the (post-tag) tokens to assemble the spoken reply for history/metrics."""
+            async for tok in it:
                 collected.append(tok)
                 yield tok
 
@@ -145,14 +159,24 @@ class StreamingPipeline:
                         await on_sentence(sentence)
                 yield sentence
 
-        sentences = _tap(
-            stream_sentences(
-                _tokens(),
-                max_chunk_chars=self.chunk_kwargs.get("max_chunk_chars") or 240,
-                first_chunk_chars=self.chunk_kwargs.get("first_chunk_chars"),
-            )
-        )
         try:
+            # Per-utterance emotion (Feature F): peel a leading `[emotion]` tag off the reply
+            # (buffering only its leading window) and apply it to this turn's voice — before TTS
+            # captures `voice`. Skipped for a canned safe reply (no LLM, no tag) and when off, so
+            # the original passthrough is untouched. Inside `try` so a first-token error still
+            # commits the (empty) turn in `finally`, as before.
+            body = _raw()
+            if self.dynamic_emotion and canned is None:
+                emotion, body = await split_leading_emotion(body)
+                if emotion is not None:
+                    voice = voice.model_copy(update={"emotion": emotion})
+            sentences = _tap(
+                stream_sentences(
+                    _collect(body),
+                    max_chunk_chars=self.chunk_kwargs.get("max_chunk_chars") or 240,
+                    first_chunk_chars=self.chunk_kwargs.get("first_chunk_chars"),
+                )
+            )
             async for audio in self.backend.tts.stream_tts(sentences, voice):
                 if metrics is not None and metrics.first_audio is None:
                     metrics.first_audio = time.perf_counter() - t0

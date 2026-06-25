@@ -262,6 +262,15 @@ crisis/self-harm utterance to a calm, resource-pointing reply and bounds abusive
 what *guarantees* the `rude` demeanor stays "brusque, not abusive". Recommended once `rude` is
 exposed to real users.
 
+**Dynamic emotion (per-utterance prosody).** Off by default; set `PERSONAVOICE_DYNAMIC_EMOTION=1`
+to have the persona color each reply individually. The model is asked to prefix a reply with one
+`[emotion]` tag (`neutral`, `happy`, `excited`, `calm`, `sad`, `serious`, `warm`, `curious`,
+`sympathetic`); the pipeline strips the tag before TTS, history, and the transcript, and applies it
+to the voice for that turn only. It's audible on a cloning backend (Chatterbox maps it to its
+`exaggeration` knob); a preset-only backend (Kokoro) ignores it gracefully, so the tag is a no-op
+there. Static per-persona `emotion` (in `config/voices.yaml` / a persona's `voice.emotion`) is
+unchanged and still the baseline when no tag is emitted.
+
 **Self-host the SFU.** `docker-compose.livekit.yml` brings up a LiveKit server (dev keys
 `devkey`/`secret`) plus the token server:
 
