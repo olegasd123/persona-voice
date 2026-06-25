@@ -9,13 +9,36 @@ from __future__ import annotations
 import asyncio
 import os
 import time
-from collections.abc import AsyncIterator
-from typing import Any
+from collections.abc import AsyncIterator, Sequence
+from typing import Any, Protocol, runtime_checkable
 
 from ...models import CheckResult, Msg, Persona, Role
 
 # Seconds between warm-up retries while a server backend is still loading its model.
 _WARMUP_RETRY_S = 2.0
+
+
+@runtime_checkable
+class Tool(Protocol):
+    """The minimal tool contract the LLM adapter needs (Feature D).
+
+    Declared here, in the adapter layer, so a backend can run the tool-call loop without importing
+    the orchestrator's registry — `orchestrator/tools.ToolSpec` satisfies this structurally, so
+    the dependency only ever points orchestrator → adapters (no cycle).
+    """
+
+    @property
+    def name(self) -> str:
+        """The tool's unique name (matches the `function.name` the model calls)."""
+        ...
+
+    def schema(self) -> dict[str, Any]:
+        """The OpenAI `tools` entry (a ``{"type": "function", ...}`` object) sent to the model."""
+        ...
+
+    async def run(self, arguments: dict[str, Any]) -> str:
+        """Execute the tool with parsed JSON arguments and return the result text."""
+        ...
 
 
 class LLMAdapter:
@@ -24,6 +47,10 @@ class LLMAdapter:
     name: str = "base"
     stage: str = "llm"
     implemented: bool = False  # real backends set this True (drops the "stub" warning)
+    # Whether this backend can route tool/function calls (Feature D). Backends that can't leave
+    # it False; `stream_chat_with_tools` then degrades to a plain reply (tools ignored), keeping
+    # the BACKEND switch honest where a backend lacks the capability.
+    supports_tools: bool = False
 
     def __init__(self, *, model: str | None = None, options: dict[str, Any] | None = None) -> None:
         self.model = model
@@ -33,10 +60,32 @@ class LLMAdapter:
         """Yield reply tokens. Real backends implement this as an async generator."""
         raise NotImplementedError(f"{self.name}.stream_chat is not implemented yet")
 
+    async def stream_chat_with_tools(
+        self, messages: list[Msg], persona: Persona, tools: Sequence[Tool]
+    ) -> AsyncIterator[str]:
+        """Stream a reply, first resolving any tool calls the model makes (Feature D).
+
+        Default implementation **ignores tools** and just streams the reply, so a backend that
+        can't do function calling (or any persona with no tools) behaves exactly as `stream_chat`.
+        Tool-capable backends (the OpenAI-compatible path) override this with the model → call →
+        execute → feed-back loop, then stream the follow-up reply for TTS.
+        """
+        async for tok in self.stream_chat(messages, persona):
+            yield tok
+
     async def chat(self, messages: list[Msg], persona: Persona) -> str:
         """Convenience: collect the streamed tokens into a single reply string."""
         chunks: list[str] = []
         async for tok in self.stream_chat(messages, persona):
+            chunks.append(tok)
+        return "".join(chunks)
+
+    async def chat_with_tools(
+        self, messages: list[Msg], persona: Persona, tools: Sequence[Tool]
+    ) -> str:
+        """Tool-aware `chat`: collect the (post-tool) streamed tokens into one reply string."""
+        chunks: list[str] = []
+        async for tok in self.stream_chat_with_tools(messages, persona, tools):
             chunks.append(tok)
         return "".join(chunks)
 

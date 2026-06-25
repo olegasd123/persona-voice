@@ -25,6 +25,7 @@ from ..persona.registry import PersonaRegistry
 from ..safety import moderator_from_env
 from ..server.config import ConfigError, Settings, load_backend_config, load_voice_registry
 from .pipeline import Pipeline, TurnResult
+from .tools import default_tool_registry
 
 
 def add_session_option_args(parser: argparse.ArgumentParser) -> None:
@@ -105,7 +106,14 @@ async def _run(
 ) -> TurnResult:
     backend = build_backend(load_backend_config(settings))
     voices = load_voice_registry(settings)
-    pipeline = Pipeline(backend, persona, voices, options=options, moderator=moderator_from_env())
+    pipeline = Pipeline(
+        backend,
+        persona,
+        voices,
+        options=options,
+        moderator=moderator_from_env(),
+        tools=default_tool_registry(),
+    )
     return await pipeline.run_turn(audio_in)
 
 

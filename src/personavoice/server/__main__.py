@@ -66,6 +66,10 @@ def _print_report(report: CheckReport, settings: Settings, *, use_color: bool) -
         print(f"Fine-tuned voices ({len(report.finetuned)}): {listed}")
         print()
 
+    if report.tools:
+        print(f"Tools ({len(report.tools)}): {', '.join(report.tools)}")
+        print()
+
     if report.memory_dir:
         enc = "encrypted" if report.memory_encrypted else "plaintext"
         print(f"Memory: {report.memory_dir}  ({enc}, {report.memory_users} user(s))")

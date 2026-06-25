@@ -107,14 +107,15 @@ client New/Edit-persona form — `flutter analyze` clean, 86 client + 633 server
 device + LiveKit call run still pending.
 
 **Backlog (capabilities / ops / DX — independent, land any time).** Features **A/B/C** are the
-*server* substrate the NOW block builds on (already done & tested); D–L are unchanged.
+*server* substrate the NOW block builds on (already done & tested); **D** (tool calling) and
+**F** (dynamic emotion) have since landed; E/G–L are unchanged.
 
 | # | Feature | Theme | Effort | Risk | Depends on |
 |---|---------|-------|--------|------|------------|
 | A | **Session options** (voice / CEFR / demeanor) `[Done]` (server) | Personalization | M | Low | — |
 | B | **Multi-voice cloning + voice library** `[Done]` (server) | Personalization | L | Med | A (voice field) |
 | C | **Safety / moderation layer** `[Done]` | Trust | M | Low | — (enables "rude") |
-| D | **Tool / function calling** | Capability | L | Med | — |
+| D | **Tool / function calling** `[Done]` | Capability | L | Med | — |
 | E | **Post-session feedback report** | Capability | M | Low | memory/transcript |
 | F | **Dynamic emotion / prosody** `[Done]` | Naturalness | M | Med | A (emotion plumbing) |
 | G | **Semantic endpointing** | Naturalness | M | Med | — |
@@ -552,7 +553,22 @@ mirroring how adapters are pluggable.
 
 ---
 
-## 5. Feature D — Tool / function calling
+## 5. Feature D — Tool / function calling `[Done]`
+
+> **Status:** Implemented and unit-tested. New `orchestrator/tools.py` (`ToolSpec` + JSON-schema
+> contract, `ToolRegistry` with per-persona `select()`, and the bundled side-effect-free
+> `get_current_time`); a structural `Tool` protocol on the adapter (`adapters/llm/base.py`) keeps
+> the dependency one-way (orchestrator → adapters). The OpenAI-compatible path
+> (`_openai_compat.py`, so vLLM **and** LM Studio) runs the streamed model → tool → result loop:
+> tool-call SSE fragments are reassembled (`_ToolCallBuffer`), executed (bad name / bad args /
+> timeout / handler error all become a safe result string fed back to the model), and the
+> follow-up reply streams for TTS — **nothing is voiced during the tool round-trips**. A
+> `PERSONAVOICE_TOOL_MAX_ITERS` cap forces a final tool-free answer; `PERSONAVOICE_TOOL_TIMEOUT`
+> bounds each call. Both pipelines + the agent + the demos thread a `ToolRegistry`; a persona opts
+> in via a new `Persona.tools` list (the `companion` ships `get_current_time`). Backends that can't
+> route tools (Ollama, mlx-lm) degrade gracefully via the base no-op. `server --check` lists the
+> registry and warns on unknown / unroutable tool references. The persona-knowledge-retrieval tool
+> was left for later (needs per-persona knowledge files); only safe offline tools ship.
 
 ### 5.1 Motivation
 

@@ -51,6 +51,7 @@ from ..voice.registry import VoiceRegistry
 from .endpointing import vad_load_kwargs
 from .pipeline import voice_ref_for
 from .streaming import StreamingPipeline, StreamMetrics
+from .tools import ToolRegistry, default_tool_registry
 from .turn import TurnController
 
 # LiveKit's runtime types (`rtc.AudioSource`, `rtc.Track`, ...) are only present when the
@@ -111,6 +112,7 @@ class PersonaAgent:
         *,
         options: SessionOptions | None = None,
         moderator: Moderator | None = None,
+        tools: ToolRegistry | None = None,
         publish_transcript: TranscriptPublisher | None = None,
         memory: ConversationMemory | None = None,
         user_id: str | None = None,
@@ -131,6 +133,7 @@ class PersonaAgent:
             voices,
             options=self._options,
             moderator=moderator,
+            tools=tools,
             memory=memory,
             user_id=user_id,
         )
@@ -719,6 +722,9 @@ async def entrypoint(ctx: Any, *, persona_id: str | None = None) -> None:
     if options.any_set():
         logger.info("session options: %s", options.model_dump(exclude_none=True))
     moderator = moderator_from_env()
+    # Tool / function calling (Feature D): the bundled safe tools. A persona only calls the tools
+    # it lists in `persona.tools`, so this is inert for the tool-free personas.
+    tools = default_tool_registry()
 
     source = rtc.AudioSource(_OUT_SAMPLE_RATE, 1)
     track = rtc.LocalAudioTrack.create_audio_track("assistant-voice", source)
@@ -736,6 +742,7 @@ async def entrypoint(ctx: Any, *, persona_id: str | None = None) -> None:
         voices,
         options=options,
         moderator=moderator,
+        tools=tools,
         publish_transcript=publisher,
         memory=memory,
         user_id=user_id,

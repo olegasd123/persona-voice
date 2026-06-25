@@ -19,6 +19,7 @@ from ..models import Msg, Persona, Role, SessionOptions, Transcript, VoiceRef
 from ..persona.prompt import build_messages
 from ..safety import Moderator
 from ..voice.registry import VoiceRegistry
+from .tools import ToolRegistry
 
 logger = logging.getLogger("personavoice.pipeline")
 
@@ -90,6 +91,7 @@ class Pipeline:
         *,
         options: SessionOptions | None = None,
         moderator: Moderator | None = None,
+        tools: ToolRegistry | None = None,
         dynamic_emotion: bool | None = None,
     ) -> None:
         self.backend = backend
@@ -99,6 +101,9 @@ class Pipeline:
         self.options = options
         # Optional input/output guard. None = no moderation (behavior unchanged).
         self.moderator = moderator
+        # Tool / function calling (Feature D). None = no tools; a persona only calls tools it
+        # lists in `persona.tools`. See `StreamingPipeline` for the streaming counterpart.
+        self.tools = tools
         # Per-utterance emotion (Feature F): off by default (the env toggle), so behavior is
         # unchanged unless an operator opts in. See `StreamingPipeline.dynamic_emotion`.
         self.dynamic_emotion = (
@@ -130,7 +135,17 @@ class Pipeline:
                 options=self.options,
                 dynamic_emotion=self.dynamic_emotion,
             )
-            reply = await self.backend.llm.chat(messages, self.persona)
+            # When the persona declares tools, run the model → tool → result loop and use the
+            # follow-up reply; otherwise a plain single-shot completion.
+            specs = (
+                self.tools.select(self.persona.tools)
+                if self.tools is not None and self.persona.tools
+                else []
+            )
+            if specs:
+                reply = await self.backend.llm.chat_with_tools(messages, self.persona, specs)
+            else:
+                reply = await self.backend.llm.chat(messages, self.persona)
             # Per-utterance emotion (Feature F): strip the leading `[emotion]` tag off the reply
             # before it reaches the output guard, TTS, history, or the transcript.
             if self.dynamic_emotion:

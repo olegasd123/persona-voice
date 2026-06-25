@@ -29,6 +29,7 @@ from ..safety import Moderator
 from ..voice.registry import VoiceRegistry
 from .chunker import chunk_kwargs_from_env, stream_sentences
 from .pipeline import voice_ref_for
+from .tools import ToolRegistry, ToolSpec
 
 
 @dataclass
@@ -57,6 +58,7 @@ class StreamingPipeline:
         *,
         options: SessionOptions | None = None,
         moderator: Moderator | None = None,
+        tools: ToolRegistry | None = None,
         memory: ConversationMemory | None = None,
         user_id: str | None = None,
         chunk_kwargs: dict[str, int | None] | None = None,
@@ -67,6 +69,10 @@ class StreamingPipeline:
         self.voices = voices
         # Per-session overrides (voice / cefr / demeanor). None = persona defaults.
         self.options = options
+        # Tool / function calling (Feature D). None = no tools; a persona only calls tools it
+        # lists in `persona.tools`, resolved against this registry per turn. Adapters that can't
+        # do function calling ignore the schemas, so this degrades gracefully.
+        self.tools = tools
         # Per-utterance emotion (Feature F): when on, the persona prompt gains the emotion-tag
         # directive and each reply's leading `[emotion]` tag is stripped and applied to the voice.
         # Defaults to the env toggle (off) so behavior is unchanged unless an operator opts in.
@@ -133,14 +139,27 @@ class StreamingPipeline:
         collected: list[str] = []
         t0 = time.perf_counter()
 
+        tool_specs = self._tool_specs()
+
         async def _raw() -> AsyncIterator[str]:
-            """The reply token stream — a canned safe reply, or the LLM — timing the first token."""
+            """The reply token stream — a canned safe reply, or the LLM — timing the first token.
+
+            When the persona declares tools, the LLM stream resolves any tool calls first (no
+            audio is produced during the tool round-trips); the follow-up reply then streams as
+            usual. With no tools this is the plain `stream_chat` path.
+            """
             if canned is not None:
                 if metrics is not None and metrics.first_token is None:
                     metrics.first_token = time.perf_counter() - t0
                 yield canned
                 return
-            async for tok in self.backend.llm.stream_chat(messages, self.persona):
+            if tool_specs:
+                token_stream = self.backend.llm.stream_chat_with_tools(
+                    messages, self.persona, tool_specs
+                )
+            else:
+                token_stream = self.backend.llm.stream_chat(messages, self.persona)
+            async for tok in token_stream:
                 if metrics is not None and metrics.first_token is None:
                     metrics.first_token = time.perf_counter() - t0
                 yield tok
@@ -197,6 +216,12 @@ class StreamingPipeline:
     @property
     def _voice_choice(self) -> str | None:
         return self.options.voice if self.options else None
+
+    def _tool_specs(self) -> list[ToolSpec]:
+        """The tools the current persona may call this turn (empty unless it opts in)."""
+        if self.tools is None or not self.persona.tools:
+            return []
+        return self.tools.select(self.persona.tools)
 
     async def _safe_input_reply(self, user_text: str) -> str | None:
         """A safe canned reply when the input is flagged, else None (run the normal turn)."""

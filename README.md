@@ -31,6 +31,8 @@ that only captures and plays audio. All the models run on the server.
 - **Clone a voice** from a short (~10 s) sample and make a persona speak in it.
 - **Fine-tune a persona "brain"** with a LoRA adapter when prompting is not enough.
 - **Fine-tune a high-fidelity voice** for a target speaker, beyond a zero-shot clone.
+- **Call tools mid-conversation** — a persona can opt into function calls (e.g. checking the
+  clock) that run server-side before it answers, on a tool-capable LLM backend.
 - **Remember a user across sessions** — a consent-gated, per-user memory that recalls earlier
   facts in later calls.
 - **Run the same code on two very different machines** (a Mac for development, a CUDA GPU for
@@ -283,6 +285,37 @@ LIVEKIT_URL=ws://localhost:7880 LIVEKIT_API_KEY=devkey \
 `LIVEKIT_URL` is the address the **client** dials, so from a phone use the machine's LAN IP
 (`ws://192.168.x.y:7880`) and open UDP 7882. Use TLS (`wss://`) and a real key/secret in
 production.
+
+### Tool / function calling
+
+A persona can **call a tool mid-turn** instead of answering blind — the companion can check the
+wall clock, and the registry is the seam for a teacher's dictionary or an interviewer's question
+bank. A persona opts in by listing tool names in its YAML:
+
+```yaml
+# config/personas/companion.yaml
+tools:
+  - get_current_time
+```
+
+When a persona lists tools, the turn runs a bounded loop: the model is offered the tool schemas,
+and if it calls one the server executes it, feeds the result back, and lets the model answer.
+**Nothing is voiced during the tool round-trips** — TTS is deferred until the follow-up reply
+streams. A persona with no `tools:` is a pure conversationalist and is never sent any schema, so
+existing personas are unchanged.
+
+- **Backend support.** Routed on the OpenAI-compatible LLM backends (vLLM prod, LM Studio dev);
+  vLLM needs `--enable-auto-tool-choice --tool-call-parser <model-parser>`. Other backends
+  (Ollama, mlx-lm) ignore the schemas and just answer — the capability degrades gracefully.
+- **Bounds.** `PERSONAVOICE_TOOL_MAX_ITERS` (default 4) caps the model↔tool round-trips before a
+  plain answer is forced; `PERSONAVOICE_TOOL_TIMEOUT` (default 10 s) bounds each tool call. A
+  hallucinated tool, bad arguments, a timeout, or a handler error become a short error string fed
+  back to the model rather than failing the turn.
+- **Built-ins.** Only safe, side-effect-free, offline tools ship (`get_current_time`); anything
+  networked or side-effecting (weather, web search) must be added behind explicit gating. New
+  tools are registered in `orchestrator/tools.py`. `personavoice.server --check` lists the
+  registry and warns when a persona references an unknown tool or one the active backend can't
+  route.
 
 ### Flutter client (iOS + Android)
 
@@ -571,7 +604,7 @@ src/personavoice/
   persona/                   # loader, prompt builder, registry
   voice/                     # registry + zero-shot clones + fine-tuned voices
   server/                    # settings, config, --check/--serve/--token-server; tokens.py
-  orchestrator/              # turn-based pipeline + chunker/streaming/turn/agent/endpointing
+  orchestrator/              # turn-based pipeline + chunker/streaming/turn/agent/endpointing/tools
   training/                  # persona LoRA + voice/ fine-tuning: dataset/config/finetune/eval
   memory/                    # per-user store + profile + RAG + distill
   eval/                      # WER + MOS + dashboard gating

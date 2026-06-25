@@ -6,6 +6,7 @@ It includes the file-based turn pipeline plus the streaming `agent.py` / `turn.p
 from .chunker import SentenceAggregator, stream_sentences
 from .pipeline import Pipeline, TurnResult, voice_ref_for
 from .streaming import StreamingPipeline, StreamMetrics
+from .tools import ToolRegistry, ToolSpec, default_tool_registry
 from .turn import TurnController
 
 __all__ = [
@@ -13,8 +14,11 @@ __all__ = [
     "SentenceAggregator",
     "StreamMetrics",
     "StreamingPipeline",
+    "ToolRegistry",
+    "ToolSpec",
     "TurnController",
     "TurnResult",
+    "default_tool_registry",
     "stream_sentences",
     "voice_ref_for",
 ]

@@ -11,6 +11,7 @@ from dataclasses import dataclass, field
 from ..adapters.factory import Backend, build_backend
 from ..memory import MemoryStoreError
 from ..models import CheckResult, Persona
+from ..orchestrator.tools import ToolRegistry, default_tool_registry
 from ..voice.registry import VoiceRegistry
 from .config import (
     ConfigError,
@@ -32,6 +33,7 @@ class CheckReport:
     clone_assignments: dict[str, str] = field(default_factory=dict)
     finetuned: list[str] = field(default_factory=list)
     finetuned_assignments: dict[str, str] = field(default_factory=dict)
+    tools: list[str] = field(default_factory=list)
     memory_dir: str = ""
     memory_encrypted: bool = False
     memory_users: int = 0
@@ -67,6 +69,29 @@ def _validate_personas(
             warnings.append(
                 f"persona {persona.id!r} voice {ref!r} has no {tts!r} preset and {tts!r} "
                 f"can't clone — it will use the default voice (won't sound distinct)"
+            )
+    return warnings
+
+
+def _validate_tools(
+    personas: dict[str, Persona], registry: ToolRegistry, backend: Backend
+) -> list[str]:
+    """Cross-check personas' declared tools against the registry + backend (warnings only)."""
+    warnings: list[str] = []
+    for persona in personas.values():
+        unknown = registry.unknown(persona.tools)
+        if unknown:
+            warnings.append(
+                f"persona {persona.id!r} references unknown tool(s) {', '.join(unknown)!r} — "
+                f"not in the tool registry ({', '.join(registry.names()) or 'empty'}); they are "
+                "skipped at call time"
+            )
+        # A persona wants tools but the active LLM backend can't route function calls: it will
+        # answer without ever calling them (graceful, but the capability is silently inert).
+        if persona.tools and not getattr(backend.llm, "supports_tools", False):
+            warnings.append(
+                f"persona {persona.id!r} declares tools but the active LLM {backend.llm.name!r} "
+                "can't route function calls — it will answer without tools"
             )
     return warnings
 
@@ -134,6 +159,12 @@ def run_check(settings: Settings) -> CheckReport:
             f"{n} cloned/fine-tuned voice(s) present but the active TTS {backend.tts.name!r} "
             "can't speak them — switch to a cloning backend (chatterbox on CUDA)"
         )
+
+    # 3b. Tools (Feature D). Surface the registered tools and flag personas whose declared
+    # tools are unknown or can't be routed on the active LLM backend.
+    tool_registry = default_tool_registry()
+    report.tools = tool_registry.names()
+    report.warnings.extend(_validate_tools(personas, tool_registry, backend))
 
     # 4. Memory. Surfaces the store location, at-rest encryption, and #users so a
     # misconfigured PERSONAVOICE_MEMORY_KEY (cryptography missing / bad key) fails the check.

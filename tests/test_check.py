@@ -65,6 +65,64 @@ def test_check_warns_when_clones_present_but_tts_cannot_speak_them(tmp_path) -> 
     assert any("can't speak them" in w for w in report.warnings)
 
 
+def test_check_lists_tools_and_companion_tool_routes(settings: Settings) -> None:
+    # The default config: the registry is reported and the companion's get_current_time is known
+    # and routable on the OpenAI-compatible backends — so no tool warnings.
+    report = run_check(settings)
+    assert report.tools == ["get_current_time"]
+    assert not any("tool" in w.lower() for w in report.warnings)
+
+
+def test_check_warns_on_unknown_persona_tool(tmp_path) -> None:  # type: ignore[no-untyped-def]
+    backends = tmp_path / "backends"
+    backends.mkdir()
+    (backends / "mac.yaml").write_text(
+        "backend: mac\n"
+        "stt: {adapter: whisper_mlx}\n"
+        "llm: {adapter: lmstudio}\n"  # supports tools, so only the unknown-tool warning fires
+        "tts: {adapter: kokoro}\n"
+    )
+    personas = tmp_path / "personas"
+    personas.mkdir()
+    (personas / "toolpersona.yaml").write_text(
+        "id: toolpersona\n"
+        "name: Tool Persona\n"
+        "system_prompt: hi\n"
+        "llm: {base_model: m}\n"
+        "voice: {ref: voices/x}\n"
+        "tools: [ghost]\n"
+    )
+    settings = Settings(backend="mac", config_dir=tmp_path, models_dir=tmp_path / "models")
+
+    report = run_check(settings)
+    assert any("unknown tool" in w and "ghost" in w for w in report.warnings)
+
+
+def test_check_warns_when_backend_cannot_route_tools(tmp_path) -> None:  # type: ignore[no-untyped-def]
+    backends = tmp_path / "backends"
+    backends.mkdir()
+    (backends / "mac.yaml").write_text(
+        "backend: mac\n"
+        "stt: {adapter: whisper_mlx}\n"
+        "llm: {adapter: ollama}\n"  # can't route function calls
+        "tts: {adapter: kokoro}\n"
+    )
+    personas = tmp_path / "personas"
+    personas.mkdir()
+    (personas / "toolpersona.yaml").write_text(
+        "id: toolpersona\n"
+        "name: Tool Persona\n"
+        "system_prompt: hi\n"
+        "llm: {base_model: m}\n"
+        "voice: {ref: voices/x}\n"
+        "tools: [get_current_time]\n"  # a real tool, but the backend can't route it
+    )
+    settings = Settings(backend="mac", config_dir=tmp_path, models_dir=tmp_path / "models")
+
+    report = run_check(settings)
+    assert any("can't route function calls" in w for w in report.warnings)
+
+
 def test_check_warns_on_backend_mismatch(tmp_path) -> None:
     backends = tmp_path / "backends"
     backends.mkdir()

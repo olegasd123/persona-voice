@@ -37,6 +37,7 @@ from ..server.config import (
 )
 from .demo import add_session_option_args, session_options_from_args
 from .streaming import StreamingPipeline, StreamMetrics
+from .tools import default_tool_registry
 
 
 def _resolve_persona(settings: Settings, ref: str) -> Persona:
@@ -107,6 +108,7 @@ async def _run(
         load_voice_registry(settings),
         options=options,
         moderator=moderator_from_env(),
+        tools=default_tool_registry(),
         memory=memory,
         user_id=user_id,
     )

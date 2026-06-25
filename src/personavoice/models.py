@@ -132,6 +132,11 @@ class Persona(BaseModel):
     voice: VoiceSettings
     behavior: BehaviorSettings = BehaviorSettings()
     memory: MemorySettings = MemorySettings()
+    # Tool / function calling (Feature D): names of registry tools this persona may call. Empty
+    # (the default) = a pure conversationalist — the LLM is never sent any tool schema, so an
+    # unchanged persona is unaffected. Names resolve against the active tool registry at call
+    # time; an unknown name is skipped with a warning (see `orchestrator/tools.ToolRegistry`).
+    tools: list[str] = Field(default_factory=list)
     # Per-session option defaults baked into the persona (custom personas set these via N3's
     # authoring routes). The agent layers an explicit `SessionOptions` over these; an unset
     # field falls through to the persona's authored behavior. Empty for the curated personas.
