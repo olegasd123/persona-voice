@@ -9,6 +9,7 @@ from dataclasses import dataclass
 from personavoice.obs import (
     TRACE,
     JsonFormatter,
+    PlainFormatter,
     TurnMetrics,
     configure_logging,
     log_level_from_env,
@@ -42,6 +43,30 @@ def test_log_level_from_env() -> None:
     assert log_level_from_env({"PERSONAVOICE_LOG_LEVEL": "DEBUG"}) == logging.DEBUG
     assert log_level_from_env({"PERSONAVOICE_LOG_LEVEL": "nonsense"}) == logging.INFO
     assert log_level_from_env({}) == logging.INFO
+
+
+def _trace_record(msg: str) -> logging.LogRecord:
+    return logging.makeLogRecord(
+        {"name": "personavoice.llm", "levelno": TRACE, "levelname": "TRACE", "msg": msg}
+    )
+
+
+def test_plain_formatter_tints_trace_gray_when_color_on() -> None:
+    out = PlainFormatter(color=True).format(_trace_record("LLM request →"))
+    assert out.startswith("\x1b[90m") and out.endswith("\x1b[0m")
+    assert "LLM request →" in out
+
+
+def test_plain_formatter_leaves_info_uncolored() -> None:
+    # Only TRACE (the LLM dump) is tinted; ordinary records stay plain even with color on.
+    out = PlainFormatter(color=True).format(_record("started up"))
+    assert "\x1b[" not in out
+
+
+def test_plain_formatter_no_color_when_disabled() -> None:
+    # color=False (e.g. piped/redirected output) emits no escape codes at all.
+    out = PlainFormatter(color=False).format(_trace_record("LLM request →"))
+    assert "\x1b[" not in out
 
 
 def test_trace_level_sits_between_debug_and_info() -> None:
