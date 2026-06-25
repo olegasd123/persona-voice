@@ -65,6 +65,26 @@ def _emit_trace(label: str, body: str) -> None:
     logger.log(TRACE, "LLM %s\n%s", label, body)
 
 
+async def _raise_for_status(resp: Any) -> None:
+    """`raise_for_status`, but include the response body in the error.
+
+    On a *streaming* response the body isn't read yet, so httpx's own `raise_for_status` reports
+    only the status line — hiding the server's actual complaint (e.g. vLLM's 400 "auto tool choice
+    requires --enable-auto-tool-choice and --tool-call-parser to be set"). Read the body first and
+    fold it into the message so a 4xx/5xx is debuggable straight from the worker log.
+    """
+    if resp.is_success:
+        return
+    import httpx
+
+    body = (await resp.aread()).decode(errors="replace").strip()
+    try:
+        resp.raise_for_status()
+    except httpx.HTTPStatusError as exc:
+        msg = f"{exc}\nResponse body: {body}" if body else str(exc)
+        raise httpx.HTTPStatusError(msg, request=exc.request, response=exc.response) from None
+
+
 def chat_url(base_url: str) -> str:
     return f"{base_url.rstrip('/')}/chat/completions"
 
@@ -348,7 +368,7 @@ class OpenAICompatLLM(LLMAdapter):
             httpx.AsyncClient(timeout=timeout) as client,
             client.stream("POST", chat_url(base_url), json=payload) as resp,
         ):
-            resp.raise_for_status()
+            await _raise_for_status(resp)
             async for line in resp.aiter_lines():
                 token = token_from_sse_line(line)
                 if token:
@@ -411,7 +431,7 @@ class OpenAICompatLLM(LLMAdapter):
                 spoke = False
                 reply: list[str] = []
                 async with client.stream("POST", chat_url(base_url), json=payload) as resp:
-                    resp.raise_for_status()
+                    await _raise_for_status(resp)
                     async for line in resp.aiter_lines():
                         delta = parse_stream_delta(line)
                         if delta is None:
@@ -450,7 +470,7 @@ class OpenAICompatLLM(LLMAdapter):
                 _emit_trace("request → (tool loop final, no tools)", _trace_json(final))
             reply = []
             async with client.stream("POST", chat_url(base_url), json=final) as resp:
-                resp.raise_for_status()
+                await _raise_for_status(resp)
                 async for line in resp.aiter_lines():
                     token = token_from_sse_line(line)
                     if token:

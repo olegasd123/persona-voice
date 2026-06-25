@@ -305,7 +305,8 @@ streams. A persona with no `tools:` is a pure conversationalist and is never sen
 existing personas are unchanged.
 
 - **Backend support.** Routed on the OpenAI-compatible LLM backends (vLLM prod, LM Studio dev);
-  vLLM needs `--enable-auto-tool-choice --tool-call-parser <model-parser>`. Other backends
+  vLLM needs `--enable-auto-tool-choice --tool-call-parser <model-parser>` — the compose file
+  already passes these (`hermes` for Qwen2.5, overridable via `VLLM_TOOL_PARSER`). Other backends
   (Ollama, mlx-lm) ignore the schemas and just answer — the capability degrades gracefully.
 - **Bounds.** `PERSONAVOICE_TOOL_MAX_ITERS` (default 4) caps the model↔tool round-trips before a
   plain answer is forced; `PERSONAVOICE_TOOL_TIMEOUT` (default 10 s) bounds each tool call. A

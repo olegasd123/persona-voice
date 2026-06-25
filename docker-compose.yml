@@ -27,6 +27,11 @@ services:
       - --max-model-len=${VLLM_MAX_LEN:-8192}
       - --gpu-memory-utilization=${VLLM_GPU_UTIL:-0.45}   # leave room for STT + TTS on the card
       - --port=8000
+      # Tool / function calling (Feature D): a persona with a `tools:` field sends tool schemas,
+      # and tool_choice defaults to "auto" — which vLLM rejects with a 400 unless these are set.
+      # `hermes` is the parser for Qwen2.5's Hermes-style tool-call format; override per model.
+      - --enable-auto-tool-choice
+      - --tool-call-parser=${VLLM_TOOL_PARSER:-hermes}
     ports:
       - "8000:8000"
     volumes:
