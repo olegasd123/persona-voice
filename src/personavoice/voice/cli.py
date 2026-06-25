@@ -63,8 +63,6 @@ async def _clone(settings: Settings, store: ClonesStore, args: argparse.Namespac
 
     print(f"\ncloned '{voice.name}'  (backend={voice.backend})")
     print(f"  sample : {voice.sample_path}")
-    if voice.ref_text:
-        print(f"  ref_text: {voice.ref_text!r}")
     if args.assign:
         print(f"  assigned to persona: {args.assign}")
 

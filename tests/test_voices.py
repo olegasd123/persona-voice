@@ -117,7 +117,7 @@ def test_unknown_field_rejected(tmp_path: Path) -> None:
 def _registry_with_stores(tmp_path: Path) -> VoiceRegistry:
     """A registry with one preset, one clone, and one fine-tuned voice for catalog tests."""
     clones = ClonesStore(tmp_path / "clones")
-    clones.record(ClonedVoice(name="my_clone", sample_path="s.wav", ref_text="hello"))
+    clones.record(ClonedVoice(name="my_clone", sample_path="s.wav"))
     finetuned = FinetunedVoicesStore(tmp_path / "ft")
     finetuned.record(FinetunedVoice(name="my_ft", checkpoint_path="ckpt"))
     voices = {"companion_soft": VoiceDef(description="warm", presets={"kokoro": "af_heart"})}

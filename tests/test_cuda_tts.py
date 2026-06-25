@@ -4,7 +4,12 @@ from __future__ import annotations
 
 import pytest
 
-from personavoice.adapters.tts.chatterbox import ChatterboxTTS, _waveform_to_wav
+from personavoice.adapters.tts.chatterbox import (
+    _DEFAULT_EXAGGERATION,
+    ChatterboxTTS,
+    _resolve_exaggeration,
+    _waveform_to_wav,
+)
 
 
 def test_chatterbox_flags() -> None:
@@ -12,6 +17,23 @@ def test_chatterbox_flags() -> None:
     assert adapter.name == "chatterbox"
     assert adapter.implemented is True
     assert adapter.supports_cloning is True
+
+
+def test_resolve_exaggeration_maps_emotion_words() -> None:
+    # Known descriptive words map to their configured intensity; case/space-insensitive.
+    assert _resolve_exaggeration("neutral", _DEFAULT_EXAGGERATION) == 0.5
+    assert _resolve_exaggeration("  Excited ", _DEFAULT_EXAGGERATION) == 0.8
+
+
+def test_resolve_exaggeration_accepts_literal_number_and_clamps() -> None:
+    assert _resolve_exaggeration("0.7", _DEFAULT_EXAGGERATION) == 0.7
+    assert _resolve_exaggeration("9.0", _DEFAULT_EXAGGERATION) == 2.0  # clamped to range max
+
+
+def test_resolve_exaggeration_falls_back_to_default() -> None:
+    # None and unknown words both fall back to the supplied default, never raise.
+    assert _resolve_exaggeration(None, 0.55) == 0.55
+    assert _resolve_exaggeration("sproingy", 0.55) == 0.55
 
 
 def test_waveform_to_wav_flattens_2d() -> None:

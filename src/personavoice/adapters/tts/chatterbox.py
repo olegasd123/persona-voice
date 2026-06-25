@@ -6,7 +6,8 @@ float waveform tensor at the model's native sample rate (`model.sr`, 24 kHz). Cl
 zero-shot cloning: when the voice carries a reference sample, we pass it as
 `audio_prompt_path` so Chatterbox speaks in that voice. Fine-tuned voices add another path: when the
 voice carries a `model_path`, we load that trained checkpoint (`from_local`) instead of the
-base weights. `chatterbox` is imported lazily; models are built once and cached per
+base weights. `VoiceRef.emotion` drives Chatterbox's `exaggeration` knob (0.5 = neutral,
+higher = more emotive). `chatterbox` is imported lazily; models are built once and cached per
 checkpoint (the base under the `None` key).
 """
 
@@ -19,6 +20,40 @@ from ...models import VoiceRef
 from .base import TTSAdapter
 
 _DEFAULT_SAMPLE_RATE = 24000
+# Chatterbox's `exaggeration` controls emotional intensity: 0.5 is neutral, higher is more
+# expressive. It's the default when a voice has no `emotion`.
+_DEFAULT_EXAGGERATION = 0.5
+# Chatterbox accepts roughly this range; clamp so a stray value never destabilizes synthesis.
+_EXAGGERATION_RANGE = (0.25, 2.0)
+# Map the descriptive `emotion` strings personas/voices use to an exaggeration level. A bare
+# number ("0.7") is taken literally instead; an unknown word falls back to the default.
+_EMOTION_EXAGGERATION: dict[str, float] = {
+    "calm": 0.4,
+    "neutral": 0.5,
+    "neutral-warm": 0.55,
+    "warm": 0.6,
+    "friendly": 0.6,
+    "kind": 0.6,
+    "expressive": 0.75,
+    "excited": 0.8,
+}
+
+
+def _resolve_exaggeration(emotion: str | None, default: float) -> float:
+    """Turn a `VoiceRef.emotion` string into Chatterbox's `exaggeration` float.
+
+    Accepts a literal number ("0.7"), a known descriptive word (see `_EMOTION_EXAGGERATION`),
+    or falls back to `default`; the result is clamped to `_EXAGGERATION_RANGE`.
+    """
+    if not emotion:
+        return default
+    key = emotion.strip().lower()
+    try:
+        value = float(key)
+    except ValueError:
+        value = _EMOTION_EXAGGERATION.get(key, default)
+    lo, hi = _EXAGGERATION_RANGE
+    return max(lo, min(hi, value))
 
 
 def _waveform_to_wav(waveform: Any, sample_rate: int) -> bytes:
@@ -45,7 +80,7 @@ class ChatterboxTTS(TTSAdapter):
 
     async def synthesize(self, text: str, voice: VoiceRef) -> bytes:
         waveform, sample_rate = await asyncio.to_thread(
-            self._synthesize_array, text, voice.sample_path, voice.model_path
+            self._synthesize_array, text, voice.sample_path, voice.model_path, voice.emotion
         )
         return _waveform_to_wav(waveform, sample_rate)
 
@@ -67,14 +102,23 @@ class ChatterboxTTS(TTSAdapter):
         return self._models[model_path]
 
     def _synthesize_array(
-        self, text: str, sample_path: str | None = None, model_path: str | None = None
+        self,
+        text: str,
+        sample_path: str | None = None,
+        model_path: str | None = None,
+        emotion: str | None = None,
     ) -> tuple[Any, int]:
         model = self._get_model(model_path)
+        exaggeration = _resolve_exaggeration(
+            emotion, self.options.get("exaggeration", _DEFAULT_EXAGGERATION)
+        )
         # A reference sample → clone that voice; otherwise Chatterbox's built-in default.
         if sample_path:
-            waveform = model.generate(text, audio_prompt_path=sample_path)  # type: ignore[attr-defined]
+            waveform = model.generate(  # type: ignore[attr-defined]
+                text, audio_prompt_path=sample_path, exaggeration=exaggeration
+            )
         else:
-            waveform = model.generate(text)  # type: ignore[attr-defined]
+            waveform = model.generate(text, exaggeration=exaggeration)  # type: ignore[attr-defined]
         default_sr = self.options.get("sample_rate", _DEFAULT_SAMPLE_RATE)
         sample_rate = int(getattr(model, "sr", default_sr))
         return waveform, sample_rate

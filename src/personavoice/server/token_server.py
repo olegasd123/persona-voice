@@ -454,15 +454,14 @@ class TokenService:
         }
 
     async def enroll_voice(
-        self, *, audio: bytes, name: str, ref_text: str | None = None, authorized: bool = False
+        self, *, audio: bytes, name: str, authorized: bool = False
     ) -> dict[str, Any]:
         """Clone a voice from an uploaded sample and add it to the library.
 
         Gated like the rest of the server (auth at the HTTP layer). Requires a cloning backend
         and an explicit `authorized` acknowledgement (the caller affirms they may use the
         voice). Validates the sample, enforces the per-deployment quota, then runs the cascade
-        cloner (which transcribes the reference text for reference-text backends and persists
-        the clone). Returns the new voice's catalog entry.
+        cloner (which persists the clone). Returns the new voice's catalog entry.
         """
         if not self._supports_cloning or self._cloner_factory is None:
             raise BadRequest(
@@ -484,7 +483,7 @@ class TokenService:
             raise BadRequest(f"clone quota reached ({self._max_clones}); delete a voice first")
         cloner = self._cloner_factory()
         try:
-            await cloner.clone(audio, name, ref_text=ref_text)
+            await cloner.clone(audio, name)
         except CloneError as exc:
             raise BadRequest(str(exc)) from exc
         emotion = None
@@ -885,7 +884,7 @@ def _make_handler(
                 self._send_json(500, {"error": f"internal error: {exc}"})
 
         def _handle_clone(self, query: dict[str, str]) -> None:
-            """POST /voices/clone: raw wav body + `name`/`text`/`authorized` query params.
+            """POST /voices/clone: raw wav body + `name`/`authorized` query params.
 
             The sample rides as the raw request body (Content-Type audio/wav) rather than
             multipart — zero-dependency and stdlib-only (Python 3.13 dropped `cgi`). Cloning
@@ -896,7 +895,6 @@ def _make_handler(
                 service.enroll_voice(
                     audio=audio,
                     name=query.get("name", ""),
-                    ref_text=query.get("text") or None,
                     authorized=_as_bool(query.get("authorized")),
                 )
             )

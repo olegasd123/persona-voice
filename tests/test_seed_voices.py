@@ -134,12 +134,13 @@ async def test_enroller_cloning_backend_uses_cloner(tmp_path: Path) -> None:
     pytest.importorskip("numpy")
     pytest.importorskip("soundfile")
     store = ClonesStore(tmp_path / "clones")
-    backend = dataclasses.replace(make_backend(stt_text="my voice"), tts=CloningTTS())
+    backend = dataclasses.replace(make_backend(), tts=CloningTTS())
     enroll = make_enroller(backend, store, supports_cloning=True)
     await enroll("Feminine", _wav(5.0))
-    # The full cloner path persisted the clone with a reference transcript.
+    # The full cloner path persisted the clone (sample + provenance).
     cv = store.get("Feminine")
-    assert cv is not None and cv.ref_text == "my voice"
+    assert cv is not None and cv.sample_path
+    assert cv.backend == "chatterbox"
 
 
 async def test_enroller_preset_only_records_catalog_entry(tmp_path: Path) -> None:

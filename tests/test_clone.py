@@ -125,16 +125,13 @@ def test_store_record_assign_and_reload(tmp_path: Path) -> None:
     assert reloaded.assignments == {"companion": "my_voice"}
 
 
-def test_store_voice_ref_carries_sample_and_ref_text(tmp_path: Path) -> None:
+def test_store_voice_ref_carries_sample(tmp_path: Path) -> None:
     store = ClonesStore.load(tmp_path)
-    store.record(
-        ClonedVoice(name="v", sample_path="/s/v.wav", ref_text="hello", backend="chatterbox")
-    )
+    store.record(ClonedVoice(name="v", sample_path="/s/v.wav", backend="chatterbox"))
     ref = store.voice_ref("v", "chatterbox", emotion="warm")
     assert ref is not None
     assert ref.id == "v"
     assert ref.sample_path == "/s/v.wav"
-    assert ref.ref_text == "hello"
     assert ref.emotion == "warm"
     assert ref.backend == "chatterbox"
 
@@ -191,7 +188,7 @@ async def test_base_clone_voice_rejected_when_not_supported() -> None:
 
 async def test_cloner_clones_records_and_assigns(tmp_path: Path) -> None:
     store = ClonesStore.load(tmp_path)
-    cloner = VoiceCloner(_cloning_backend(stt_text="this is my voice"), store)
+    cloner = VoiceCloner(_cloning_backend(), store)
 
     # Skip audio-decode validation: the fake sample isn't a real wav.
     voice = await cloner.clone(
@@ -199,10 +196,9 @@ async def test_cloner_clones_records_and_assigns(tmp_path: Path) -> None:
     )
 
     assert voice.sample_path == str(tmp_path / "my_voice.wav")
-    assert voice.ref_text == "this is my voice"  # filled by the cascade's STT
     # Recorded + assigned, and it survives a reload.
     reloaded = ClonesStore.load(tmp_path)
-    assert reloaded.get("my_voice").ref_text == "this is my voice"
+    assert reloaded.get("my_voice").sample_path == str(tmp_path / "my_voice.wav")
     assert reloaded.assignment_for("companion") == "my_voice"
 
 
@@ -219,12 +215,6 @@ async def test_cloner_rejects_bad_name(tmp_path: Path) -> None:
         await cloner.clone(b"x", "bad name!", min_seconds=None, max_seconds=None)
 
 
-async def test_cloner_explicit_ref_text_skips_transcription(tmp_path: Path) -> None:
-    cloner = VoiceCloner(_cloning_backend(stt_text="WRONG"), ClonesStore.load(tmp_path))
-    voice = await cloner.clone(b"x", "v", ref_text="given text", min_seconds=None, max_seconds=None)
-    assert voice.ref_text == "given text"
-
-
 # --------------------------------------------------------------------------------------
 # Registry / pipeline resolution
 # --------------------------------------------------------------------------------------
@@ -232,7 +222,7 @@ async def test_cloner_explicit_ref_text_skips_transcription(tmp_path: Path) -> N
 
 def _assigned_registry(config_dir: Path, tmp_path: Path) -> VoiceRegistry:
     store = ClonesStore.load(tmp_path)
-    store.record(ClonedVoice(name="my_voice", sample_path="/s/my_voice.wav", ref_text="hi"))
+    store.record(ClonedVoice(name="my_voice", sample_path="/s/my_voice.wav"))
     store.assign("companion", "my_voice")
     return VoiceRegistry.load(config_dir / "voices.yaml", clones=store)
 
@@ -242,7 +232,6 @@ def test_assigned_clone_wins_on_cloning_backend(config_dir: Path, tmp_path: Path
     companion = load_personas(config_dir / "personas")["companion"]
     ref = registry.resolve_for_persona(companion, "chatterbox", supports_cloning=True)
     assert ref.sample_path == "/s/my_voice.wav"
-    assert ref.ref_text == "hi"
     assert ref.emotion == companion.voice.emotion  # carried from the persona
 
 

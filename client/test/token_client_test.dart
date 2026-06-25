@@ -417,7 +417,7 @@ void main() {
     expect(catalog.unavailable.single.reason, 'needs a cloning backend');
   });
 
-  test('cloneVoice posts the raw wav body with name/text/authorized query params', () async {
+  test('cloneVoice posts the raw wav body with name/authorized query params', () async {
     final sample = Uint8List.fromList([82, 73, 70, 70, 1, 2, 3, 4]); // "RIFF"…
     late http.Request seen;
     final mock = MockClient((req) async {
@@ -428,11 +428,11 @@ void main() {
       );
     });
     final option = await TokenClient(_settings(), httpClient: mock)
-        .cloneVoice('my_voice', sample, refText: 'hello there', authorized: true);
+        .cloneVoice('my_voice', sample, authorized: true);
     expect(seen.method, 'POST');
     expect(seen.url.path, '/voices/clone');
     expect(seen.url.queryParameters['name'], 'my_voice');
-    expect(seen.url.queryParameters['text'], 'hello there');
+    expect(seen.url.queryParameters.containsKey('text'), isFalse);
     expect(seen.url.queryParameters['authorized'], 'true');
     expect(seen.bodyBytes, sample);
     expect(_contentType(seen), 'audio/wav');

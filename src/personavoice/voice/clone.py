@@ -2,15 +2,14 @@
 
 Cloning here is **reference conditioning**, not training: the cloning TTS backend
 synthesizes *in the voice of* a short reference WAV passed at generation time. So a "clone"
-is just a stored ~10 s sample plus its transcript. The pieces:
+is just a stored ~10 s sample. The pieces:
 
 - `validate_sample` — decode the WAV and bound its duration (clear-speech sanity check).
-- `ClonesStore` — persists clones (sample path + transcript + provenance) and **per-persona
+- `ClonesStore` — persists clones (sample path + provenance) and **per-persona
   assignments** to `<clones_dir>/clones.json`, so a clone survives a restart and the live
   agent picks it up automatically (`VoiceRegistry.resolve_for_persona`).
 - `VoiceCloner` — orchestrates one clone: validate → `TTSAdapter.clone_voice` (persist the
-  sample, get a `VoiceRef`) → transcribe the sample with the cascade's STT for the reference
-  text → record in the store (and optionally assign to a persona).
+  sample, get a `VoiceRef`) → record in the store (and optionally assign to a persona).
 
 The store is intentionally decoupled from the persona/voices YAML: assigning a clone never
 rewrites a hand-authored config file; it's a non-destructive overlay consulted at resolve
@@ -21,7 +20,6 @@ registry preset).
 from __future__ import annotations
 
 import json
-import logging
 import re
 from datetime import UTC, datetime
 from pathlib import Path
@@ -34,8 +32,6 @@ from ..models import VoiceRef
 if TYPE_CHECKING:
     import numpy as np  # annotations only; the runtime import is lazy inside functions
 
-logger = logging.getLogger("personavoice.clone")
-
 _MANIFEST_NAME = "clones.json"
 # A clone name (and persona id) is a bare identifier — keeps it usable as a filename and a
 # `voices/<name>` ref without escaping.
@@ -47,8 +43,7 @@ _MIN_SECONDS = 2.0
 _MAX_SECONDS = 60.0
 
 # Cap the *stored* reference length. A clean ~5 s clip is the sweet spot for Chatterbox
-# conditioning; longer can even hurt. Transcription runs on the trimmed bytes, so `ref_text`
-# stays consistent. None disables trimming.
+# conditioning; longer can even hurt. None disables trimming.
 _TRIM_REF_SECONDS = 5.0
 
 
@@ -161,7 +156,6 @@ class ClonedVoice(BaseModel):
 
     name: str
     sample_path: str
-    ref_text: str | None = None  # transcript of the sample (reference-text backends)
     backend: str | None = None  # which TTS produced it (provenance; samples are portable)
     created_at: str | None = None
 
@@ -250,7 +244,6 @@ class ClonesStore:
             id=cv.name,
             name=cv.name,
             sample_path=cv.sample_path or None,
-            ref_text=cv.ref_text,
             emotion=emotion,
             backend=tts_name,
         )
@@ -298,8 +291,6 @@ class VoiceCloner:
         sample_wav: bytes,
         name: str,
         *,
-        ref_text: str | None = None,
-        transcribe: bool = True,
         assign_to: str | None = None,
         min_seconds: float | None = _MIN_SECONDS,
         max_seconds: float | None = _MAX_SECONDS,
@@ -308,9 +299,8 @@ class VoiceCloner:
         """Clone `sample_wav` as `name`, persist it, and optionally assign it to a persona.
 
         Validates the sample, caps its length (`trim_ref_seconds`, for responsiveness — see
-        `_TRIM_REF_SECONDS`), asks the TTS backend to persist it and produce a `VoiceRef`, fills
-        the reference transcript (given, or transcribed via the cascade's STT for reference-text
-        backends), records the clone, and assigns it when `assign_to` is set.
+        `_TRIM_REF_SECONDS`), asks the TTS backend to persist it and produce a `VoiceRef`,
+        records the clone, and assigns it when `assign_to` is set.
         """
         if not name or not _NAME_RE.fullmatch(name):
             raise CloneError(f"invalid clone name {name!r}; use letters, digits, '-' or '_' only")
@@ -322,7 +312,6 @@ class VoiceCloner:
             )
         if min_seconds is not None or max_seconds is not None:
             validate_sample(sample_wav, min_seconds=min_seconds, max_seconds=max_seconds)
-        # Trim before persisting *and* transcribing, so the stored clip and its ref_text agree.
         if trim_ref_seconds is not None:
             sample_wav = trim_wav(sample_wav, trim_ref_seconds)
 
@@ -330,16 +319,10 @@ class VoiceCloner:
         tts.options["clones_dir"] = str(self._store.dir)
         voice = await tts.clone_voice(sample_wav, name)
 
-        if ref_text is None and transcribe:
-            ref_text = await self._transcribe(sample_wav)
-        if ref_text and not voice.ref_text:
-            voice = voice.model_copy(update={"ref_text": ref_text})
-
         self._store.record(
             ClonedVoice(
                 name=name,
                 sample_path=voice.sample_path or "",
-                ref_text=voice.ref_text,
                 backend=getattr(tts, "name", None),
                 created_at=datetime.now(UTC).isoformat(timespec="seconds"),
             )
@@ -347,12 +330,3 @@ class VoiceCloner:
         if assign_to:
             self._store.assign(assign_to, name)
         return voice
-
-    async def _transcribe(self, sample_wav: bytes) -> str | None:
-        """Best-effort transcript of the sample (a clone still works without one)."""
-        try:
-            transcript = await self._backend.stt.transcribe(sample_wav)  # type: ignore[attr-defined]
-        except Exception as exc:  # STT is optional for cloning; don't fail the clone
-            logger.warning("could not transcribe clone sample for reference text: %s", exc)
-            return None
-        return transcript.text.strip() or None

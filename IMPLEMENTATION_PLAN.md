@@ -269,8 +269,8 @@ Ship two ready clones so N1/N2 demo with real voices on first run.
 - Source: `assets/seed_voices/{Feminine,Masculine}.wav` (44.1 kHz stereo — fine; the codec mixes
   to mono + resamples).
 - A `make seed-voices` / `scripts/seed_voices.py` that enrolls them through the **same path** a
-  client upload uses (`VoiceCloner` → `ClonesStore.record`), names clones after the wav stem,
-  auto-transcribing `ref_text` via the active STT. **Idempotent** (skip if present).
+  client upload uses (`VoiceCloner` → `ClonesStore.record`), names clones after the wav stem.
+  **Idempotent** (skip if present).
 - Runs against the **active cloning backend** (chatterbox); on a preset-only backend they
   enroll but list `available=false`. Multi-user: seed under a shared/global namespace visible to
   all users.
@@ -477,14 +477,12 @@ New routes on the token/HTTP server (auth-gated by the existing `PERSONAVOICE_AP
 | Route | Body / params | Action |
 |-------|---------------|--------|
 | `GET /voices` | `?backend=` (optional) | return `catalog(...)` for the active backend |
-| `POST /voices/clone` | multipart: `audio` (wav ~10 s) + `name` + optional `text` | `validate_sample` → store under clones dir → auto-transcribe `ref_text` via STT → `ClonesStore.record` + `save` → return the new `VoiceOption` |
+| `POST /voices/clone` | `audio` (wav ~10 s, raw body) + `name` | `validate_sample` → store under clones dir → `ClonesStore.record` + `save` → return the new `VoiceOption` |
 | `DELETE /voices/clone/{name}` | — | remove from store + save |
 
 Notes / constraints:
 - **Validation:** reuse `validate_sample` (duration / format checks already in `clone.py`); cap
   upload size and clamp the number of clones per deployment (abuse surface).
-- **Reference text:** the server already has an STT in the active backend — transcribe on enroll
-  and store as `ClonedVoice.ref_text` (mirrors what the cascade does on the CLI path).
 - **Persistence:** clones land in `PERSONAVOICE_CLONES_DIR` with the `clones.json` manifest, so the
   live agent picks them up at startup (already true) and across restarts.
 

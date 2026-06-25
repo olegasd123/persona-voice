@@ -229,7 +229,7 @@ personavoice --token-server          # HTTP on PERSONAVOICE_HOST:PERSONAVOICE_PO
 | `GET /loras` | served LoRA adapters for a custom persona's `llm.lora` (`{"loras": [...], "supports_lora"}`) |
 | `GET /voices` | selectable voice catalog for the active backend (`{"voices": [...], "supports_cloning"}`) |
 | `POST /token` | body `{"room"?, "identity"?, "name"?, "persona"?, "voice"?, "cefr"?, "demeanor"?, "user"?}` → `{"url","token","room","identity","name","persona","voice","cefr","demeanor","user"}` |
-| `POST /voices/clone` | `?name=&text=&authorized=1` + the wav as the raw body → enroll a clone |
+| `POST /voices/clone` | `?name=&authorized=1` + the wav as the raw body → enroll a clone |
 | `DELETE /voices/clone/{name}` | remove a cloned voice |
 
 `room`/`identity` are generated when omitted. `identity` is the unique LiveKit participant id

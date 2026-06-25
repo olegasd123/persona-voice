@@ -63,10 +63,8 @@ class _FakeCloner:
     def __init__(self, store: ClonesStore) -> None:
         self._store = store
 
-    async def clone(self, audio: bytes, name: str, *, ref_text: str | None = None) -> VoiceRef:
-        self._store.record(
-            ClonedVoice(name=name, sample_path=f"{name}.wav", ref_text=ref_text or "hi")
-        )
+    async def clone(self, audio: bytes, name: str) -> VoiceRef:
+        self._store.record(ClonedVoice(name=name, sample_path=f"{name}.wav"))
         return VoiceRef(id=name, name=name, sample_path=f"{name}.wav")
 
 

@@ -137,17 +137,14 @@ class TokenClient {
 
   /// Enroll a clone from a wav [sample] under [name] (`POST /voices/clone`). The sample rides
   /// as the raw request body (the server is multipart-free); [authorized] affirms the caller
-  /// may use the voice and [refText] is an optional transcript (auto-transcribed otherwise).
-  /// Returns the new voice's catalog entry.
+  /// may use the voice. Returns the new voice's catalog entry.
   Future<VoiceOption> cloneVoice(
     String name,
     Uint8List sample, {
-    String? refText,
     required bool authorized,
   }) async {
     final uri = _uri('/voices/clone').replace(queryParameters: {
       'name': name.trim(),
-      if (refText != null && refText.trim().isNotEmpty) 'text': refText.trim(),
       'authorized': authorized.toString(),
     });
     final resp = await _http.post(
