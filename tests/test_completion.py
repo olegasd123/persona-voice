@@ -72,6 +72,25 @@ def test_single_dot_is_terminal_but_double_is_ellipsis() -> None:
     assert is_complete("hold on..") is False  # two+ dots = trailing off
 
 
+@pytest.mark.parametrize("text", ["Well", "Well,", "well"])
+def test_bare_discourse_marker_holds(text: str) -> None:
+    assert is_complete(text) is False
+    assert assess_completion(text).reason == "bare-discourse-marker"
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "I'm doing well",
+        "That went well",
+        "It works well",
+        "Well done",
+    ],
+)
+def test_well_as_content_stays_complete(text: str) -> None:
+    assert is_complete(text) is True
+
+
 # --- hedging lead-in phrases ("I guess", "I suppose", …) -------------------------------
 
 
