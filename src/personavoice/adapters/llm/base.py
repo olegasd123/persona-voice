@@ -20,7 +20,7 @@ _WARMUP_RETRY_S = 2.0
 
 @runtime_checkable
 class Tool(Protocol):
-    """The minimal tool contract the LLM adapter needs (Feature D).
+    """The minimal tool contract the LLM adapter needs.
 
     Declared here, in the adapter layer, so a backend can run the tool-call loop without importing
     the orchestrator's registry — `orchestrator/tools.ToolSpec` satisfies this structurally, so
@@ -47,7 +47,7 @@ class LLMAdapter:
     name: str = "base"
     stage: str = "llm"
     implemented: bool = False  # real backends set this True (drops the "stub" warning)
-    # Whether this backend can route tool/function calls (Feature D). Backends that can't leave
+    # Whether this backend can route tool/function calls. Backends that can't leave
     # it False; `stream_chat_with_tools` then degrades to a plain reply (tools ignored), keeping
     # the BACKEND switch honest where a backend lacks the capability.
     supports_tools: bool = False
@@ -63,7 +63,7 @@ class LLMAdapter:
     async def stream_chat_with_tools(
         self, messages: list[Msg], persona: Persona, tools: Sequence[Tool]
     ) -> AsyncIterator[str]:
-        """Stream a reply, first resolving any tool calls the model makes (Feature D).
+        """Stream a reply, first resolving any tool calls the model makes.
 
         Default implementation **ignores tools** and just streams the reply, so a backend that
         can't do function calling (or any persona with no tools) behaves exactly as `stream_chat`.

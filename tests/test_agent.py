@@ -593,7 +593,7 @@ def test_explicit_options_survive_persona_switch(config_dir: Path) -> None:
     assert ag.options.cefr is CEFRLevel.a1  # new persona's default added underneath
 
 
-# --- semantic endpointing (Feature G) -------------------------------------------------
+# --- semantic endpointing -------------------------------------------------
 
 
 class QueueSTT(FakeSTT):

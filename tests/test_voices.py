@@ -111,7 +111,7 @@ def test_unknown_field_rejected(tmp_path: Path) -> None:
         VoiceRegistry.load(bad)
 
 
-# --- catalog + resolve_choice (Feature B) ---------------------------------------------
+# --- catalog + resolve_choice ---------------------------------------------
 
 
 def _registry_with_stores(tmp_path: Path) -> VoiceRegistry:

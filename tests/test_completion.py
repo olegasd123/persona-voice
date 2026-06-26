@@ -1,4 +1,4 @@
-"""Semantic-endpointing completion gate (Feature G).
+"""Semantic-endpointing completion gate.
 
 Pure transcript-fragment classification — no LiveKit, no models — mirroring `test_endpointing`.
 The agent-side hold/merge/grace wiring is covered in `test_agent.py`.

@@ -1,4 +1,4 @@
-"""Per-utterance emotion hints (Feature F — dynamic emotion / prosody).
+"""Per-utterance emotion hints (dynamic emotion / prosody).
 
 Emotion is otherwise *static*: a persona's voice resolves one `VoiceRef.emotion` once and every
 reply is spoken at that intensity. This module lets the LLM color each reply individually by

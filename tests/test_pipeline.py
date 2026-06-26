@@ -107,7 +107,7 @@ async def test_unavailable_voice_choice_falls_back_to_persona_default(config_dir
     assert backend.tts.last_voice.id == "af_heart"  # type: ignore[attr-defined]
 
 
-# --- dynamic emotion (Feature F) ------------------------------------------------------
+# --- dynamic emotion ------------------------------------------------------
 
 
 async def test_dynamic_emotion_strips_tag_and_applies_to_voice(config_dir: Path) -> None:

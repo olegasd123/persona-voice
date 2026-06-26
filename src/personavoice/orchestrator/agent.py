@@ -129,7 +129,7 @@ class PersonaAgent:
         self._persona = persona
         self._source = source
         self._memory = memory
-        # Semantic endpointing (Feature G): when on, an utterance that reads as a mid-thought
+        # Semantic endpointing: when on, an utterance that reads as a mid-thought
         # pause (`completion.assess_completion`) is *held* and merged with the next one rather
         # than answered immediately, and a grace timer flushes it if the user doesn't continue.
         # Both default to the env toggles (off) so pure-VAD behavior is unchanged by default.
@@ -803,7 +803,7 @@ async def entrypoint(ctx: Any, *, persona_id: str | None = None) -> None:
     if options.any_set():
         logger.info("session options: %s", options.model_dump(exclude_none=True))
     moderator = moderator_from_env()
-    # Tool / function calling (Feature D): the bundled safe tools. A persona only calls the tools
+    # Tool / function calling: the bundled safe tools. A persona only calls the tools
     # it lists in `persona.tools`, so this is inert for the tool-free personas.
     tools = default_tool_registry()
 

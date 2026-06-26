@@ -18,7 +18,7 @@ _TURN_STYLE_DIRECTIVE = {
 
 # Demeanor is a session-level overlay on the persona's authored tone. `natural` is a no-op
 # (the persona as written). `rude` is deliberately *bounded*: brusque, never abusive — the
-# moderation layer (Feature C) is what guarantees that bound holds on the output side.
+# moderation layer is what guarantees that bound holds on the output side.
 _DEMEANOR_DIRECTIVE = {
     Demeanor.kind: (
         "Be especially warm, patient, and encouraging. Soften corrections, praise effort, "
@@ -71,8 +71,8 @@ def render_system_prompt(
     """The authored system prompt plus derived behavior and per-session directives.
 
     `options`, if given, layers session-level overrides (demeanor, CEFR) on top of the
-    persona. When `dynamic_emotion` is on, the per-utterance emotion-tag directive is added too
-    (Feature F) so the model prefixes each reply with a `[emotion]` tag the pipeline strips and
+    persona. When `dynamic_emotion` is on, the per-utterance emotion-tag directive is added too,
+    so the model prefixes each reply with a `[emotion]` tag the pipeline strips and
     applies to the voice. The spoken-language nudge always comes last so it stays closest to
     generation.
     """
@@ -117,7 +117,7 @@ def build_messages(
     the persona's base prompt.
 
     `options` carries per-session overrides (demeanor, CEFR) into the rendered system prompt;
-    `dynamic_emotion` adds the per-utterance emotion-tag directive (Feature F).
+    `dynamic_emotion` adds the per-utterance emotion-tag directive.
     """
     messages: list[Msg] = [
         Msg(

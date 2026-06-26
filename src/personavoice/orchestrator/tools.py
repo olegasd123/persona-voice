@@ -1,4 +1,4 @@
-"""Tool / function calling (Feature D) — the tool registry and built-in tools.
+"""Tool / function calling — the tool registry and built-in tools.
 
 The brain is otherwise a closed conversationalist. This module lets a persona *call out*
 mid-turn: the teacher can look something up, the companion can check the time. It owns the

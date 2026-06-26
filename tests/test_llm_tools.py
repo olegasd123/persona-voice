@@ -1,4 +1,4 @@
-"""Tool / function calling over the OpenAI-compatible stream (Feature D).
+"""Tool / function calling over the OpenAI-compatible stream.
 
 Covers the pure SSE/tool-call parsing and the full model → tool → result → answer loop with a
 mocked transport, so the wire protocol is exercised offline (no LM Studio / vLLM needed).

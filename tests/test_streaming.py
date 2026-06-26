@@ -135,7 +135,7 @@ async def test_voice_choice_override(config_dir: Path) -> None:
     assert backend.tts.last_voice.id == "alt_preset"  # type: ignore[attr-defined]
 
 
-# --- dynamic emotion (Feature F) ------------------------------------------------------
+# --- dynamic emotion ------------------------------------------------------
 
 
 async def test_dynamic_emotion_strips_tag_and_applies_to_voice(config_dir: Path) -> None:
@@ -155,7 +155,7 @@ async def test_dynamic_emotion_strips_tag_and_applies_to_voice(config_dir: Path)
 
 
 async def test_dynamic_emotion_off_leaves_tag_and_voice_untouched(config_dir: Path) -> None:
-    # With the feature off (default), a stray tag is just spoken text and the voice is unchanged.
+    # With dynamic emotion off (default), a stray tag is just spoken text and the voice is unchanged.
     backend = make_backend(llm_reply="[excited] Hello there.")
     pipe = StreamingPipeline(backend, _companion(config_dir))
 

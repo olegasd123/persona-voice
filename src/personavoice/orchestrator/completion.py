@@ -1,4 +1,4 @@
-"""Semantic endpointing (Feature G) — "did the user actually finish talking?".
+"""Semantic endpointing — "did the user actually finish talking?".
 
 Endpointing is otherwise pure Silero-VAD silence (`endpointing.py`): the agent treats *any*
 trailing pause as the end of a turn. That can't tell a mid-thought pause ("I think… *pause*

@@ -69,11 +69,11 @@ class StreamingPipeline:
         self.voices = voices
         # Per-session overrides (voice / cefr / demeanor). None = persona defaults.
         self.options = options
-        # Tool / function calling (Feature D). None = no tools; a persona only calls tools it
+        # Tool / function calling. None = no tools; a persona only calls tools it
         # lists in `persona.tools`, resolved against this registry per turn. Adapters that can't
         # do function calling ignore the schemas, so this degrades gracefully.
         self.tools = tools
-        # Per-utterance emotion (Feature F): when on, the persona prompt gains the emotion-tag
+        # Per-utterance emotion: when on, the persona prompt gains the emotion-tag
         # directive and each reply's leading `[emotion]` tag is stripped and applied to the voice.
         # Defaults to the env toggle (off) so behavior is unchanged unless an operator opts in.
         self.dynamic_emotion = (
@@ -179,7 +179,7 @@ class StreamingPipeline:
                 yield sentence
 
         try:
-            # Per-utterance emotion (Feature F): peel a leading `[emotion]` tag off the reply
+            # Per-utterance emotion: peel a leading `[emotion]` tag off the reply
             # (buffering only its leading window) and apply it to this turn's voice — before TTS
             # captures `voice`. Skipped for a canned safe reply (no LLM, no tag) and when off, so
             # the original passthrough is untouched. Inside `try` so a first-token error still

@@ -15,7 +15,8 @@ each item is grounded and actionable. See the **Status** section below for the c
 scaffold that has since landed and what it changes about the remaining work.
 
 **Convention** Mark a functionality as `[Done]` when it's completed, or `[Partial]` when it's started
-but not finished.
+but not finished. Do not refer code and the implementation plan with Feature B, Feature C, Feature D, etc.
+Because this implementation plan will be removed, and we'll have dead references.
 
 ---
 

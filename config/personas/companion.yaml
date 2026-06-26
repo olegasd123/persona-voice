@@ -23,7 +23,7 @@ behavior:
 memory:
   enabled: true
   scope: per_user
-# Tool / function calling (Feature D): let the companion check the wall clock when asked.
+# Tool / function calling: let the companion check the wall clock when asked.
 # Resolved against the active tool registry at call time; routed only on a tool-capable LLM
 # backend (the OpenAI-compatible vLLM / LM Studio path).
 tools:

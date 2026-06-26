@@ -1,4 +1,4 @@
-"""Per-utterance emotion tags (Feature F): the pure tag grammar + extractors."""
+"""Per-utterance emotion tags: the pure tag grammar + extractors."""
 
 from __future__ import annotations
 

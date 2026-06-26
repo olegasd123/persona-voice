@@ -160,7 +160,7 @@ def run_check(settings: Settings) -> CheckReport:
             "can't speak them — switch to a cloning backend (chatterbox on CUDA)"
         )
 
-    # 3b. Tools (Feature D). Surface the registered tools and flag personas whose declared
+    # 3b. Tools. Surface the registered tools and flag personas whose declared
     # tools are unknown or can't be routed on the active LLM backend.
     tool_registry = default_tool_registry()
     report.tools = tool_registry.names()

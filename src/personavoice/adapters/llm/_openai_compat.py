@@ -12,7 +12,7 @@ reasoning out loud.
 without code changes. `httpx` is imported lazily; the request/response plumbing is pure and
 unit-testable offline.
 
-**Tool / function calling (Feature D).** When a persona opts into tools, `stream_chat_with_tools`
+**Tool / function calling.** When a persona opts into tools, `stream_chat_with_tools`
 runs the loop: stream a completion *with the tool schemas*; if the model emits tool calls (and no
 spoken content), execute each tool, append the call + result to the conversation, and loop;
 otherwise the content streams straight through as the spoken reply. Nothing is voiced during the
@@ -182,7 +182,7 @@ def token_from_sse_line(line: str) -> str | None:
 
 
 # --------------------------------------------------------------------------------------
-# Tool / function calling (Feature D)
+# Tool / function calling
 # --------------------------------------------------------------------------------------
 
 
@@ -381,7 +381,7 @@ class OpenAICompatLLM(LLMAdapter):
     async def stream_chat_with_tools(
         self, messages: list[Msg], persona: Persona, tools: Sequence[Tool]
     ) -> AsyncIterator[str]:
-        """Stream a reply, resolving tool calls first (Feature D).
+        """Stream a reply, resolving tool calls first.
 
         With no tools this is exactly `stream_chat`. Otherwise each iteration streams a completion
         that includes the tool schemas: if spoken content comes back it streams through as the

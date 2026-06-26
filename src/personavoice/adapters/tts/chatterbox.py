@@ -27,7 +27,7 @@ _DEFAULT_EXAGGERATION = 0.5
 _EXAGGERATION_RANGE = (0.25, 2.0)
 # Map the descriptive `emotion` strings personas/voices use to an exaggeration level. A bare
 # number ("0.7") is taken literally instead; an unknown word falls back to the default. The
-# canonical per-utterance emotions (`personavoice.emotion.EMOTIONS`, used by Feature F's dynamic
+# canonical per-utterance emotions (`personavoice.emotion.EMOTIONS`, used by dynamic emotion
 # tags) are all covered here; `tests/test_emotion.py` guards that coupling.
 _EMOTION_EXAGGERATION: dict[str, float] = {
     "calm": 0.4,

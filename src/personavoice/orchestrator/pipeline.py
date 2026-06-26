@@ -101,10 +101,10 @@ class Pipeline:
         self.options = options
         # Optional input/output guard. None = no moderation (behavior unchanged).
         self.moderator = moderator
-        # Tool / function calling (Feature D). None = no tools; a persona only calls tools it
+        # Tool / function calling. None = no tools; a persona only calls tools it
         # lists in `persona.tools`. See `StreamingPipeline` for the streaming counterpart.
         self.tools = tools
-        # Per-utterance emotion (Feature F): off by default (the env toggle), so behavior is
+        # Per-utterance emotion: off by default (the env toggle), so behavior is
         # unchanged unless an operator opts in. See `StreamingPipeline.dynamic_emotion`.
         self.dynamic_emotion = (
             dynamic_emotion if dynamic_emotion is not None else dynamic_emotion_enabled()
@@ -146,7 +146,7 @@ class Pipeline:
                 reply = await self.backend.llm.chat_with_tools(messages, self.persona, specs)
             else:
                 reply = await self.backend.llm.chat(messages, self.persona)
-            # Per-utterance emotion (Feature F): strip the leading `[emotion]` tag off the reply
+            # Per-utterance emotion: strip the leading `[emotion]` tag off the reply
             # before it reaches the output guard, TTS, history, or the transcript.
             if self.dynamic_emotion:
                 emotion, reply = split_emotion_hint(reply)

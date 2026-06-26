@@ -132,7 +132,7 @@ class Persona(BaseModel):
     voice: VoiceSettings
     behavior: BehaviorSettings = BehaviorSettings()
     memory: MemorySettings = MemorySettings()
-    # Tool / function calling (Feature D): names of registry tools this persona may call. Empty
+    # Tool / function calling: names of registry tools this persona may call. Empty
     # (the default) = a pure conversationalist — the LLM is never sent any tool schema, so an
     # unchanged persona is unaffected. Names resolve against the active tool registry at call
     # time; an unknown name is skipped with a warning (see `orchestrator/tools.ToolRegistry`).

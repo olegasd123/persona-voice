@@ -1,4 +1,4 @@
-"""The tool registry + built-in tools (Feature D, orchestrator/tools.py)."""
+"""The tool registry + built-in tools (`orchestrator/tools.py`)."""
 
 from __future__ import annotations
 

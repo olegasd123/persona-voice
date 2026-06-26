@@ -1,4 +1,4 @@
-"""Tool wiring through the pipelines (Feature D).
+"""Tool wiring through the pipelines.
 
 Verifies that a persona that declares tools routes through the adapter's tool path (and the
 tools actually run), while a tool-free persona — or a missing registry — takes the plain path
