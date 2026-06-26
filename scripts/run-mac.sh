@@ -57,6 +57,12 @@ export LIVEKIT_API_KEY="${LIVEKIT_API_KEY:-devkey}"      # dev keys; set real on
 export LIVEKIT_API_SECRET="${LIVEKIT_API_SECRET:-secret}"
 export LIVEKIT_URL="ws://${HOST_IP}:7880"
 
+export PERSONAVOICE_LOG_LEVEL="${PERSONAVOICE_LOG_LEVEL:-TRACE}"
+export PERSONAVOICE_TOOL_MAX_ITERS="${PERSONAVOICE_TOOL_MAX_ITERS:-4}"
+export PERSONAVOICE_TOOL_TIMEOUT="${PERSONAVOICE_TOOL_TIMEOUT:-10}"
+export PERSONAVOICE_SEMANTIC_ENDPOINTING="${PERSONAVOICE_SEMANTIC_ENDPOINTING:-1}"
+export PERSONAVOICE_ENDPOINTING_GRACE_MS="${PERSONAVOICE_ENDPOINTING_GRACE_MS:-2500}"
+
 # --- preflight (cheap checks only; the one-time work lives in setup-mac.sh) -----------------
 docker info >/dev/null 2>&1 || { echo "Docker is not running. Start Docker Desktop and retry."; exit 1; }
 
