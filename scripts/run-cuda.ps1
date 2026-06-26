@@ -117,6 +117,8 @@ $env:PERSONAVOICE_LOG_LEVEL = 'TRACE'
 $env:PERSONAVOICE_DYNAMIC_EMOTION = 'true'
 $env:PERSONAVOICE_TOOL_MAX_ITERS = '4'
 $env:PERSONAVOICE_TOOL_TIMEOUT = '10'
+$env:PERSONAVOICE_SEMANTIC_ENDPOINTING = '1'
+$env:PERSONAVOICE_ENDPOINTING_GRACE_MS = '2500'
 
 # --- preflight (cheap checks only; the one-time work lives in setup-cuda.ps1) ---------------
 $dockerOk = $false

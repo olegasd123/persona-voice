@@ -211,6 +211,16 @@ reply onto the published audio track. When VAD detects the user starting to spea
 Connect any LiveKit client — the [Agents Playground](https://agents-playground.livekit.io/) or
 the Flutter app — to talk.
 
+**Semantic endpointing** (optional, `PERSONAVOICE_SEMANTIC_ENDPOINTING=1`) layers a cheap
+"did they actually finish?" gate on top of the VAD silence. Pure VAD treats every pause as the
+end of a turn, so a mid-thought pause ("I think… *pause* …it's fine") gets answered too early.
+With it on, a transcript that reads as unfinished — trails off into an ellipsis ("I think…"), or
+ends on a trailing conjunction/preposition/article or a filler like "um"
+(`orchestrator/completion.py`) — is **held** and merged with the next utterance into one turn. A grace window (`PERSONAVOICE_ENDPOINTING_GRACE_MS`, default 1500 ms) bounds the
+cost of a misjudged hold: if no continuation arrives, the held text is answered as-is. The gate is
+deliberately conservative (it only holds on clear continuation cues), so the worst case is that
+delay, never a dropped turn.
+
 ### Token server and self-hosted LiveKit
 
 A real client cannot join a room without a token, and it must never see the LiveKit secret. The
@@ -605,7 +615,7 @@ src/personavoice/
   persona/                   # loader, prompt builder, registry
   voice/                     # registry + zero-shot clones + fine-tuned voices
   server/                    # settings, config, --check/--serve/--token-server; tokens.py
-  orchestrator/              # turn-based pipeline + chunker/streaming/turn/agent/endpointing/tools
+  orchestrator/              # turn-based pipeline + chunker/streaming/turn/agent/endpointing/completion/tools
   training/                  # persona LoRA + voice/ fine-tuning: dataset/config/finetune/eval
   memory/                    # per-user store + profile + RAG + distill
   eval/                      # WER + MOS + dashboard gating

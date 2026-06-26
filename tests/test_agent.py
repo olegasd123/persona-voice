@@ -591,3 +591,125 @@ def test_explicit_options_survive_persona_switch(config_dir: Path) -> None:
     ag.set_persona(_custom_persona("tutor", cefr="a1"))
     assert ag.options.demeanor is Demeanor.rude  # explicit override preserved across the switch
     assert ag.options.cefr is CEFRLevel.a1  # new persona's default added underneath
+
+
+# --- semantic endpointing (Feature G) -------------------------------------------------
+
+
+class QueueSTT(FakeSTT):
+    """Returns successive transcripts, one per utterance, so a turn can be fed in fragments."""
+
+    def __init__(self, texts: list[str]) -> None:
+        super().__init__()
+        self._texts = list(texts)
+
+    async def transcribe(self, audio: bytes) -> Transcript:
+        text = self._texts.pop(0) if self._texts else ""
+        return Transcript(text=text, is_final=True, language="en")
+
+
+def _endpointing_agent(
+    config_dir: Path, texts: list[str], *, grace_s: float
+) -> tuple[agent.PersonaAgent, list[bytes]]:
+    backend = Backend(name="fake", stt=QueueSTT(texts), llm=FakeLLM("Okay."), tts=FakeTTS())
+    ag = agent.PersonaAgent(
+        backend, _companion(config_dir), FakeSource(), semantic_endpointing=True, grace_s=grace_s
+    )
+    spoken: list[bytes] = []
+
+    async def sink(wav: bytes) -> None:
+        spoken.append(wav)
+
+    ag._turn = TurnController(sink)  # bypass the livekit AudioSource sink
+    return ag, spoken
+
+
+async def _utterance(ag: agent.PersonaAgent) -> None:
+    await ag.on_user_utterance(b"\x00\x00" * 1600, 16000)
+
+
+async def test_unfinished_utterance_is_held_then_merged(config_dir: Path) -> None:
+    pytest.importorskip("numpy")
+    pytest.importorskip("soundfile")
+
+    # Big grace so the timer never fires — the continuation arrives first.
+    ag, spoken = _endpointing_agent(
+        config_dir, ["I went to the store and", "bought milk."], grace_s=60.0
+    )
+
+    await _utterance(ag)  # ends on "and" → held, nothing answered yet
+    assert spoken == []
+    assert ag._held == "I went to the store and"
+    assert ag._pipeline.history == []
+
+    await _utterance(ag)  # completes the thought → one merged turn
+    await ag._turn.join()
+    assert spoken == [b"RIFF" + b"Okay."]
+    assert ag._held is None
+    assert ag._pipeline.history[0].content == "I went to the store and bought milk."
+
+
+async def test_complete_utterance_answers_immediately(config_dir: Path) -> None:
+    pytest.importorskip("numpy")
+    pytest.importorskip("soundfile")
+
+    ag, spoken = _endpointing_agent(config_dir, ["What time is it?"], grace_s=60.0)
+    await _utterance(ag)
+    await ag._turn.join()
+    assert spoken == [b"RIFF" + b"Okay."]
+    assert ag._held is None
+    assert ag._flush_handle is None  # nothing held, no timer armed
+
+
+async def test_grace_window_flushes_held_utterance(config_dir: Path) -> None:
+    pytest.importorskip("numpy")
+    pytest.importorskip("soundfile")
+
+    # Tiny grace: with no continuation, the held fragment is answered as-is once it elapses.
+    ag, spoken = _endpointing_agent(config_dir, ["I'm thinking of"], grace_s=0.01)
+    await _utterance(ag)
+    assert spoken == []  # held, not yet answered
+    await asyncio.sleep(0.05)  # let the grace timer fire
+    await ag._turn.join()
+    assert spoken == [b"RIFF" + b"Okay."]
+    assert ag._held is None
+    assert ag._pipeline.history[0].content == "I'm thinking of"
+
+
+async def test_resume_cancels_pending_flush_then_merges(config_dir: Path) -> None:
+    pytest.importorskip("numpy")
+    pytest.importorskip("soundfile")
+
+    ag, spoken = _endpointing_agent(config_dir, ["I'm thinking of", "the blue one."], grace_s=60.0)
+    await _utterance(ag)
+    assert ag._flush_handle is not None  # a flush is armed while holding
+
+    ag.on_user_speech_started()  # the user resumed before the grace elapsed
+    assert ag._flush_handle is None  # so the flush is cancelled, not fired
+    assert spoken == []
+
+    await _utterance(ag)  # their continuation completes the thought
+    await ag._turn.join()
+    assert spoken == [b"RIFF" + b"Okay."]
+    assert ag._pipeline.history[0].content == "I'm thinking of the blue one."
+
+
+async def test_endpointing_off_answers_each_utterance(config_dir: Path) -> None:
+    pytest.importorskip("numpy")
+    pytest.importorskip("soundfile")
+
+    # Default (off): an utterance that *looks* unfinished is still answered immediately.
+    backend = Backend(name="fake", stt=FakeSTT("I went and"), llm=FakeLLM("Okay."), tts=FakeTTS())
+    ag = agent.PersonaAgent(
+        backend, _companion(config_dir), FakeSource(), semantic_endpointing=False
+    )
+    spoken: list[bytes] = []
+
+    async def sink(wav: bytes) -> None:
+        spoken.append(wav)
+
+    ag._turn = TurnController(sink)
+    await _utterance(ag)
+    await ag._turn.join()
+    assert spoken == [b"RIFF" + b"Okay."]
+    assert ag._held is None

@@ -48,6 +48,12 @@ from ..server.config import (
     load_voice_registry,
 )
 from ..voice.registry import VoiceRegistry
+from .completion import (
+    assess_completion,
+    endpointing_grace_s,
+    join_fragments,
+    semantic_endpointing_enabled,
+)
 from .endpointing import vad_load_kwargs
 from .pipeline import voice_ref_for
 from .streaming import StreamingPipeline, StreamMetrics
@@ -116,11 +122,28 @@ class PersonaAgent:
         publish_transcript: TranscriptPublisher | None = None,
         memory: ConversationMemory | None = None,
         user_id: str | None = None,
+        semantic_endpointing: bool | None = None,
+        grace_s: float | None = None,
     ) -> None:
         self._backend = backend
         self._persona = persona
         self._source = source
         self._memory = memory
+        # Semantic endpointing (Feature G): when on, an utterance that reads as a mid-thought
+        # pause (`completion.assess_completion`) is *held* and merged with the next one rather
+        # than answered immediately, and a grace timer flushes it if the user doesn't continue.
+        # Both default to the env toggles (off) so pure-VAD behavior is unchanged by default.
+        self._semantic_endpointing = (
+            semantic_endpointing
+            if semantic_endpointing is not None
+            else semantic_endpointing_enabled()
+        )
+        self._grace_s = grace_s if grace_s is not None else endpointing_grace_s()
+        # The unfinished utterance awaiting a continuation (with the STT time of its last
+        # segment, for the turn metric), and the pending grace-flush timer.
+        self._held: str | None = None
+        self._held_stt_s: float | None = None
+        self._flush_handle: asyncio.TimerHandle | None = None
         # `_explicit_options` are the per-session overrides the client set (metadata / data
         # message); `_options` is them merged over the persona's `session_defaults`, so a custom
         # persona's authored defaults (e.g. a tutor that defaults to CEFR A1) apply unless the
@@ -214,6 +237,10 @@ class PersonaAgent:
 
     def on_user_speech_started(self) -> None:
         """Barge-in: the user started talking — stop the assistant immediately."""
+        # The user resumed: if we're holding an unfinished utterance, don't let the grace timer
+        # flush it — the utterance they're now speaking will be merged onto it instead. No-op
+        # when nothing is held.
+        self._cancel_flush()
         if self._turn.interrupt():
             logger.info("barge-in: interrupted assistant mid-response")
             # Drop audio already queued in the source so playback stops now, not later.
@@ -239,8 +266,61 @@ class PersonaAgent:
         text = transcript.text.strip()
         if not text:
             return
+        self._begin_user_turn(text, stt_s)
+
+    def _begin_user_turn(self, text: str, stt_s: float | None) -> None:
+        """Answer a user turn now, or — with semantic endpointing — hold an unfinished one.
+
+        With semantic endpointing off (the default), every VAD utterance is answered
+        immediately. With it on, a fragment that reads as a mid-thought pause (a trailing
+        conjunction / preposition / determiner, or a filler) is merged onto any held fragment
+        and *held* again instead of triggering its own reply; a grace timer (`_schedule_flush`)
+        answers the held text if the user doesn't continue. So "I think… *pause* …it's fine"
+        becomes one turn, and a misjudged hold costs only the grace delay, never a lost turn.
+        """
+        if not self._semantic_endpointing:
+            self._speak_user_turn(text, stt_s)
+            return
+        self._cancel_flush()
+        combined = join_fragments(self._held, text)
+        verdict = assess_completion(combined)
+        if verdict.complete:
+            self._held = None
+            self._held_stt_s = None
+            self._speak_user_turn(combined, stt_s)
+        else:
+            self._held = combined
+            self._held_stt_s = stt_s
+            logger.info(
+                "endpointing: holding unfinished utterance (%s): %r", verdict.reason, combined
+            )
+            self._schedule_flush()
+
+    def _speak_user_turn(self, text: str, stt_s: float | None) -> None:
+        """Log and stream the persona's reply to a (possibly merged) user turn."""
         logger.info("user: %s", text)
         self._turn.begin(self._speak(text, stt_s))
+
+    def _schedule_flush(self) -> None:
+        """Arm the grace timer that answers a held utterance if no continuation arrives."""
+        loop = asyncio.get_running_loop()
+        self._flush_handle = loop.call_later(self._grace_s, self._flush_held)
+
+    def _cancel_flush(self) -> None:
+        """Cancel a pending grace-flush timer (the user continued, or we're tearing down)."""
+        if self._flush_handle is not None:
+            self._flush_handle.cancel()
+            self._flush_handle = None
+
+    def _flush_held(self) -> None:
+        """Grace window elapsed with no continuation — answer the held fragment as-is."""
+        self._flush_handle = None
+        held, stt_s = self._held, self._held_stt_s
+        self._held = None
+        self._held_stt_s = None
+        if held:
+            logger.info("endpointing: grace elapsed, answering held utterance")
+            self._speak_user_turn(held, stt_s)
 
     async def _speak(self, user_text: str, stt_s: float | None = None) -> Any:
         """Stream the reply audio while publishing the assistant transcript in step with it.
@@ -301,6 +381,7 @@ class PersonaAgent:
                 task.add_done_callback(self._pending.discard)
 
     async def aclose(self) -> None:
+        self._cancel_flush()
         self._turn.interrupt()
         await self._turn.join()
         for task in list(self._pending):

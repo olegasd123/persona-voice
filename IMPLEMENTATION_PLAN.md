@@ -107,8 +107,8 @@ client New/Edit-persona form — `flutter analyze` clean, 86 client + 633 server
 device + LiveKit call run still pending.
 
 **Backlog (capabilities / ops / DX — independent, land any time).** Features **A/B/C** are the
-*server* substrate the NOW block builds on (already done & tested); **D** (tool calling) and
-**F** (dynamic emotion) have since landed; E/G–L are unchanged.
+*server* substrate the NOW block builds on (already done & tested); **D** (tool calling),
+**F** (dynamic emotion), and **G** (semantic endpointing) have since landed; E/H–L are unchanged.
 
 | # | Feature | Theme | Effort | Risk | Depends on |
 |---|---------|-------|--------|------|------------|
@@ -118,7 +118,7 @@ device + LiveKit call run still pending.
 | D | **Tool / function calling** `[Done]` | Capability | L | Med | — |
 | E | **Post-session feedback report** | Capability | M | Low | memory/transcript |
 | F | **Dynamic emotion / prosody** `[Done]` | Naturalness | M | Med | A (emotion plumbing) |
-| G | **Semantic endpointing** | Naturalness | M | Med | — |
+| G | **Semantic endpointing** `[Done]` | Naturalness | M | Med | — |
 | H | **Prometheus `/metrics`** | Ops | S | Low | obs/metrics |
 | I | **Concurrency / admission control** | Ops | M | Med | — |
 | J | **Web client** | Reach | L | Low | token server |
@@ -656,7 +656,22 @@ exaggeration control that go unused per-utterance.
 
 ---
 
-## 8. Feature G — Semantic endpointing
+## 8. Feature G — Semantic endpointing `[Done]`
+
+> **Status:** Implemented and unit-tested, opt-in via `PERSONAVOICE_SEMANTIC_ENDPOINTING` (default
+> off, so pure-VAD behavior is unchanged). New pure module `orchestrator/completion.py`:
+> `assess_completion`/`is_complete` classify a VAD-utterance transcript as a finished turn or a
+> mid-thought pause from conservative trailing-word cues (dangling conjunction / preposition /
+> determiner, or a hesitation filler), plus `join_fragments` and the
+> `PERSONAVOICE_SEMANTIC_ENDPOINTING` / `PERSONAVOICE_ENDPOINTING_GRACE_MS` env helpers. When on,
+> `PersonaAgent` (`agent.py`) holds an unfinished utterance and merges the next one onto it instead
+> of answering it, with a grace timer (`call_later`, default 1500 ms) that flushes the held text if
+> no continuation arrives; a resumed utterance (VAD START_OF_SPEECH) cancels the pending flush so
+> the fragments merge. The classifier is deliberately conservative — a false "incomplete" only
+> delays the reply by the grace window, while a false "complete" would let the user be barged in
+> on — so it holds only on clear continuation cues and judges ambiguous enders ("for", modals,
+> object pronouns) complete. The optional backchannel / "you were cut off" hint was not taken
+> (kept to the core hold-and-merge gate).
 
 ### 8.1 Motivation
 
