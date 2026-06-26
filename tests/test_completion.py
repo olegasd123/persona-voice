@@ -9,6 +9,7 @@ from __future__ import annotations
 import pytest
 
 from personavoice.orchestrator.completion import (
+    TRAILING_PHRASES,
     assess_completion,
     endpointing_grace_s,
     is_complete,
@@ -69,6 +70,54 @@ def test_trailing_ellipsis_holds_then_merges() -> None:
 def test_single_dot_is_terminal_but_double_is_ellipsis() -> None:
     assert is_complete("I'm fine.") is True  # one dot = finished
     assert is_complete("hold on..") is False  # two+ dots = trailing off
+
+
+# --- hedging lead-in phrases ("I guess", "I suppose", …) -------------------------------
+
+
+@pytest.mark.parametrize("phrase", sorted(TRAILING_PHRASES))
+def test_every_lead_in_phrase_holds_bare(phrase: str) -> None:
+    # Each catalogued phrase, on its own with no terminal punctuation, reads as unfinished.
+    assert is_complete(phrase) is False
+    assert assess_completion(phrase).reason == "trailing-lead-in"
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "I guess",  # the requested cases
+        "I suppose",
+        "Hmm, I mean",  # phrase as the trailing words of a longer utterance
+        "Well, the thing is",
+        "I guess,",  # a trailing comma still holds
+        "I GUESS",  # case-insensitive
+        "I'm thinking",  # contraction form
+    ],
+)
+def test_lead_in_phrase_in_context_holds(text: str) -> None:
+    assert is_complete(text) is False
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "I guess.",  # a confident terminal period is trusted as finished
+        "I suppose!",
+        "What do you think",  # ends "you think", not the "i think" lead-in
+        "I don't know",  # deliberately excluded — a common complete answer
+        "that's what I think it is",  # phrase is embedded, not trailing
+        "the thing is broken",  # "the thing is" only holds when it's the tail
+    ],
+)
+def test_non_lead_in_stays_complete(text: str) -> None:
+    assert is_complete(text) is True
+
+
+def test_requested_phrases_are_catalogued() -> None:
+    # The two the user named explicitly, plus a representative spread of the +20 added.
+    assert {"i guess", "i suppose", "i think", "i mean", "you know", "the thing is"} <= (
+        TRAILING_PHRASES
+    )
 
 
 def test_verdict_reasons() -> None:
