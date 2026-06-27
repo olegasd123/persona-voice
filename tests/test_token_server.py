@@ -11,7 +11,6 @@ from pathlib import Path
 
 import pytest
 
-from personavoice.memory import MemoryStore
 from personavoice.models import Persona, VoiceDef, VoiceRef
 from personavoice.persona.registry import PersonaRegistry
 from personavoice.persona.store import UserPersonaStore
@@ -19,7 +18,6 @@ from personavoice.server.config import Settings
 from personavoice.server.ratelimit import RateLimiter
 from personavoice.server.token_server import (
     BadRequest,
-    NotFound,
     ServerMisconfigured,
     TokenService,
     TokenServiceConfig,
@@ -664,43 +662,6 @@ def test_create_persona_validates_lora_on_lora_backend(
     assert ok["persona"]["llm"]["lora"] == "adapters/hr_interviewer"
 
 
-# --- session reports ------------------------------------------------------------------
-
-
-def _report_service(registry: PersonaRegistry, tmp_path: Path) -> tuple[TokenService, MemoryStore]:
-    store = MemoryStore(tmp_path / "memory")
-    config = TokenServiceConfig(livekit_url="x", api_key="k", api_secret=SECRET)
-    svc = TokenService(
-        config, registry, default_persona="companion", backend="mac", memory_store=store
-    )
-    return svc, store
-
-
-def test_session_report_returns_stored_report(registry: PersonaRegistry, tmp_path: Path) -> None:
-    svc, store = _report_service(registry, tmp_path)
-    store.set_consent("alice", granted=True)
-    store.save_report("alice", "sess1", {"summary": "did well", "scores": []})
-    assert svc.session_report("alice", "sess1") == {"summary": "did well", "scores": []}
-
-
-def test_session_report_404_when_missing(registry: PersonaRegistry, tmp_path: Path) -> None:
-    svc, _ = _report_service(registry, tmp_path)
-    with pytest.raises(NotFound):
-        svc.session_report("alice", "nope")
-
-
-def test_session_report_requires_user(registry: PersonaRegistry, tmp_path: Path) -> None:
-    svc, _ = _report_service(registry, tmp_path)
-    with pytest.raises(BadRequest, match="user id is required"):
-        svc.session_report(None, "sess1")
-
-
-def test_session_report_disabled_without_store(registry: PersonaRegistry) -> None:
-    svc = make_service(registry)  # no memory_store wired
-    with pytest.raises(ServerMisconfigured, match="not enabled"):
-        svc.session_report("alice", "sess1")
-
-
 # --- config + build_service -----------------------------------------------------------
 
 
@@ -865,33 +826,6 @@ def test_http_unknown_persona_400(live_server: tuple[str, TokenService]) -> None
     status, body = _post(f"{base}/token", {"persona": "ghost"}, auth)
     assert status == 400
     assert "unknown persona" in body["error"]
-
-
-def test_http_session_report_route(registry: PersonaRegistry, tmp_path: Path) -> None:
-    store = MemoryStore(tmp_path / "memory")
-    store.set_consent("alice", granted=True)
-    store.save_report("alice", "sess1", {"summary": "great job"})
-    config = TokenServiceConfig(livekit_url="x", api_key="k", api_secret=SECRET, api_token="sekret")
-    svc = TokenService(
-        config, registry, default_persona="companion", backend="mac", memory_store=store
-    )
-    httpd = make_server(svc, "127.0.0.1", 0)
-    thread = threading.Thread(target=httpd.serve_forever, daemon=True)
-    thread.start()
-    base = f"http://{httpd.server_address[0]}:{httpd.server_address[1]}"
-    auth = {"Authorization": "Bearer sekret"}
-    try:
-        status, body = _get(f"{base}/session/sess1/report?user=alice", auth)
-        assert status == 200
-        assert body == {"summary": "great job"}
-        status, _ = _get(f"{base}/session/nope/report?user=alice", auth)
-        assert status == 404
-        status, _ = _get(f"{base}/session/sess1/report", auth)  # missing ?user
-        assert status == 400
-    finally:
-        httpd.shutdown()
-        httpd.server_close()
-        thread.join(timeout=2)
 
 
 # --- HTTP: voice library routes -------------------------------------------------------

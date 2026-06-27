@@ -24,8 +24,7 @@ import contextlib
 import logging
 import uuid
 
-from ..eval.report import ReportBuilder, SessionReport
-from ..models import Msg, Persona, Role
+from ..models import Persona, Role
 from .profile import ProfileBuilder, UserProfile, _ChatLLM
 from .rag import MemoryRetriever, recall_context
 from .store import MemoryStore, MemoryStoreError, MemoryTurn
@@ -191,49 +190,6 @@ class ConversationMemory:
                 "memory profile updated for user %r (%d facts)", user_id, len(updated.facts)
             )
         return updated
-
-    async def finalize_report(
-        self,
-        user_id: str,
-        persona: Persona,
-        session_id: str,
-        transcript: list[Msg],
-        *,
-        min_user_turns: int = 2,
-    ) -> SessionReport | None:
-        """Score this session and persist a feedback report (no-op without consent or an LLM).
-
-        Unlike recall/recording, this does **not** require `persona.memory.enabled` — the report
-        is about *this* session and works off the live `transcript` (the agent's pipeline
-        history), so an interview/tutor persona that doesn't store turns still gets a report. It
-        is still consent-gated like everything else in memory; without consent (or an LLM, or
-        enough turns) it returns None and stores nothing. Errors are swallowed — a report is a
-        nice-to-have at teardown and must never break it.
-        """
-        if self._llm is None:
-            return None
-        try:
-            if not self._store.has_consent(user_id):
-                return None
-        except MemoryStoreError:
-            logger.warning("memory consent check failed for user %r", user_id, exc_info=True)
-            return None
-        try:
-            report = await ReportBuilder(self._llm).build(
-                persona, transcript, session_id=session_id, min_user_turns=min_user_turns
-            )
-        except Exception:  # an LLM hiccup must never break session teardown
-            logger.warning("session report generation failed for user %r", user_id, exc_info=True)
-            return None
-        if report is None:
-            return None
-        try:
-            self._store.save_report(user_id, session_id, report.model_dump(mode="json"))
-        except MemoryStoreError:
-            logger.warning("saving session report failed for user %r", user_id, exc_info=True)
-            return report
-        logger.info("session report saved for user %r session %r", user_id, session_id)
-        return report
 
     def _load_profile(self, user_id: str) -> UserProfile:
         raw = self._store.load_profile_raw(user_id)

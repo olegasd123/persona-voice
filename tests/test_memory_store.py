@@ -104,42 +104,6 @@ def test_profile_roundtrip(tmp_path: Path) -> None:
 
 
 # --------------------------------------------------------------------------------------
-# session reports
-# --------------------------------------------------------------------------------------
-
-
-def test_report_roundtrip(tmp_path: Path) -> None:
-    store = MemoryStore(tmp_path)
-    store.set_consent("alice", granted=True)
-    assert store.load_report("alice", "sess1") is None
-    store.save_report("alice", "sess1", {"summary": "did well", "scores": []})
-    assert store.load_report("alice", "sess1") == {"summary": "did well", "scores": []}
-    assert store.report_session_ids("alice") == ["sess1"]
-
-
-def test_save_report_refused_without_consent(tmp_path: Path) -> None:
-    store = MemoryStore(tmp_path)
-    with pytest.raises(MemoryStoreError, match="consent"):
-        store.save_report("alice", "sess1", {"summary": "x"})
-
-
-@pytest.mark.parametrize("bad", ["../escape", "a/b", "", "."])
-def test_report_invalid_session_id_rejected(tmp_path: Path, bad: str) -> None:
-    store = MemoryStore(tmp_path)
-    store.set_consent("alice", granted=True)
-    with pytest.raises(MemoryStoreError, match="session id"):
-        store.save_report("alice", bad, {"summary": "x"})
-
-
-def test_export_includes_reports(tmp_path: Path) -> None:
-    store = MemoryStore(tmp_path)
-    store.set_consent("alice", granted=True)
-    store.save_report("alice", "sess1", {"summary": "did well"})
-    dump = store.export_user("alice")
-    assert dump["reports"] == {"sess1": {"summary": "did well"}}
-
-
-# --------------------------------------------------------------------------------------
 # privacy: users / delete / export
 # --------------------------------------------------------------------------------------
 

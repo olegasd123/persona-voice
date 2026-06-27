@@ -241,7 +241,6 @@ personavoice --token-server          # HTTP on PERSONAVOICE_HOST:PERSONAVOICE_PO
 | `PUT /personas/{id}?user=` / `DELETE /personas/{id}?user=` | edit / delete one of the user's own personas (curated are read-only) |
 | `GET /loras` | served LoRA adapters for a custom persona's `llm.lora` (`{"loras": [...], "supports_lora"}`) |
 | `GET /voices` | selectable voice catalog for the active backend (`{"voices": [...], "supports_cloning"}`) |
-| `GET /session/{id}/report?user=` | the persisted post-session feedback report for a session (404 if none) |
 | `POST /token` | body `{"room"?, "identity"?, "name"?, "persona"?, "voice"?, "cefr"?, "demeanor"?, "user"?}` → `{"url","token","room","identity","name","persona","voice","cefr","demeanor","user"}` |
 | `POST /voices/clone` | `?name=&authorized=1` + the wav as the raw body → enroll a clone |
 | `DELETE /voices/clone/{name}` | remove a cloned voice |
@@ -284,15 +283,6 @@ to the voice for that turn only. It's audible on a cloning backend (Chatterbox m
 `exaggeration` knob); a preset-only backend (Kokoro) ignores it gracefully, so the tag is a no-op
 there. Static per-persona `emotion` (in `config/voices.yaml` / a persona's `voice.emotion`) is
 unchanged and still the baseline when no tag is emitted.
-
-**Post-session feedback report.** Eval scores the *system*; this scores the *user*. At session
-end the agent distills the transcript into a rubric tailored to the persona — STAR structure /
-clarity / conciseness for the interviewers, grammar / vocabulary / fluency with concrete
-corrections for the language tutor (`eval/report.py`). The report is consent-gated and persisted
-with the user's memory, then fetched via `GET /session/{id}/report?user=`. `PERSONAVOICE_SESSION_REPORTS`
-picks which personas get one: `auto` (default — interviewers + tutor only), `all`, or `off`; it
-needs consent and an LLM regardless. Only the transcript text is used, so audio-only signals
-(true speaking pace, pronunciation) are out of scope.
 
 **Self-host the SFU.** `docker-compose.livekit.yml` brings up a LiveKit server (dev keys
 `devkey`/`secret`) plus the token server:

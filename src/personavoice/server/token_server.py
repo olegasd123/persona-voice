@@ -21,7 +21,6 @@ Endpoints (all JSON, permissive CORS so a browser client / Playground can call t
     PUT    /personas/{id}?user=   -> replace one of the user's own personas
     DELETE /personas/{id}?user=   -> delete one of the user's own personas
     GET    /loras            -> {"loras": [LoraOption...], "llm", "supports_lora"}
-    GET    /session/{id}/report?user=  -> the persisted post-session feedback report (404 if none)
     GET    /voices           -> {"voices": [VoiceOption...], "tts", "supports_cloning"}
     POST   /token            -> mint a token; body: {"room"?, "identity"?, "name"?, "persona"?,
                                 "voice"?, "cefr"?, "demeanor"?, "user"?}
@@ -58,7 +57,6 @@ from urllib.parse import parse_qs, urlparse
 
 from pydantic import ValidationError
 
-from ..memory import MemoryStore, MemoryStoreError
 from ..models import CEFRLevel, Demeanor, Persona, SessionOptions
 from ..persona.lora import served_loras
 from ..persona.registry import PersonaRegistry
@@ -66,12 +64,7 @@ from ..persona.store import UserPersonaStore
 from ..voice.clone import CloneError, VoiceCloner
 from ..voice.registry import VoiceRegistry
 from ..voice.seed import seed_voice_names
-from .config import (
-    Settings,
-    load_memory_store,
-    load_user_persona_store,
-    load_voice_registry,
-)
+from .config import Settings, load_user_persona_store, load_voice_registry
 from .ratelimit import RateLimiter, rate_limiter_from_env
 from .security import audit_security, has_errors
 from .tokens import mint_access_token
@@ -114,10 +107,6 @@ class Unauthorized(TokenServiceError):
 
 class BadRequest(TokenServiceError):
     status = 400
-
-
-class NotFound(TokenServiceError):
-    status = 404
 
 
 class ServerMisconfigured(TokenServiceError):
@@ -214,7 +203,6 @@ class TokenService:
         llm_name: str = "",
         supports_lora: bool = False,
         lora_modules: str | None = None,
-        memory_store: MemoryStore | None = None,
     ) -> None:
         self._config = config
         self._registry = registry
@@ -244,9 +232,6 @@ class TokenService:
         self._llm_name = llm_name
         self._supports_lora = supports_lora
         self._lora_modules = lora_modules
-        # Per-user memory store, used here only to serve persisted post-session reports. None
-        # (e.g. in unit tests) disables the /session/{id}/report route.
-        self._memory_store = memory_store
 
     def check_auth(self, authorization: str | None) -> None:
         """Enforce the optional bearer token. No-op when `api_token` is unset (dev mode)."""
@@ -677,27 +662,6 @@ class TokenService:
             "reason": reason,
         }
 
-    # -- session reports ---------------------------------------------------------------
-
-    def session_report(self, user: str | None, session_id: str) -> dict[str, Any]:
-        """Return the persisted post-session feedback report for `user`'s session.
-
-        The report is generated and stored by the agent at session end (consent-gated). This
-        serves it back to the client; a 404 means none was stored (no consent, the session was
-        too short, or the LLM produced nothing).
-        """
-        user = self._require_user(user)
-        if self._memory_store is None:
-            raise ServerMisconfigured("session reports are not enabled")
-        session_id = (session_id or "").strip()
-        try:
-            report = self._memory_store.load_report(user, session_id)
-        except MemoryStoreError as exc:
-            raise BadRequest(str(exc)) from exc
-        if report is None:
-            raise NotFound(f"no report for session {session_id!r}")
-        return report
-
 
 def _active_tts(settings: Settings) -> tuple[str, bool]:
     """Resolve the active TTS adapter name + whether it can clone, without loading models.
@@ -773,9 +737,6 @@ def build_service(settings: Settings | None = None) -> TokenService:
     max_user_personas = int(
         os.getenv("PERSONAVOICE_MAX_USER_PERSONAS", str(_DEFAULT_MAX_USER_PERSONAS)).strip() or 0
     )
-    # Per-user memory store, so the server can serve back the post-session reports the agent
-    # persists at session end (the GET /session/{id}/report route).
-    memory_store = load_memory_store(settings)
     return TokenService(
         TokenServiceConfig.from_env(),
         registry,
@@ -794,7 +755,6 @@ def build_service(settings: Settings | None = None) -> TokenService:
         llm_name=llm_name,
         supports_lora=supports_lora,
         lora_modules=lora_modules,
-        memory_store=memory_store,
     )
 
 
@@ -895,9 +855,6 @@ def _make_handler(
                     self._send_json(200, service.delete_persona(query.get("user"), pid))
                 elif path == "/loras" and method == "GET":
                     self._send_json(200, service.loras())
-                elif path.startswith("/session/") and path.endswith("/report") and method == "GET":
-                    sid = path[len("/session/") : -len("/report")]
-                    self._send_json(200, service.session_report(query.get("user"), sid))
                 elif path == "/voices" and method == "GET":
                     self._send_json(200, service.voices_catalog())
                 elif path == "/voices/clone" and method == "POST":
