@@ -120,6 +120,14 @@ $env:PERSONAVOICE_TOOL_TIMEOUT = '10'
 $env:PERSONAVOICE_SEMANTIC_ENDPOINTING = '1'
 $env:PERSONAVOICE_ENDPOINTING_GRACE_MS = '2500'
 
+# Prometheus /metrics: the worker writes its per-turn counters here and the token-server
+# container mounts + reads the same dir (see docker-compose.livekit.yml), so
+# http://<host>:8080/metrics aggregates them. Absolute path so it matches the compose mount, and
+# set BEFORE the worker starts (prometheus_client selects multi-process mode at import). The same
+# var feeds the compose mount source, so both sides land on this dir.
+if (-not $env:PROMETHEUS_MULTIPROC_DIR) { $env:PROMETHEUS_MULTIPROC_DIR = Join-Path $RepoRoot 'models\metrics' }
+New-Item -ItemType Directory -Force -Path $env:PROMETHEUS_MULTIPROC_DIR | Out-Null
+
 # --- preflight (cheap checks only; the one-time work lives in setup-cuda.ps1) ---------------
 $dockerOk = $false
 try { docker info 2>$null | Out-Null; $dockerOk = ($LASTEXITCODE -eq 0) } catch { $dockerOk = $false }
