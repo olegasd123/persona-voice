@@ -119,7 +119,7 @@ device + LiveKit call run still pending.
 | D | **Tool / function calling** `[Done]` | Capability | L | Med | — |
 | F | **Dynamic emotion / prosody** `[Done]` | Naturalness | M | Med | A (emotion plumbing) |
 | G | **Semantic endpointing** `[Done]` | Naturalness | M | Med | — |
-| H | **Prometheus `/metrics`** | Ops | S | Low | obs/metrics |
+| H | **Prometheus `/metrics`** `[Done]` | Ops | S | Low | obs/metrics |
 | I | **Concurrency / admission control** | Ops | M | Med | — |
 | J | **Web client** | Reach | L | Low | token server |
 | K | **Persona authoring helper** → folded into **N3** | DX | S | Low | persona loader |
@@ -671,7 +671,21 @@ and mid-thought barge-ins.
 
 ---
 
-## 8. Feature H — Prometheus `/metrics` (quick win)
+## 8. Feature H — Prometheus `/metrics` (quick win) `[Done]`
+
+> **Status:** Implemented, unit-tested, and verified live end-to-end (worker → shared dir →
+> token-server `/metrics` → browser). New `obs/prometheus.py` exposes the optional exporter:
+> `personavoice_turns_total{persona,outcome}` (outcome = ok|interrupted|error, so it doubles as
+> the barge-in/error counters) plus latency histograms
+> `personavoice_{stt,first_token,first_audio,turn}_seconds{persona}`. `record_turn()` feeds them
+> from the same per-turn `TurnMetrics` the agent already logs (best-effort — never crashes a
+> turn); `render_metrics()` backs a `GET /metrics` route on the token server alongside `/healthz`
+> (unauthenticated, un-rate-limited). `prometheus-client` is an optional dep (the `metrics` extra,
+> baked into the server image) — absent, `/metrics` serves an empty body. The agent worker and the
+> token server are separate processes, so they aggregate via the standard
+> `PROMETHEUS_MULTIPROC_DIR` shared dir: wired into `docker-compose.livekit.yml` (mount + env) and
+> the `run-mac.sh` / `run-cuda.ps1` launchers. `--check` surfaces exporter availability and warns
+> on a missing multiproc dir. README + `.env.example` updated.
 
 Per-turn metrics are only **logged** (`obs/metrics.py` `TurnMetrics.log`). Add a Prometheus
 exporter (counters/histograms for STT / first-token / first-audio / total, barge-ins, errors) and
