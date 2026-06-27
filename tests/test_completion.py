@@ -72,6 +72,25 @@ def test_single_dot_is_terminal_but_double_is_ellipsis() -> None:
     assert is_complete("hold on..") is False  # two+ dots = trailing off
 
 
+@pytest.mark.parametrize("text", ["Well", "Well,", "well"])
+def test_bare_discourse_marker_holds(text: str) -> None:
+    assert is_complete(text) is False
+    assert assess_completion(text).reason == "bare-discourse-marker"
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "I'm doing well",
+        "That went well",
+        "It works well",
+        "Well done",
+    ],
+)
+def test_well_as_content_stays_complete(text: str) -> None:
+    assert is_complete(text) is True
+
+
 # --- hedging lead-in phrases ("I guess", "I suppose", …) -------------------------------
 
 
@@ -89,6 +108,12 @@ def test_every_lead_in_phrase_holds_bare(phrase: str) -> None:
         "I suppose",
         "Hmm, I mean",  # phrase as the trailing words of a longer utterance
         "Well, the thing is",
+        "Well, the problem is",
+        "Anyway, his point is",
+        "Maybe her question is",
+        "Actually, their issue is",
+        "The reason is",
+        "The catch is",
         "I guess,",  # a trailing comma still holds
         "I GUESS",  # case-insensitive
         "I'm thinking",  # contraction form
@@ -107,6 +132,7 @@ def test_lead_in_phrase_in_context_holds(text: str) -> None:
         "I don't know",  # deliberately excluded — a common complete answer
         "that's what I think it is",  # phrase is embedded, not trailing
         "the thing is broken",  # "the thing is" only holds when it's the tail
+        "PowerPoint is",  # "point is" needs a word boundary before it
     ],
 )
 def test_non_lead_in_stays_complete(text: str) -> None:
@@ -118,6 +144,8 @@ def test_requested_phrases_are_catalogued() -> None:
     assert {"i guess", "i suppose", "i think", "i mean", "you know", "the thing is"} <= (
         TRAILING_PHRASES
     )
+    assert {"point is", "problem is", "question is", "issue is"} <= TRAILING_PHRASES
+    assert not {"the point is", "my point is", "the problem is"} & TRAILING_PHRASES
 
 
 def test_verdict_reasons() -> None:

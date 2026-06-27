@@ -56,6 +56,10 @@ DETERMINERS: frozenset[str] = frozenset({"a", "an", "the", "my", "your", "our", 
 # to unambiguous fillers — "like"/"well"/"you know" carry meaning too often to treat as a hold.
 FILLERS: frozenset[str] = frozenset({"um", "uh", "uhh", "uhm", "er", "erm", "hmm", "mmm", "ah"})
 
+# Bare discourse markers that are usually a lead-in, not a full turn ("Well, ..."). They are
+# matched only as the whole utterance, so "I'm doing well" stays complete.
+DISCOURSE_MARKERS: frozenset[str] = frozenset({"well"})
+
 # Trailing function words that signal a continuation (everything but the fillers, which get their
 # own verdict reason). Ending a fragment on one of these means "hold and wait for more".
 CONTINUATION_WORDS: frozenset[str] = CONJUNCTIONS | PREPOSITIONS | DETERMINERS
@@ -86,15 +90,33 @@ TRAILING_PHRASES: frozenset[str] = frozenset(
         "to be honest",
         "to be fair",
         "the thing is",
-        "the problem is",
-        "the point is",
-        "the reason is",
+        "problem is",
+        "point is",
+        "reason is",
+        "question is",
+        "issue is",
+        "idea is",
+        "catch is",
         "what i mean is",
         "what i'm saying is",
         "it's like",
         "let me think",
         "let me see",
         "let's see",
+        "i was wondering",
+        "i'm wondering",
+        "i was going to say",
+        "i wanted to say",
+        "i was about to say",
+        "what i'm trying to say is",
+        "what i was saying is",
+        "what i wanted to say is",
+        "here's the thing",
+        "here is the thing",
+        "for example",
+        "for instance",
+        "long story short",
+        "you know what",
     }
 )
 
@@ -139,6 +161,11 @@ def _ends_with_lead_in(stripped: str) -> bool:
     return any(tail == phrase or tail.endswith(f" {phrase}") for phrase in TRAILING_PHRASES)
 
 
+def _is_bare_discourse_marker(stripped: str) -> bool:
+    """True when the whole utterance is only a discourse marker ("Well", "Well,")."""
+    return stripped.lower().rstrip(" ,") in DISCOURSE_MARKERS
+
+
 def assess_completion(text: str) -> CompletionVerdict:
     """Classify a VAD utterance transcript as a finished turn or a mid-thought pause.
 
@@ -157,6 +184,8 @@ def assess_completion(text: str) -> CompletionVerdict:
         return CompletionVerdict(complete=True, reason="terminal-punctuation")
     if _ends_with_lead_in(stripped):
         return CompletionVerdict(complete=False, reason="trailing-lead-in")
+    if _is_bare_discourse_marker(stripped):
+        return CompletionVerdict(complete=False, reason="bare-discourse-marker")
     last = _last_word(stripped)
     if not last:
         return CompletionVerdict(complete=True, reason="no-word")
