@@ -12,6 +12,10 @@ To override environment variables use:
 $env:PERSONAVOICE_LOG_LEVEL = "TRACE"
 ```
 
+```sh
+export PERSONAVOICE_LOG_LEVEL="TRACE"
+```
+
 Splitting the two keeps `run-*` fast: it no longer rebuilds the token-server image or
 re-checks/installs Python deps on every start.
 
