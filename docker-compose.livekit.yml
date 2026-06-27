@@ -12,6 +12,11 @@
 #   LIVEKIT_URL=ws://localhost:7880 LIVEKIT_API_KEY=devkey LIVEKIT_API_SECRET=secret \
 #     BACKEND=mac personavoice --serve
 #
+# To see the agent's per-turn metrics on the token-server's /metrics, also export
+# PROMETHEUS_MULTIPROC_DIR (the shared dir the compose mount points at) for the worker, e.g.
+#   PROMETHEUS_MULTIPROC_DIR=./models/metrics  ...  personavoice --serve
+# Run the worker from the repo root so its relative path matches the mounted host dir.
+#
 # The Flutter client points at the token server (http://<host>:8080); it gets back the
 # LiveKit URL + a token and connects there. IMPORTANT: `LIVEKIT_URL` is the address the
 # *client* dials, so from a phone set it to the machine's LAN IP, e.g.
@@ -58,6 +63,14 @@ services:
       - PERSONAVOICE_PERSONA=${PERSONAVOICE_PERSONA:-companion}
       - PERSONAVOICE_HOST=0.0.0.0
       - PERSONAVOICE_PORT=8080
+      # Prometheus multi-process dir for /metrics. This is the ONE env var deliberately passed
+      # INTO the container (unlike the data-dir vars below): prometheus_client picks multi-process
+      # mode by the *presence* of this variable at import, so the token-server needs it set to its
+      # container-side path to aggregate the native worker's per-turn metrics from the shared dir
+      # below. The value is the fixed container target; the host side is the matching mount source.
+      # The native agent worker must also export PROMETHEUS_MULTIPROC_DIR (to the HOST path, e.g.
+      # ./models/metrics) so its turns land in the same dir — otherwise /metrics is just empty.
+      - PROMETHEUS_MULTIPROC_DIR=/app/models/metrics
     volumes:
       # Dev loop: source is baked into the image (Dockerfile `COPY src` + editable `pip install
       # -e`), so a Python change would otherwise need a full image rebuild — and because `COPY
@@ -109,6 +122,16 @@ services:
       - type: bind
         source: ${PERSONAVOICE_MEMORY_DIR:-./models/memory}
         target: /app/models/memory
+        bind:
+          create_host_path: true
+      # Prometheus multi-process metrics dir, shared with the native agent worker. The worker
+      # writes one mmap file per process here (gated by its PROMETHEUS_MULTIPROC_DIR); the
+      # token-server's /metrics reads + aggregates them (see PROMETHEUS_MULTIPROC_DIR above). The
+      # host source is driven by the SAME var the worker reads, keeping the two in lockstep just
+      # like the data dirs; the container target is the fixed path the env var above points at.
+      - type: bind
+        source: ${PROMETHEUS_MULTIPROC_DIR:-./models/metrics}
+        target: /app/models/metrics
         bind:
           create_host_path: true
     ports:
