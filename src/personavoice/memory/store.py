@@ -43,10 +43,15 @@ from ..models import Role
 _CONSENT_NAME = "consent.json"
 _TRANSCRIPT_NAME = "transcript.jsonl"
 _PROFILE_NAME = "profile.json"
+# Post-session feedback reports live one-per-session under this subdir (see report.py).
+_REPORTS_DIRNAME = "reports"
 
 # A user id becomes a directory name and must stay one path segment. Participant identities
 # are usually emails/handles, so allow those characters but never a separator or `..`.
 _USER_ID_RE = re.compile(r"[A-Za-z0-9_.@+-]+")
+# A session id becomes a report filename. Session ids are `uuid4().hex`, but the value reaching
+# `load_report` comes from a request URL, so validate it can't escape the reports dir.
+_SESSION_ID_RE = re.compile(r"[A-Za-z0-9_-]+")
 
 
 class MemoryStoreError(ValueError):
@@ -68,6 +73,16 @@ def _safe_user_id(user_id: str) -> str:
             f"invalid user id {user_id!r}; use letters, digits, '_.@+-' (no path separators)"
         )
     return uid
+
+
+def _safe_session_id(session_id: str) -> str:
+    """Validate `session_id` for use as a report filename, or raise `MemoryStoreError`."""
+    sid = (session_id or "").strip()
+    if not sid or sid in {".", ".."} or not _SESSION_ID_RE.fullmatch(sid):
+        raise MemoryStoreError(
+            f"invalid session id {session_id!r}; use letters, digits, '_' or '-'"
+        )
+    return sid
 
 
 # --------------------------------------------------------------------------------------
@@ -287,6 +302,38 @@ class MemoryStore:
     def save_profile_raw(self, user_id: str, data: dict[str, Any]) -> None:
         self._write_blob(self._user_dir(user_id) / _PROFILE_NAME, data)
 
+    # -- session reports ---------------------------------------------------------------
+    def _reports_dir(self, user_id: str) -> Path:
+        return self._user_dir(user_id) / _REPORTS_DIRNAME
+
+    def save_report(self, user_id: str, session_id: str, report: dict[str, Any]) -> None:
+        """Persist one session's feedback report. Consent-gated, like transcripts.
+
+        Stored as `<user>/reports/<session_id>.json` (cipher-wrapped). Refuses without consent
+        so the report can't outlive a user who never opted in.
+        """
+        if not self.has_consent(user_id):
+            raise MemoryStoreError(
+                f"user {user_id!r} has not granted recording consent; report not stored"
+            )
+        sid = _safe_session_id(session_id)
+        self._write_blob(self._reports_dir(user_id) / f"{sid}.json", report)
+
+    def load_report(self, user_id: str, session_id: str) -> dict[str, Any] | None:
+        """The stored report for a session, or None if none was saved."""
+        sid = _safe_session_id(session_id)
+        path = self._reports_dir(user_id) / f"{sid}.json"
+        if not path.is_file():
+            return None
+        return self._read_blob(path)
+
+    def report_session_ids(self, user_id: str) -> list[str]:
+        """Session ids that have a stored report, sorted."""
+        reports = self._reports_dir(user_id)
+        if not reports.is_dir():
+            return []
+        return sorted(p.stem for p in reports.glob("*.json"))
+
     # -- users / privacy ---------------------------------------------------------------
     def users(self) -> list[str]:
         """Every user that has a directory under the store, sorted."""
@@ -316,6 +363,7 @@ class MemoryStore:
             "consent": self.get_consent(uid).model_dump(),
             "profile": self.load_profile_raw(uid),
             "turns": [t.model_dump() for t in self._iter_turns(uid)],
+            "reports": {sid: self.load_report(uid, sid) for sid in self.report_session_ids(uid)},
         }
 
     # -- blob helpers ------------------------------------------------------------------

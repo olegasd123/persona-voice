@@ -34,6 +34,7 @@ from typing import Any
 
 from ..adapters.factory import Backend, build_backend
 from ..audio import pcm16_to_wav, wav_to_pcm16
+from ..eval.report import report_enabled_for
 from ..memory import ConversationMemory
 from ..models import Persona, SessionOptions
 from ..obs import configure_logging, turn_metrics_from_stream
@@ -124,11 +125,17 @@ class PersonaAgent:
         user_id: str | None = None,
         semantic_endpointing: bool | None = None,
         grace_s: float | None = None,
+        session_reports: bool | None = None,
     ) -> None:
         self._backend = backend
         self._persona = persona
         self._source = source
         self._memory = memory
+        self._user_id = user_id
+        # Whether to generate a post-session feedback report at teardown. None defers to the
+        # env policy + the (final) persona's kind (`report_enabled_for`); a bool forces it. The
+        # report is still consent-gated inside `ConversationMemory.finalize_report`.
+        self._session_reports = session_reports
         # Semantic endpointing: when on, an utterance that reads as a mid-thought
         # pause (`completion.assess_completion`) is *held* and merged with the next one rather
         # than answered immediately, and a grace timer flushes it if the user doesn't continue.
@@ -389,8 +396,31 @@ class PersonaAgent:
             with contextlib.suppress(asyncio.CancelledError, Exception):
                 await task
         if self._memory is not None:
+            await self._finalize_report()
             # Flush any in-flight profile distillation before the worker tears down.
             await self._memory.aclose()
+
+    async def _finalize_report(self) -> None:
+        """Generate + persist a post-session feedback report (best-effort, at teardown).
+
+        Runs only when memory + a user id + a started session exist (so it's keyed and
+        consent-gated downstream) and the report policy enables it for this persona. Works off
+        the live conversation history — independent of whether the persona stores transcripts.
+        """
+        session_id = self._pipeline.session_id
+        if self._memory is None or not self._user_id or session_id is None:
+            return
+        enabled = (
+            self._session_reports
+            if self._session_reports is not None
+            else report_enabled_for(self._persona.id)
+        )
+        if not enabled:
+            return
+        with contextlib.suppress(Exception):  # a report must never break teardown
+            await self._memory.finalize_report(
+                self._user_id, self._persona, session_id, list(self._pipeline.history)
+            )
 
 
 def _load_vad(silero: Any) -> Any:

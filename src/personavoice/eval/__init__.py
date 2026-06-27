@@ -16,15 +16,37 @@ from .dashboard import (
     format_dashboard,
 )
 from .mos import MosSummary, summarize_mos
+from .report import (
+    ReportBuilder,
+    ReportKind,
+    ReportPolicy,
+    RubricScore,
+    SessionReport,
+    build_report_prompt,
+    parse_report_response,
+    report_enabled_for,
+    report_kind_for,
+    report_policy,
+)
 from .wer import normalize_text, wer, word_errors
 
 __all__ = [
     "Gate",
     "MetricResult",
     "MosSummary",
+    "ReportBuilder",
+    "ReportKind",
+    "ReportPolicy",
+    "RubricScore",
+    "SessionReport",
+    "build_report_prompt",
     "evaluate_gates",
     "format_dashboard",
     "normalize_text",
+    "parse_report_response",
+    "report_enabled_for",
+    "report_kind_for",
+    "report_policy",
     "summarize_mos",
     "wer",
     "word_errors",

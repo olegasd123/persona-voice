@@ -119,6 +119,7 @@ $env:PERSONAVOICE_TOOL_MAX_ITERS = '4'
 $env:PERSONAVOICE_TOOL_TIMEOUT = '10'
 $env:PERSONAVOICE_SEMANTIC_ENDPOINTING = '1'
 $env:PERSONAVOICE_ENDPOINTING_GRACE_MS = '2500'
+$env:PERSONAVOICE_SESSION_REPORTS = 'auto'
 
 # --- preflight (cheap checks only; the one-time work lives in setup-cuda.ps1) ---------------
 $dockerOk = $false

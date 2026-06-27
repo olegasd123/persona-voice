@@ -117,7 +117,7 @@ device + LiveKit call run still pending.
 | B | **Multi-voice cloning + voice library** `[Done]` (server) | Personalization | L | Med | A (voice field) |
 | C | **Safety / moderation layer** `[Done]` | Trust | M | Low | — (enables "rude") |
 | D | **Tool / function calling** `[Done]` | Capability | L | Med | — |
-| E | **Post-session feedback report** | Capability | M | Low | memory/transcript |
+| E | **Post-session feedback report** `[Done]` | Capability | M | Low | memory/transcript |
 | F | **Dynamic emotion / prosody** `[Done]` | Naturalness | M | Med | A (emotion plumbing) |
 | G | **Semantic endpointing** `[Done]` | Naturalness | M | Med | — |
 | H | **Prometheus `/metrics`** | Ops | S | Low | obs/metrics |
@@ -596,7 +596,20 @@ resume, the companion check time/weather.
 
 ---
 
-## 6. Feature E — Post-session feedback report
+## 6. Feature E — Post-session feedback report `[Done]`
+
+> **Status:** Implemented and unit-tested. New pure module `eval/report.py` (`SessionReport` +
+> `RubricScore`, persona-shaped rubric via `report_kind_for` → interview / language / general,
+> `build_report_prompt` + defensive `parse_report_response`, and a `ReportBuilder` over an
+> injected LLM — mirroring `memory/profile.py`). `MemoryStore` gains consent-gated
+> `save_report`/`load_report`/`report_session_ids` (one JSON per session under `<user>/reports/`,
+> cipher-wrapped, included in `export_user`); `ConversationMemory.finalize_report` builds + persists
+> from the *live* transcript (so it works even when a persona doesn't store turns), consent + LLM
+> gated. The agent finalizes a report at teardown (`PersonaAgent.aclose`), and the token server
+> serves it via `GET /session/{id}/report?user=`. `PERSONAVOICE_SESSION_REPORTS` picks which personas
+> get one (`auto` default = interview + language; `all`; `off`). Only the transcript text is used,
+> so audio-only signals (true pace, pronunciation) are out of scope; live data-message delivery at
+> teardown was skipped (the participant is leaving) in favor of the reliable fetch route.
 
 ### 6.1 Motivation
 

@@ -713,3 +713,65 @@ async def test_endpointing_off_answers_each_utterance(config_dir: Path) -> None:
     await ag._turn.join()
     assert spoken == [b"RIFF" + b"Okay."]
     assert ag._held is None
+
+
+# --- post-session feedback report (teardown hook) -------------------------------------
+
+
+class _ReportLLM:
+    """Fake LLM whose `.chat` returns a fixed rubric JSON (the slice the builder uses)."""
+
+    def __init__(self, reply: str) -> None:
+        self.reply = reply
+
+    async def chat(self, messages: object, persona: object) -> str:
+        return self.reply
+
+
+def _report_memory(tmp_path: Path):
+    from personavoice.memory import ConversationMemory, MemoryStore
+
+    store = MemoryStore(tmp_path)
+    store.set_consent("alice", granted=True)
+    llm = _ReportLLM('{"summary": "Nice work.", "scores": [{"name": "Clarity", "score": 4}]}')
+    return ConversationMemory(store, llm=llm), store
+
+
+async def test_aclose_finalizes_report(config_dir: Path, tmp_path: Path) -> None:
+    mem, store = _report_memory(tmp_path)
+    ag = agent.PersonaAgent(
+        make_backend(),
+        _companion(config_dir),
+        FakeSource(),
+        memory=mem,
+        user_id="alice",
+        session_reports=True,  # force on (companion is a "general" persona)
+    )
+    # Seed the live conversation history the report is built from.
+    ag._pipeline.history = [
+        Msg(role="user", content="I led a migration project."),
+        Msg(role="assistant", content="What was the result?"),
+        Msg(role="user", content="We cut costs by a third."),
+    ]
+    session_id = ag._pipeline.session_id
+    assert session_id is not None
+
+    await ag.aclose()
+    assert store.load_report("alice", session_id)["summary"] == "Nice work."
+
+
+async def test_aclose_skips_report_when_disabled(config_dir: Path, tmp_path: Path) -> None:
+    mem, store = _report_memory(tmp_path)
+    ag = agent.PersonaAgent(
+        make_backend(),
+        _companion(config_dir),
+        FakeSource(),
+        memory=mem,
+        user_id="alice",
+        session_reports=False,
+    )
+    ag._pipeline.history = [Msg(role="user", content="hello there friend")]
+    session_id = ag._pipeline.session_id
+    await ag.aclose()
+    assert session_id is not None
+    assert store.load_report("alice", session_id) is None

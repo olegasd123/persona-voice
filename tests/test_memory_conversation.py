@@ -6,7 +6,7 @@ from pathlib import Path
 
 from personavoice.memory import ConversationMemory, MemoryStore
 from personavoice.memory.profile import UserProfile
-from personavoice.models import MemorySettings, Persona
+from personavoice.models import MemorySettings, Msg, Persona, Role
 
 from .fakes import make_persona
 
@@ -166,3 +166,66 @@ async def test_no_consolidation_without_llm(tmp_path: Path) -> None:
     await mem.record_assistant("alice", s, persona, "hello")
     await mem.aclose()
     assert store.load_profile_raw("alice") is None  # nothing distilled
+
+
+# --------------------------------------------------------------------------------------
+# post-session feedback report (finalize_report)
+# --------------------------------------------------------------------------------------
+
+_REPORT_JSON = '{"summary": "Good session.", "scores": [{"name": "Clarity", "score": 4}]}'
+
+
+def _transcript() -> list[Msg]:
+    return [
+        Msg(role=Role.assistant, content="Tell me about a challenge."),
+        Msg(role=Role.user, content="I once debugged a nasty race condition."),
+        Msg(role=Role.assistant, content="How did it end?"),
+        Msg(role=Role.user, content="I fixed it with a lock and shipped the release."),
+    ]
+
+
+async def test_finalize_report_persists_with_consent(tmp_path: Path) -> None:
+    store = MemoryStore(tmp_path)
+    store.set_consent("alice", granted=True)
+    mem = ConversationMemory(store, llm=_ReplyLLM(_REPORT_JSON))
+    report = await mem.finalize_report("alice", _persona(), "sess1", _transcript())
+    assert report is not None
+    assert report.summary == "Good session."
+    assert store.load_report("alice", "sess1")["summary"] == "Good session."
+
+
+async def test_finalize_report_noop_without_consent(tmp_path: Path) -> None:
+    store = MemoryStore(tmp_path)
+    llm = _ReplyLLM(_REPORT_JSON)
+    mem = ConversationMemory(store, llm=llm)
+    assert await mem.finalize_report("alice", _persona(), "sess1", _transcript()) is None
+    assert llm.calls == 0  # consent checked before the LLM call
+    assert store.load_report("alice", "sess1") is None
+
+
+async def test_finalize_report_noop_without_llm(tmp_path: Path) -> None:
+    store = MemoryStore(tmp_path)
+    store.set_consent("alice", granted=True)
+    mem = ConversationMemory(store)  # no llm
+    assert await mem.finalize_report("alice", _persona(), "sess1", _transcript()) is None
+
+
+async def test_finalize_report_runs_when_persona_memory_disabled(tmp_path: Path) -> None:
+    # The report is about *this* session and works off the live transcript, so it must not
+    # depend on the persona opting into memory storage (an interviewer typically doesn't).
+    store = MemoryStore(tmp_path)
+    store.set_consent("alice", granted=True)
+    mem = ConversationMemory(store, llm=_ReplyLLM(_REPORT_JSON))
+    report = await mem.finalize_report("alice", _persona(enabled=False), "sess1", _transcript())
+    assert report is not None
+    assert store.load_report("alice", "sess1") is not None
+
+
+async def test_finalize_report_skips_trivial_session(tmp_path: Path) -> None:
+    store = MemoryStore(tmp_path)
+    store.set_consent("alice", granted=True)
+    llm = _ReplyLLM(_REPORT_JSON)
+    mem = ConversationMemory(store, llm=llm)
+    short = [Msg(role=Role.user, content="hi")]
+    assert await mem.finalize_report("alice", _persona(), "sess1", short) is None
+    assert llm.calls == 0
