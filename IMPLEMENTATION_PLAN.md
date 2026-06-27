@@ -3,9 +3,9 @@
 A consolidated, detailed plan for the next round of functionality. It merges two sets of
 ideas:
 
-1. **Capability / production gaps** surfaced from a code read (tool calling, session reports,
-   safety, dynamic emotion, semantic endpointing, metrics, concurrency, web client, persona
-   authoring, memory introspection).
+1. **Capability / production gaps** surfaced from a code read (tool calling, safety, dynamic
+   emotion, semantic endpointing, metrics, concurrency, web client, persona authoring, memory
+   introspection).
 2. **Session-personalization features** requested directly: **pick a voice before a
    conversation** (built on **multi-voice cloning**), **CEFR level** for language learners, and
    **person type / demeanor** (kind / natural / rude).
@@ -49,7 +49,7 @@ session-options behavior (voice override / CEFR / demeanor) or voice cloning is 
   Token-server tests updated.
 
 **What this changes about the plan:**
-- The headline trio's **client UI (§15 step 4 / Feature J)** is now partly built — the picker and
+- The headline trio's **client UI (§14 step 4 / Feature J)** is now partly built — the picker and
   settings surfaces exist. The *remaining* client work is the **voice / CEFR / demeanor selectors**
   on top of this scaffold, plus sending the chosen options in the `/token` body.
 - `GET /personas` is **no longer "unchanged"** (see §2.5 threading table) — it's already the richer
@@ -69,7 +69,7 @@ and unit-tested** (full `pytest` green, `ruff`/`mypy` clean):
   `GET /voices` / `POST /voices/clone` / `DELETE /voices/clone/{name}` routes (raw-wav upload,
   quotas, capability gating).
 
-Still unimplemented: the **client selectors/picker** (§15 step 4 / Feature J) on top of these
+Still unimplemented: the **client selectors/picker** (§14 step 4 / Feature J) on top of these
 routes, and Features **D–L**.
 
 ---
@@ -109,7 +109,7 @@ device + LiveKit call run still pending.
 
 **Backlog (capabilities / ops / DX — independent, land any time).** Features **A/B/C** are the
 *server* substrate the NOW block builds on (already done & tested); **D** (tool calling),
-**F** (dynamic emotion), and **G** (semantic endpointing) have since landed; E/H–L are unchanged.
+**F** (dynamic emotion), and **G** (semantic endpointing) have since landed; H–L are unchanged.
 
 | # | Feature | Theme | Effort | Risk | Depends on |
 |---|---------|-------|--------|------|------------|
@@ -117,7 +117,6 @@ device + LiveKit call run still pending.
 | B | **Multi-voice cloning + voice library** `[Done]` (server) | Personalization | L | Med | A (voice field) |
 | C | **Safety / moderation layer** `[Done]` | Trust | M | Low | — (enables "rude") |
 | D | **Tool / function calling** `[Done]` | Capability | L | Med | — |
-| E | **Post-session feedback report** | Capability | M | Low | memory/transcript |
 | F | **Dynamic emotion / prosody** `[Done]` | Naturalness | M | Med | A (emotion plumbing) |
 | G | **Semantic endpointing** `[Done]` | Naturalness | M | Med | — |
 | H | **Prometheus `/metrics`** | Ops | S | Low | obs/metrics |
@@ -290,7 +289,7 @@ rejected.
 > `PersonaAgent` (with `set_options()` + a `session_from_metadata`/`resolve_session_options`
 > helper and mid-call data-message changes), token-server validation/echo, and `--voice/--cefr/
 > --demeanor` flags on both demos all landed. The remaining piece is the **client selectors**
-> (§15 step 4 / Feature J).
+> (§14 step 4 / Feature J).
 
 ### 2.1 Motivation
 
@@ -424,7 +423,7 @@ def voice_ref_for(persona, backend, voices=None, *, voice_choice: str | None = N
 > `POST /voices/clone` (raw-wav body + `name`/`text`/`authorized`; quota + size caps), and
 > `DELETE /voices/clone/{name}` (`server/token_server.py`, with `ClonesStore.remove`) all landed.
 > Enrollment is multipart-free (Python 3.13 dropped `cgi`): the wav rides as the raw request
-> body. The **client picker UI** is the remaining piece (§15 step 4 / Feature J).
+> body. The **client picker UI** is the remaining piece (§14 step 4 / Feature J).
 
 > This is the substrate for "pick a voice before a conversation." The store already holds **many**
 > named clones (`ClonesStore._voices: dict[name -> ClonedVoice]` in
@@ -596,31 +595,7 @@ resume, the companion check time/weather.
 
 ---
 
-## 6. Feature E — Post-session feedback report
-
-### 6.1 Motivation
-
-Eval scores the *system*; nothing scores the *user*. For `pm_interviewer` / `hr_interviewer` /
-`language_teacher` the obvious product feature is an end-of-call report.
-
-### 6.2 Design
-
-- A distill-style pass (reuse the `memory/distill.py` machinery) over the session transcript that
-  emits a structured rubric: for interviews — STAR structure, filler-word count, pace, clarity;
-  for the teacher — CEFR-calibrated grammar/vocab feedback and corrections.
-- Triggered on session end (participant leaves in `agent.py`) or on demand; returned to the client
-  as a data message / fetched via a new `GET /session/{id}/report` route.
-- Persisted with the session (consent-gated, same store as memory).
-
-### 6.3 Files / tests
-
-- `src/personavoice/eval/report.py` (rubric prompts + parsing), hook in `agent.entrypoint`
-  teardown, route in `token_server.py`.
-- Tests with a canned transcript + fake LLM producing a rubric JSON; schema validation.
-
----
-
-## 7. Feature F — Dynamic emotion / prosody `[Done]`
+## 6. Feature F — Dynamic emotion / prosody `[Done]`
 
 > **Status:** Implemented and unit-tested, opt-in via `PERSONAVOICE_DYNAMIC_EMOTION` (default off,
 > so behavior is unchanged). New pure module `emotion.py` (top-level, next to `audio.py`): a closed
@@ -635,20 +610,20 @@ Eval scores the *system*; nothing scores the *user*. For `pm_interviewer` / `hr_
 > emitted). `.env.example` + README updated. The optional "infer the emotion from the reply"
 > alternative was not taken — the LLM-emitted tag is lower-latency and needs no extra inference.
 
-### 7.1 Motivation
+### 6.1 Motivation
 
 Emotion is **static** today — resolved once from the voice registry (`registry.py` `resolve`,
 `VoiceSettings.emotion` default `"neutral"`). Chatterbox has
 exaggeration control that go unused per-utterance.
 
-### 7.2 Design
+### 6.2 Design
 
 - Let the LLM emit a lightweight per-reply emotion hint (a leading tag stripped before TTS, or a
   structured side-channel), or infer it cheaply from the reply.
 - Thread it into `VoiceRef.emotion` at synth time (the field already exists) so
   `tts/chatterbox.py` renders it; Kokoro ignores it gracefully.
 
-### 7.3 Files / tests
+### 6.3 Files / tests
 
 - `orchestrator/streaming.py` (extract hint), `voice_ref_for` (apply per-utterance emotion),
   TTS adapters (map hint → backend control).
@@ -657,7 +632,7 @@ exaggeration control that go unused per-utterance.
 
 ---
 
-## 8. Feature G — Semantic endpointing `[Done]`
+## 7. Feature G — Semantic endpointing `[Done]`
 
 > **Status:** Implemented and unit-tested, opt-in via `PERSONAVOICE_SEMANTIC_ENDPOINTING` (default
 > off, so pure-VAD behavior is unchanged). New pure module `orchestrator/completion.py`:
@@ -674,13 +649,13 @@ exaggeration control that go unused per-utterance.
 > object pronouns) complete. The optional backchannel / "you were cut off" hint was not taken
 > (kept to the core hold-and-merge gate).
 
-### 8.1 Motivation
+### 7.1 Motivation
 
 Endpointing is pure Silero VAD silence (`orchestrator/endpointing.py`). It cannot tell a
 mid-thought pause ("I think… *pause* …it's fine") from a finished turn — a source of both dead air
 and mid-thought barge-ins.
 
-### 8.2 Design
+### 7.2 Design
 
 - A cheap "is this utterance complete?" gate (punctuation/heuristic or a tiny classifier) layered
   on the VAD timeout in `agent.py`'s turn detection; extend the turn just past a VAD trigger when
@@ -688,7 +663,7 @@ and mid-thought barge-ins.
 - Optional: backchannels ("mhm") and telling the LLM when it was cut off mid-sentence so it can
   recover gracefully.
 
-### 8.3 Files / tests
+### 7.3 Files / tests
 
 - New `orchestrator/completion.py` (pure, offline-testable like `endpointing.py`), wired in the
   VAD handling in `agent.py`.
@@ -696,7 +671,7 @@ and mid-thought barge-ins.
 
 ---
 
-## 9. Feature H — Prometheus `/metrics` (quick win)
+## 8. Feature H — Prometheus `/metrics` (quick win)
 
 Per-turn metrics are only **logged** (`obs/metrics.py` `TurnMetrics.log`). Add a Prometheus
 exporter (counters/histograms for STT / first-token / first-audio / total, barge-ins, errors) and
@@ -705,7 +680,7 @@ the client lib is absent. Small, isolated, high ops value.
 
 ---
 
-## 10. Feature I — Concurrency / admission control
+## 9. Feature I — Concurrency / admission control
 
 The VRAM budget assumes **one** conversation. Nothing caps simultaneous callers on a 16 GB card.
 Add: a max-concurrent-sessions gate in the agent worker (reject/queue with a "busy" reply when
@@ -714,19 +689,19 @@ Pairs with Feature H for visibility.
 
 ---
 
-## 11. Feature J — Web client
+## 10. Feature J — Web client
 
 Only the Flutter mobile app exists (plus the generic Agents Playground). The Flutter app now has a
 real **persona picker + Settings surface** (see Status) — the natural place to add the voice / CEFR /
 demeanor selectors before standing up a separate web client. A purpose-built browser client
 (LiveKit JS SDK) is still worthwhile to remove the install barrier and is the natural home for the
-**voice picker** (Feature B) and the **session report** (Feature E); it reuses the token server and
+**voice picker** (Feature B); it reuses the token server and
 `/personas` + `/voices` routes. Treat the web client as additive, not a prerequisite for the
 session-options UI.
 
 ---
 
-## 12. Feature K — Persona authoring helper
+## 11. Feature K — Persona authoring helper
 
 > **Folded into N3** (§1.5) — multi-user **JSON persona store** with `POST/PUT/DELETE /personas`
 > and client authoring UI. The note below is now an *optional add-on* to N3, not separate work.
@@ -738,7 +713,7 @@ on top of N3's authoring routes.
 
 ---
 
-## 13. Feature L — Memory introspection (client)
+## 12. Feature L — Memory introspection (client)
 
 A "what do you remember about me?" surface over the existing per-user store
 (`memory/profile.py`, `memory/facade`), exposed as a data message / route and shown in the client.
@@ -746,7 +721,7 @@ Strengthens the consent story already built (`personavoice-memory --show/--expor
 
 ---
 
-## 14. Cross-cutting checklist (applies to every server-side item)
+## 13. Cross-cutting checklist (applies to every server-side item)
 
 - `pytest` green offline (fake adapters, no GPU); `ruff check` + `ruff format --check`; `mypy src`.
 - `.env.example` updated for any new env var; README section updated.
@@ -756,7 +731,7 @@ Strengthens the consent story already built (`personavoice-memory --show/--expor
 
 ---
 
-## 15. Headline path (the requested trio, end to end)
+## 14. Headline path (the requested trio, end to end)
 
 1. **C** `[Done]` — moderation seam (no-op default) so `rude` is safe by construction.
 2. **A** `[Done]` — `SessionOptions` + CEFR/demeanor directives + voice-override plumbing +
