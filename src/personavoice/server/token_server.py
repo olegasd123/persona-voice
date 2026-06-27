@@ -22,6 +22,8 @@ Endpoints (all JSON, permissive CORS so a browser client / Playground can call t
     DELETE /personas/{id}?user=   -> delete one of the user's own personas
     GET    /loras            -> {"loras": [LoraOption...], "llm", "supports_lora"}
     GET    /voices           -> {"voices": [VoiceOption...], "tts", "supports_cloning"}
+    GET    /consent?user=    -> {"user","granted","allow_training","updated_at"}
+    POST   /consent?user=    -> set it; body: {"granted": bool, "allow_training"?: bool}
     POST   /token            -> mint a token; body: {"room"?, "identity"?, "name"?, "persona"?,
                                 "voice"?, "cefr"?, "demeanor"?, "user"?}
     GET    /token?room=&identity=&name=&persona=&voice=&cefr=&demeanor=&user=  (manual testing)
@@ -57,6 +59,7 @@ from urllib.parse import parse_qs, urlparse
 
 from pydantic import ValidationError
 
+from ..memory import MemoryStore
 from ..models import CEFRLevel, Demeanor, Persona, SessionOptions
 from ..persona.lora import served_loras
 from ..persona.registry import PersonaRegistry
@@ -64,7 +67,12 @@ from ..persona.store import UserPersonaStore
 from ..voice.clone import CloneError, VoiceCloner
 from ..voice.registry import VoiceRegistry
 from ..voice.seed import seed_voice_names
-from .config import Settings, load_user_persona_store, load_voice_registry
+from .config import (
+    Settings,
+    load_memory_store,
+    load_user_persona_store,
+    load_voice_registry,
+)
 from .ratelimit import RateLimiter, rate_limiter_from_env
 from .security import audit_security, has_errors
 from .tokens import mint_access_token
@@ -203,6 +211,7 @@ class TokenService:
         llm_name: str = "",
         supports_lora: bool = False,
         lora_modules: str | None = None,
+        memory: MemoryStore | None = None,
     ) -> None:
         self._config = config
         self._registry = registry
@@ -232,6 +241,9 @@ class TokenService:
         self._llm_name = llm_name
         self._supports_lora = supports_lora
         self._lora_modules = lora_modules
+        # Per-user conversation memory store: backs the /consent routes (the same `consent.json`
+        # the cascade checks before recording). None disables them (e.g. in unit tests).
+        self._memory = memory
 
     def check_auth(self, authorization: str | None) -> None:
         """Enforce the optional bearer token. No-op when `api_token` is unset (dev mode)."""
@@ -639,6 +651,55 @@ class TokenService:
             raise BadRequest(f"unknown persona {persona_id!r}")
         return {"deleted": persona_id}
 
+    # -- consent (per-user recording opt-in) -------------------------------------------
+
+    def _require_memory(self) -> MemoryStore:
+        if self._memory is None:
+            raise ServerMisconfigured("conversation memory is not enabled")
+        return self._memory
+
+    def _consent_payload(self, user: str) -> dict[str, Any]:
+        c = self._require_memory().get_consent(user)
+        return {
+            "user": user,
+            "granted": c.granted,
+            "allow_training": c.allow_training,
+            "updated_at": c.updated_at,
+        }
+
+    def get_consent(self, user: str | None) -> dict[str, Any]:
+        """Return a user's current recording-consent state (to render the client toggle).
+
+        A user who never set consent reads back an ungranted default — the same thing the
+        cascade sees when it refuses to record.
+        """
+        return self._consent_payload(self._require_user(user))
+
+    def set_consent(
+        self, user: str | None, *, granted: bool, allow_training: bool = False
+    ) -> dict[str, Any]:
+        """Grant or withdraw a user's recording consent from the client.
+
+        This writes the same `consent.json` as `personavoice-memory --grant/--revoke`: it's the
+        gate the cascade checks before storing any turn. Withdrawing consent keeps already-stored
+        data (use the memory CLI's `--delete` to erase it); `allow_training` is the stricter,
+        separate opt-in for letting transcripts feed a training distill, and is forced off when
+        consent itself is withdrawn (you can't train on what you can't store).
+
+        Trust note: like every `?user=` route here, the user id is client-asserted and only as
+        strong as the shared API token — a caller can set consent for any id. That's fine for the
+        single-tenant / self-hosted shape; a multi-tenant deployment should derive `user` from the
+        authenticated token identity instead of trusting the query param.
+        """
+        user = self._require_user(user)
+        self._require_memory().set_consent(
+            user,
+            granted=granted,
+            allow_training=granted and allow_training,
+            note="set via client",
+        )
+        return self._consent_payload(user)
+
     # -- LoRA catalog ------------------------------------------------------------------
 
     def loras(self) -> dict[str, Any]:
@@ -712,6 +773,9 @@ def build_service(settings: Settings | None = None) -> TokenService:
     tts_name, supports_cloning = _active_tts(settings)
     # Multi-user custom personas + LoRA picker capability (N3).
     user_personas = load_user_persona_store(settings)
+    # Per-user memory store — backs the /consent routes so a client can set its own opt-in
+    # (encrypted at rest if PERSONAVOICE_MEMORY_KEY is set; tolerates a missing dir).
+    memory = load_memory_store(settings)
     llm_name, supports_lora = _active_llm(settings)
     # What vLLM was launched serving (`--lora-modules`). PERSONAVOICE_LORA_MODULES overrides the
     # docker-compose VLLM_LORA_MODULES var for non-compose deployments.
@@ -755,6 +819,7 @@ def build_service(settings: Settings | None = None) -> TokenService:
         llm_name=llm_name,
         supports_lora=supports_lora,
         lora_modules=lora_modules,
+        memory=memory,
     )
 
 
@@ -857,6 +922,21 @@ def _make_handler(
                     self._send_json(200, service.loras())
                 elif path == "/voices" and method == "GET":
                     self._send_json(200, service.voices_catalog())
+                elif path == "/consent" and method == "GET":
+                    self._send_json(200, service.get_consent(query.get("user")))
+                elif path == "/consent" and method == "POST":
+                    body = self._read_json_body()
+                    granted = body.get("granted")
+                    if not isinstance(granted, bool):
+                        raise BadRequest("'granted' must be a boolean (true to opt in, false out)")
+                    self._send_json(
+                        200,
+                        service.set_consent(
+                            query.get("user") or body.get("user"),
+                            granted=granted,
+                            allow_training=bool(body.get("allow_training", False)),
+                        ),
+                    )
                 elif path == "/voices/clone" and method == "POST":
                     self._handle_clone(query)
                 elif path.startswith("/voices/clone/") and method == "DELETE":

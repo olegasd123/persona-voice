@@ -475,6 +475,10 @@ for what was just said. It is **consent-gated** — nothing is stored or recalle
 in — and keyed per user (`{"user": "..."}` room/job metadata, or the LiveKit participant
 identity). The core memory (store, profile, keyword recall, distill) needs **no extra**.
 
+A user can set their own consent from the client: the app's **Settings → Privacy** toggle posts
+to the token server (`GET`/`POST /consent?user=<id>`), writing the same `consent.json` as the
+`personavoice-memory --grant`/`--revoke` CLI below — the CLI stays the operator backstop.
+
 ```bash
 # Try it offline (no LiveKit). --user opts that id in and keys their memory:
 personavoice-stream-demo --wav intro.wav --persona companion --user sam   # records + distills

@@ -11,6 +11,7 @@ from pathlib import Path
 
 import pytest
 
+from personavoice.memory import MemoryStore
 from personavoice.models import Persona, VoiceDef, VoiceRef
 from personavoice.persona.registry import PersonaRegistry
 from personavoice.persona.store import UserPersonaStore
@@ -662,6 +663,83 @@ def test_create_persona_validates_lora_on_lora_backend(
     assert ok["persona"]["llm"]["lora"] == "adapters/hr_interviewer"
 
 
+# --- consent (per-user recording opt-in) ----------------------------------------------
+
+
+def make_consent_service(
+    registry: PersonaRegistry,
+    tmp_path: Path,
+    *,
+    api_token: str | None = None,
+) -> tuple[TokenService, MemoryStore]:
+    """A TokenService backed by a real (plaintext) memory store for the /consent routes."""
+    store = MemoryStore(tmp_path / "memory")
+    config = TokenServiceConfig(
+        livekit_url="wss://livekit.example:7880",
+        api_key="APIkey",
+        api_secret=SECRET,
+        api_token=api_token,
+    )
+    svc = TokenService(config, registry, default_persona="companion", backend="mac", memory=store)
+    return svc, store
+
+
+def test_consent_grant_reflected_in_store_and_get(
+    registry: PersonaRegistry, tmp_path: Path
+) -> None:
+    svc, store = make_consent_service(registry, tmp_path)
+    out = svc.set_consent("alice", granted=True)
+    assert (out["user"], out["granted"], out["allow_training"]) == ("alice", True, False)
+    assert store.get_consent("alice").granted is True  # persisted to consent.json
+    assert svc.get_consent("alice")["granted"] is True  # and read back
+
+
+def test_consent_revoke(registry: PersonaRegistry, tmp_path: Path) -> None:
+    svc, store = make_consent_service(registry, tmp_path)
+    svc.set_consent("alice", granted=True)
+    out = svc.set_consent("alice", granted=False)
+    assert out["granted"] is False
+    assert store.get_consent("alice").granted is False  # data is kept; just gated off
+
+
+def test_consent_training_optin(registry: PersonaRegistry, tmp_path: Path) -> None:
+    svc, store = make_consent_service(registry, tmp_path)
+    out = svc.set_consent("alice", granted=True, allow_training=True)
+    assert out["allow_training"] is True
+    assert store.get_consent("alice").allow_training is True
+
+
+def test_consent_revoke_forces_training_off(registry: PersonaRegistry, tmp_path: Path) -> None:
+    # Can't train on what you can't store: withdrawing consent drops the training opt-in too.
+    svc, _ = make_consent_service(registry, tmp_path)
+    out = svc.set_consent("alice", granted=False, allow_training=True)
+    assert out["granted"] is False and out["allow_training"] is False
+
+
+def test_consent_get_defaults_to_ungranted(registry: PersonaRegistry, tmp_path: Path) -> None:
+    svc, _ = make_consent_service(registry, tmp_path)
+    out = svc.get_consent("newcomer")  # never set consent
+    assert out["granted"] is False and out["allow_training"] is False
+
+
+def test_consent_requires_user(registry: PersonaRegistry, tmp_path: Path) -> None:
+    svc, _ = make_consent_service(registry, tmp_path)
+    with pytest.raises(BadRequest, match="user id is required"):
+        svc.set_consent(None, granted=True)
+
+
+def test_consent_rejects_invalid_user(registry: PersonaRegistry, tmp_path: Path) -> None:
+    svc, _ = make_consent_service(registry, tmp_path)
+    with pytest.raises(BadRequest, match="invalid user id"):
+        svc.set_consent("bad id!", granted=True)
+
+
+def test_consent_disabled_without_store(registry: PersonaRegistry) -> None:
+    svc = make_service(registry)  # no memory store wired
+    with pytest.raises(ServerMisconfigured, match="memory is not enabled"):
+        svc.set_consent("alice", granted=True)
+
+
 # --- config + build_service -----------------------------------------------------------
 
 
@@ -1047,3 +1125,58 @@ def test_http_loras(persona_server: tuple[str, TokenService, UserPersonaStore]) 
     assert status == 200
     assert body["supports_lora"] is True
     assert {o["id"] for o in body["loras"]} == {"hr"}
+
+
+# --- HTTP: consent routes -------------------------------------------------------------
+
+
+@pytest.fixture
+def consent_server(
+    registry: PersonaRegistry, tmp_path: Path
+) -> Iterator[tuple[str, TokenService, MemoryStore]]:
+    svc, store = make_consent_service(registry, tmp_path, api_token="sekret")
+    httpd = make_server(svc, "127.0.0.1", 0)
+    thread = threading.Thread(target=httpd.serve_forever, daemon=True)
+    thread.start()
+    host, port = httpd.server_address[0], httpd.server_address[1]
+    try:
+        yield f"http://{host}:{port}", svc, store
+    finally:
+        httpd.shutdown()
+        httpd.server_close()
+        thread.join(timeout=2)
+
+
+def test_http_consent_round_trip(consent_server: tuple[str, TokenService, MemoryStore]) -> None:
+    base, _, store = consent_server
+    auth = {"Authorization": "Bearer sekret"}
+
+    # Default: a user who never opted in reads back ungranted.
+    status, body = _get(f"{base}/consent?user=alice", auth)
+    assert status == 200 and body["granted"] is False
+
+    # Grant (the state reports need).
+    status, body = _post(f"{base}/consent?user=alice", {"granted": True}, auth)
+    assert status == 200 and body["granted"] is True
+    assert store.get_consent("alice").granted is True
+
+    # Revoke.
+    status, body = _post(f"{base}/consent?user=alice", {"granted": False}, auth)
+    assert status == 200 and body["granted"] is False
+    assert store.get_consent("alice").granted is False
+
+
+def test_http_consent_requires_auth(consent_server: tuple[str, TokenService, MemoryStore]) -> None:
+    base, _, _ = consent_server
+    status, _ = _get(f"{base}/consent?user=alice")
+    assert status == 401
+
+
+def test_http_consent_missing_granted_400(
+    consent_server: tuple[str, TokenService, MemoryStore],
+) -> None:
+    base, _, _ = consent_server
+    auth = {"Authorization": "Bearer sekret"}
+    status, body = _post(f"{base}/consent?user=alice", {"allow_training": True}, auth)
+    assert status == 400
+    assert "granted" in body["error"]

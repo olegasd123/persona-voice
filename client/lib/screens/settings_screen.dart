@@ -34,6 +34,14 @@ class _SettingsScreenState extends State<SettingsScreen> {
   bool _testing = false;
   ({bool ok, String message})? _testResult;
 
+  // Server-side recording consent for the active account. Loaded lazily; [_consentUser] is the
+  // account id the current [_consent] belongs to, so a stale in-flight load can't clobber a
+  // newer one after the account id changes.
+  ConsentState? _consent;
+  String _consentUser = '';
+  bool _consentLoading = false;
+  String? _consentError;
+
   @override
   void initState() {
     super.initState();
@@ -55,6 +63,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
       _displayNameCtrl.text = s.displayName;
       _userIdCtrl.text = s.userId;
     });
+    _loadConsent();
   }
 
   // Persist connection fields as they change; the home screen re-fetches on return so any
@@ -70,6 +79,73 @@ class _SettingsScreenState extends State<SettingsScreen> {
     if (_testResult != null) setState(() => _testResult = null);
   }
 
+  /// Reload consent when the active account changed (a different id is a different opt-in).
+  void _maybeReloadConsent() {
+    if (_settings.effectiveUser != _consentUser) _loadConsent();
+  }
+
+  /// Fetch the active account's consent state. [_consentUser] guards against a stale response
+  /// overwriting a newer one after the account id changes.
+  Future<void> _loadConsent() async {
+    final user = _settings.effectiveUser;
+    setState(() {
+      _consentUser = user;
+      _consentLoading = true;
+      _consentError = null;
+    });
+    final client = TokenClient(_settings);
+    try {
+      final state = await client.fetchConsent();
+      if (mounted && _consentUser == user) setState(() => _consent = state);
+    } catch (e) {
+      if (mounted && _consentUser == user) {
+        setState(() {
+          _consent = null;
+          _consentError = '$e';
+        });
+      }
+    } finally {
+      client.close();
+      if (mounted && _consentUser == user) setState(() => _consentLoading = false);
+    }
+  }
+
+  /// Write a new consent state, optimistically reflecting it and rolling back on failure.
+  Future<void> _setConsent({required bool granted, bool? allowTraining}) async {
+    final prev = _consent;
+    final training = granted && (allowTraining ?? prev?.allowTraining ?? false);
+    final user = _settings.effectiveUser;
+    setState(() {
+      _consent = ConsentState(granted: granted, allowTraining: training);
+      _consentError = null;
+    });
+    final client = TokenClient(_settings);
+    try {
+      final state = await client.setConsent(granted: granted, allowTraining: training);
+      if (mounted && _consentUser == user) setState(() => _consent = state);
+    } catch (e) {
+      if (mounted && _consentUser == user) {
+        setState(() {
+          _consent = prev;
+          _consentError = '$e';
+        });
+      }
+    } finally {
+      client.close();
+    }
+  }
+
+  String get _consentSubtitle {
+    if (_consent != null) {
+      return _consent!.granted
+          ? 'Saved on the server for this account so the assistant can recall them.'
+          : 'Off — nothing is kept between calls.';
+    }
+    return _consentError == null
+        ? 'Checking…'
+        : 'Couldn’t reach the server — check the connection above.';
+  }
+
   /// What the account-id field resolves to once normalized — shown live so a typo (which
   /// silently switches buckets) is visible rather than mistaken for lost data.
   String get _accountHelper {
@@ -81,6 +157,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
 
   Future<void> _testConnection() async {
     _persistConnection();
+    _loadConsent(); // the server/token may have changed; refresh the consent toggle too
     setState(() {
       _testing = true;
       _testResult = null;
@@ -177,6 +254,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
             // Rebuild so the resolved-account helper tracks the field as you type.
             onChanged: (_) {
               _persistConnection();
+              _maybeReloadConsent(); // a different account is a different opt-in
               setState(() {});
             },
           ),
@@ -192,6 +270,41 @@ class _SettingsScreenState extends State<SettingsScreen> {
             ),
             onChanged: (_) => _persistConnection(),
           ),
+          const SizedBox(height: 24),
+          _SectionLabel('Privacy'),
+          Card(
+            margin: EdgeInsets.zero,
+            child: Column(
+              children: [
+                SwitchListTile(
+                  secondary: const Icon(Icons.history_edu_outlined),
+                  title: const Text('Remember our conversations'),
+                  subtitle: Text(_consentSubtitle),
+                  // Disabled until the current state is known (can't toggle what we couldn't read).
+                  value: _consent?.granted ?? false,
+                  onChanged: (_consent == null || _consentLoading)
+                      ? null
+                      : (v) => _setConsent(granted: v),
+                ),
+                if (_consent?.granted ?? false)
+                  SwitchListTile(
+                    secondary: const Icon(Icons.school_outlined),
+                    title: const Text('Help improve voices & personas'),
+                    subtitle: const Text(
+                      'Allow my transcripts to be used to train voices and personas.',
+                    ),
+                    value: _consent?.allowTraining ?? false,
+                    onChanged: _consentLoading
+                        ? null
+                        : (v) => _setConsent(granted: true, allowTraining: v),
+                  ),
+              ],
+            ),
+          ),
+          if (_consentError != null) ...[
+            const SizedBox(height: 8),
+            _TestResultBanner(ok: false, message: _consentError!),
+          ],
           const SizedBox(height: 24),
           _SectionLabel('Voices'),
           Card(

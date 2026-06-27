@@ -35,6 +35,21 @@ class JoinGrant {
       );
 }
 
+/// A user's server-side recording consent (`GET`/`POST /consent`). [granted] gates whether the
+/// assistant stores anything between calls at all; [allowTraining] is the stricter, separate
+/// opt-in for letting transcripts feed a training distill.
+class ConsentState {
+  const ConsentState({required this.granted, required this.allowTraining});
+
+  final bool granted;
+  final bool allowTraining;
+
+  factory ConsentState.fromJson(Map<String, dynamic> json) => ConsentState(
+        granted: (json['granted'] as bool?) ?? false,
+        allowTraining: (json['allow_training'] as bool?) ?? false,
+      );
+}
+
 class TokenClientException implements Exception {
   TokenClientException(this.message);
   final String message;
@@ -162,6 +177,31 @@ class TokenClient {
       headers: _authHeaders,
     );
     _decode(resp); // throws on error; body is {"deleted": name}
+  }
+
+  /// Fetch the current recording-consent state for this account (`GET /consent`). Scoped by
+  /// [ConnectionSettings.effectiveUser] — consent is per account id.
+  Future<ConsentState> fetchConsent() async {
+    final resp = await _http.get(
+      _uri('/consent', {'user': settings.effectiveUser}),
+      headers: _jsonHeaders,
+    );
+    return ConsentState.fromJson(_decode(resp));
+  }
+
+  /// Grant or withdraw recording consent for this account (`POST /consent`). Withdrawing keeps
+  /// any already-stored data on the server (erase it from the memory tools). [allowTraining] is
+  /// the separate training opt-in; the server forces it off when [granted] is false.
+  Future<ConsentState> setConsent({
+    required bool granted,
+    bool allowTraining = false,
+  }) async {
+    final resp = await _http.post(
+      _uri('/consent', {'user': settings.effectiveUser}),
+      headers: _jsonHeaders,
+      body: jsonEncode({'granted': granted, 'allow_training': allowTraining}),
+    );
+    return ConsentState.fromJson(_decode(resp));
   }
 
   /// Mint a join token for [persona], optionally with per-session [options]
