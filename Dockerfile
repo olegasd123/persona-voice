@@ -40,7 +40,8 @@ WORKDIR /app
 COPY pyproject.toml README.md ./
 COPY src ./src
 RUN python3.12 -m pip install --upgrade pip \
-    && python3.12 -m pip install -e '.[cuda]' \
+    # `metrics` adds the Prometheus exporter so the token server's /metrics route is live.
+    && python3.12 -m pip install -e '.[cuda,metrics]' \
     # GPU TTS: Chatterbox (MIT) is the CUDA cloning backend.
     && python3.12 -m pip install chatterbox-tts
 

@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import pytest
+
+from personavoice.obs import prometheus as prom
 from personavoice.server.check import run_check
 from personavoice.server.config import Settings
 
@@ -139,3 +142,27 @@ def test_check_warns_on_backend_mismatch(tmp_path) -> None:
     report = run_check(settings)
     assert not report.ok
     assert any("declares backend" in e for e in report.errors)
+
+
+def test_check_reports_metrics_status(settings: Settings, monkeypatch: pytest.MonkeyPatch) -> None:
+    # The metrics exporter availability is surfaced and no PROMETHEUS_MULTIPROC_DIR warning fires
+    # when the var is unset (the common case).
+    monkeypatch.delenv("PROMETHEUS_MULTIPROC_DIR", raising=False)
+    report = run_check(settings)
+    assert report.metrics_enabled == prom.AVAILABLE
+    assert report.metrics_multiproc_dir == ""
+    assert not any("PROMETHEUS_MULTIPROC_DIR" in w for w in report.warnings)
+
+
+def test_check_warns_on_missing_multiproc_dir(
+    settings: Settings, tmp_path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    if not prom.AVAILABLE:
+        pytest.skip("prometheus-client not installed")
+    missing = tmp_path / "does-not-exist"
+    monkeypatch.setenv("PROMETHEUS_MULTIPROC_DIR", str(missing))
+    report = run_check(settings)
+    assert report.metrics_multiproc_dir == str(missing)
+    assert any(
+        "PROMETHEUS_MULTIPROC_DIR" in w and "existing directory" in w for w in report.warnings
+    )

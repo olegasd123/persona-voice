@@ -78,6 +78,12 @@ memory = [
 memory-embeddings = [
     "sentence-transformers>=2.7",  # optional semantic retrieval (EmbeddingRetriever)
 ]
+# --- Prometheus metrics -------------------------------------------------------
+# Optional: turns the per-turn latency/outcome record into scrapeable counters/histograms and
+# backs the token server's /metrics route. No-op (empty /metrics) when this isn't installed.
+metrics = [
+    "prometheus-client>=0.20",
+]
 # --- Tooling --------------------------------------------------------------------------
 dev = [
     # Pinned to a single minor so CI's `ruff format --check` and the local pre-commit hook
@@ -94,6 +100,8 @@ dev = [
     # but part of the dev/test environment so `pytest` passes without a mac/cuda extra.
     "numpy>=1.26",
     "soundfile>=0.12",
+    # So the metrics tests exercise the real exporter (the no-op path is covered by monkeypatch).
+    "prometheus-client>=0.20",
 ]
 
 [project.scripts]

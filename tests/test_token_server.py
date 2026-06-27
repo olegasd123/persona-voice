@@ -810,6 +810,16 @@ def _get(url: str, headers: dict[str, str] | None = None) -> tuple[int, dict]:
         return exc.code, json.loads(exc.read())
 
 
+def _get_text(url: str, headers: dict[str, str] | None = None) -> tuple[int, str, str]:
+    """GET returning (status, body-as-text, content-type) for non-JSON routes like /metrics."""
+    req = urllib.request.Request(url, headers=headers or {})
+    try:
+        with urllib.request.urlopen(req, timeout=5) as resp:
+            return resp.status, resp.read().decode("utf-8"), resp.headers.get("Content-Type", "")
+    except urllib.error.HTTPError as exc:
+        return exc.code, exc.read().decode("utf-8"), exc.headers.get("Content-Type", "")
+
+
 def _post(url: str, body: dict, headers: dict[str, str] | None = None) -> tuple[int, dict]:
     data = json.dumps(body).encode()
     hdrs = {"Content-Type": "application/json", **(headers or {})}
@@ -856,6 +866,20 @@ def test_http_healthz_is_open(live_server: tuple[str, TokenService]) -> None:
     status, body = _get(f"{base}/healthz")
     assert status == 200
     assert body["status"] == "ok"
+
+
+def test_http_metrics_is_open(live_server: tuple[str, TokenService]) -> None:
+    # Like /healthz, /metrics is unauthenticated (a scraper doesn't send the bearer token) and
+    # returns a Prometheus text exposition.
+    base, _ = live_server
+    status, body, content_type = _get_text(f"{base}/metrics")
+    assert status == 200
+    assert content_type.startswith("text/plain")
+    # The exporter is a dev dependency, so the per-turn metric families are registered + exposed.
+    from personavoice.obs import metrics_enabled
+
+    if metrics_enabled():
+        assert "personavoice_turns_total" in body
 
 
 def test_http_token_requires_auth(live_server: tuple[str, TokenService]) -> None:
@@ -1041,11 +1065,14 @@ def test_http_healthz_not_rate_limited(registry: PersonaRegistry) -> None:
     try:
         # Health checks must never be throttled (used by orchestration probes).
         codes = [_get(f"{base}/healthz")[0] for _ in range(3)]
+        # Nor metrics scrapes (Prometheus polls on a fixed interval).
+        metrics_codes = [_get_text(f"{base}/metrics")[0] for _ in range(3)]
     finally:
         httpd.shutdown()
         httpd.server_close()
         thread.join(timeout=2)
     assert codes == [200, 200, 200]
+    assert metrics_codes == [200, 200, 200]
 
 
 # --- HTTP: custom-persona + LoRA routes -----------------------------------------------

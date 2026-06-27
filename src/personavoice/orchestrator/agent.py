@@ -36,7 +36,7 @@ from ..adapters.factory import Backend, build_backend
 from ..audio import pcm16_to_wav, wav_to_pcm16
 from ..memory import ConversationMemory
 from ..models import Persona, SessionOptions
-from ..obs import configure_logging, turn_metrics_from_stream
+from ..obs import configure_logging, record_turn, turn_metrics_from_stream
 from ..persona.registry import PersonaRegistry
 from ..persona.store import UserPersonaStore
 from ..safety import Moderator, moderator_from_env
@@ -365,14 +365,16 @@ class PersonaAgent:
             error = repr(exc)
             logger.exception("turn failed during streaming")
         finally:
-            turn_metrics_from_stream(
+            tm = turn_metrics_from_stream(
                 self._persona.id,
                 user_text,
                 metrics,
                 stt_s=stt_s,
                 interrupted=interrupted,
                 error=error,
-            ).log(logger)
+            )
+            tm.log(logger)
+            record_turn(tm)  # optional Prometheus export; no-op without prometheus_client
             if publish is not None and parts:
                 # Fire-and-forget: on barge-in this generator is being cancelled, so awaiting
                 # here would just re-raise — schedule the final marker as its own task.

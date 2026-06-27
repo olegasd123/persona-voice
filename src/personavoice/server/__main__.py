@@ -75,6 +75,13 @@ def _print_report(report: CheckReport, settings: Settings, *, use_color: bool) -
         print(f"Memory: {report.memory_dir}  ({enc}, {report.memory_users} user(s))")
         print()
 
+    exporter = "prometheus-client installed" if report.metrics_enabled else "no-op (lib absent)"
+    multiproc = (
+        f", multiproc dir {report.metrics_multiproc_dir}" if report.metrics_multiproc_dir else ""
+    )
+    print(f"Metrics: /metrics — {exporter}{multiproc}")
+    print()
+
     if report.warnings:
         print("Warnings:")
         for w in report.warnings:

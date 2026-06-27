@@ -6,11 +6,13 @@ CLI. This is the acceptance check: it must pass on both the Mac and the 4080.
 
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass, field
 
 from ..adapters.factory import Backend, build_backend
 from ..memory import MemoryStoreError
 from ..models import CheckResult, Persona
+from ..obs import metrics_enabled
 from ..orchestrator.tools import ToolRegistry, default_tool_registry
 from ..voice.registry import VoiceRegistry
 from .config import (
@@ -37,6 +39,8 @@ class CheckReport:
     memory_dir: str = ""
     memory_encrypted: bool = False
     memory_users: int = 0
+    metrics_enabled: bool = False
+    metrics_multiproc_dir: str = ""
     errors: list[str] = field(default_factory=list)
     warnings: list[str] = field(default_factory=list)
 
@@ -181,6 +185,23 @@ def run_check(settings: Settings) -> CheckReport:
         report.warnings.append(
             "a persona has memory enabled but PERSONAVOICE_MEMORY_KEY is unset — stored "
             "conversations are unencrypted at rest (fine for dev; set a key for real users)"
+        )
+
+    # 5. Metrics. The Prometheus exporter is optional; surface whether it's installed and flag
+    # the two ways PROMETHEUS_MULTIPROC_DIR (the cross-process aggregation dir) can silently
+    # break — set without the client lib, or pointing at a missing/unwritable directory.
+    report.metrics_enabled = metrics_enabled()
+    multiproc = (os.getenv("PROMETHEUS_MULTIPROC_DIR") or "").strip()
+    report.metrics_multiproc_dir = multiproc
+    if multiproc and not report.metrics_enabled:
+        report.warnings.append(
+            "PROMETHEUS_MULTIPROC_DIR is set but prometheus-client isn't installed — /metrics "
+            "serves an empty body; install the 'metrics' extra"
+        )
+    if multiproc and report.metrics_enabled and not os.path.isdir(multiproc):
+        report.warnings.append(
+            f"PROMETHEUS_MULTIPROC_DIR {multiproc!r} is not an existing directory — cross-process "
+            "metrics will fail to record until it exists and is writable"
         )
 
     return report

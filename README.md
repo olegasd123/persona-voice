@@ -236,6 +236,7 @@ personavoice --token-server          # HTTP on PERSONAVOICE_HOST:PERSONAVOICE_PO
 | Route | Purpose |
 |-------|---------|
 | `GET /healthz` | liveness |
+| `GET /metrics` | Prometheus exposition (per-turn latency/outcome counters); empty unless the `metrics` extra is installed |
 | `GET /personas[?user=]` | `{"personas": [{"id","name","description","voice","custom"}], "default": <id>}` — curated + the user's custom personas |
 | `POST /personas?user=` | create a custom persona (body = a persona draft) |
 | `PUT /personas/{id}?user=` / `DELETE /personas/{id}?user=` | edit / delete one of the user's own personas (curated are read-only) |
@@ -595,6 +596,16 @@ python scripts/run_eval.py --latency-json lat.json --wer-json wer.json \
 per-turn metrics record (STT / first-token / first-audio / total, plus barge-in and errors). A
 failed turn is logged and skipped — it never crashes the worker.
 
+The same per-turn record is also exported for **Prometheus**: the token server exposes
+`GET /metrics` (alongside `/healthz`, unauthenticated and un-throttled) with
+`personavoice_turns_total{persona,outcome}` and latency histograms
+(`personavoice_{stt,first_token,first_audio,turn}_seconds`). The exporter is the optional
+`metrics` extra (`pip install -e '.[metrics]'`, already in the CUDA server image); without it
+`/metrics` just serves an empty body. Because the agent worker (which records turns) and the token
+server (which serves `/metrics`) are usually separate processes, set the standard
+`PROMETHEUS_MULTIPROC_DIR` to a shared, writable directory on both so their metrics aggregate;
+otherwise each process exports only its own.
+
 **Load test and security.** Hammer the token server and confirm rate limiting kicks in:
 
 ```bash
@@ -624,7 +635,7 @@ src/personavoice/
   training/                  # persona LoRA + voice/ fine-tuning: dataset/config/finetune/eval
   memory/                    # per-user store + profile + RAG + distill
   eval/                      # WER + MOS + dashboard gating
-  obs/                       # structured logging + per-turn latency metrics
+  obs/                       # structured logging + per-turn latency metrics + Prometheus exporter
 client/                      # Flutter app (iOS + Android), LiveKit SDK
 training/persona_lora/       # LoRA configs, seed datasets, workflow docs
 training/voice/              # voice fine-tune configs, sample dataset, workflow docs

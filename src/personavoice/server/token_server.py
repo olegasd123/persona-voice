@@ -13,6 +13,8 @@ dependency. The request handling lives in `TokenService` (pure, unit-tested); th
 Endpoints (all JSON, permissive CORS so a browser client / Playground can call them):
 
     GET    /healthz          -> {"status": "ok", "backend": ...}
+    GET    /metrics          -> Prometheus exposition (per-turn latency/outcome counters);
+                                empty when prometheus_client isn't installed
     GET    /personas[?user=] -> {"personas": [{"id","name","description","voice","cefr",
                                 "demeanor","custom"}], "default": <id>}
                                 (curated + the user's custom personas)
@@ -61,6 +63,7 @@ from pydantic import ValidationError
 
 from ..memory import MemoryStore
 from ..models import CEFRLevel, Demeanor, Persona, SessionOptions
+from ..obs import render_metrics
 from ..persona.lora import served_loras
 from ..persona.registry import PersonaRegistry
 from ..persona.store import UserPersonaStore
@@ -854,9 +857,11 @@ def _make_handler(
             logger.debug("%s - %s", self.address_string(), fmt % args)
 
         def _send_json(self, status: int, body: dict[str, Any]) -> None:
-            payload = json.dumps(body).encode("utf-8")
+            self._send_raw(status, json.dumps(body).encode("utf-8"), "application/json")
+
+        def _send_raw(self, status: int, payload: bytes, content_type: str) -> None:
             self.send_response(status)
-            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Type", content_type)
             self.send_header("Content-Length", str(len(payload)))
             # Permissive CORS: the token endpoint is meant to be called from clients.
             self.send_header("Access-Control-Allow-Origin", "*")
@@ -896,6 +901,14 @@ def _make_handler(
             try:
                 if path == "/healthz" and method == "GET":
                     self._send_json(200, {"status": "ok", "backend": service._backend})
+                    return
+                # Prometheus scrape endpoint. Like /healthz it's unauthenticated and not
+                # rate-limited (scrapers don't send a bearer token and poll on a fixed interval);
+                # it exposes only aggregate operational counters, no secrets. Empty body when
+                # prometheus_client isn't installed.
+                if path == "/metrics" and method == "GET":
+                    payload, content_type = render_metrics()
+                    self._send_raw(200, payload, content_type)
                     return
                 # Rate-limit everything else (before auth, to throttle unauthenticated floods)
                 # keyed by client IP.
