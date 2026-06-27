@@ -50,6 +50,11 @@ services:
       - LIVEKIT_API_KEY=${LIVEKIT_API_KEY:-devkey}
       - LIVEKIT_API_SECRET=${LIVEKIT_API_SECRET:-secret}
       - PERSONAVOICE_API_TOKEN=${PERSONAVOICE_API_TOKEN:-}
+      # Memory is shared with the native agent worker (see the volume below). The at-rest
+      # encryption key must MATCH the worker's, or the two disagree on encoding: a plaintext
+      # consent write here is undecryptable by an encrypting worker (and vice versa), so the
+      # consent silently never takes effect. Empty = plaintext on both sides (dev default).
+      - PERSONAVOICE_MEMORY_KEY=${PERSONAVOICE_MEMORY_KEY:-}
       - PERSONAVOICE_PERSONA=${PERSONAVOICE_PERSONA:-companion}
       - PERSONAVOICE_HOST=0.0.0.0
       - PERSONAVOICE_PORT=8080
@@ -63,8 +68,41 @@ services:
       # Cloned / fine-tuned voices are written host-side (the agent worker, the seed script
       # `personavoice-seed-voices`). Mount them so the token-server's /voices catalog lists
       # them — otherwise the container sees an empty store and the picker shows no clones.
-      - ./models/clones:/app/models/clones
-      - ./models/finetuned:/app/models/finetuned
+      #
+      # The HOST source of each mount below is driven by the SAME env var the native worker
+      # reads (interpolated from the project `.env`), so relocating a dir moves both the worker
+      # and this mount in lockstep — they can't silently drift apart. The CONTAINER target stays
+      # fixed at /app/models/* (an internal path; the var is never passed into the container, so
+      # the app there always resolves to the default that matches the target).
+      #
+      # These use the long-form `type: bind` on purpose: with the short `src:dst` syntax compose
+      # reads a source that lacks a `./`, `/` or `~` prefix (e.g. our `.env.example` default
+      # `models/memory`) as a *named volume* and aborts with "refers to undefined volume". The
+      # explicit bind type accepts any path shape — bare-relative, `./`-relative, or absolute.
+      # A relative source is resolved against the project dir by compose and against its cwd by
+      # the worker — these coincide only when the worker runs from the repo root (the documented
+      # convention); an absolute path (e.g. /srv/pv-memory) sidesteps that assumption.
+      # `create_host_path` keeps the short-syntax convenience of auto-creating a missing dir.
+      - type: bind
+        source: ${PERSONAVOICE_CLONES_DIR:-./models/clones}
+        target: /app/models/clones
+        bind:
+          create_host_path: true
+      - type: bind
+        source: ${PERSONAVOICE_FINETUNED_DIR:-./models/finetuned}
+        target: /app/models/finetuned
+        bind:
+          create_host_path: true
+      # Per-user conversation memory (consent + transcripts + profile). The native agent worker
+      # writes it host-side and gates ALL recording on consent; the token-server reads it (and,
+      # once the /consent route lands, writes it when a client opts in/out). Read-write, and the
+      # one place a drift here disables consent *silently* (a missing consent file reads as "not
+      # opted in", not an error) — which is exactly why the host source is env-driven.
+      - type: bind
+        source: ${PERSONAVOICE_MEMORY_DIR:-./models/memory}
+        target: /app/models/memory
+        bind:
+          create_host_path: true
     ports:
       - "8080:8080"
     command:
