@@ -59,6 +59,14 @@ services:
       - PERSONAVOICE_HOST=0.0.0.0
       - PERSONAVOICE_PORT=8080
     volumes:
+      # Dev loop: source is baked into the image (Dockerfile `COPY src` + editable `pip install
+      # -e`), so a Python change would otherwise need a full image rebuild — and because `COPY
+      # src` sits above the heavy pip layer, that rebuild re-runs the CUDA/chatterbox install.
+      # Mounting the host `src` over the editable install's target (/app/src) makes edits live:
+      # change a file, `docker compose -f docker-compose.livekit.yml restart token-server`, no
+      # rebuild. Read-only — the app never writes its own source (and PYTHONDONTWRITEBYTECODE is
+      # set, so no stray .pyc). Drop this line to pin the container to the baked image instead.
+      - ./src:/app/src:ro
       # Config (backends + personas + voices.yaml) is data, not code: bind-mount it read-only so
       # the /voices catalog reflects the host's current config without rebuilding the image. A
       # baked-in copy goes stale the moment voices.yaml changes (e.g. the bundled Feminine/
