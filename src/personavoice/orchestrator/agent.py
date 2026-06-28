@@ -55,6 +55,12 @@ from ..server.config import (
     max_sessions,
 )
 from ..voice.registry import VoiceRegistry
+from .busy import (
+    busy_accept_metadata,
+    busy_clip_wav,
+    busy_data_message,
+    is_busy_metadata,
+)
 from .completion import (
     assess_completion,
     endpointing_grace_s,
@@ -106,6 +112,28 @@ def _vad_event_type(agents: Any, rtc: Any) -> Any:
     if event_type is None:
         raise RuntimeError("LiveKit VAD event type is unavailable; update livekit-agents")
     return event_type
+
+
+async def _push_wav_to_source(source: Any, wav: bytes) -> None:
+    """Push one WAV's audio onto a WebRTC source as 20 ms PCM frames, paced to realtime.
+
+    Shared by the per-sentence TTS sink (`PersonaAgent._capture_wav`) and the admission-control
+    busy clip (`_serve_busy_clip`). `capture_frame` paces to realtime, so a barge-in cancellation
+    lands inside the loop.
+    """
+    _, rtc, _ = _require_livekit()
+    pcm = wav_to_pcm16(wav, _OUT_SAMPLE_RATE)
+    frame_samples = max(1, _OUT_SAMPLE_RATE * _FRAME_MS // 1000)
+    stride = frame_samples * 2  # 2 bytes per int16 sample
+    for off in range(0, len(pcm), stride):
+        data = pcm[off : off + stride]
+        frame = rtc.AudioFrame(
+            data=data,
+            sample_rate=_OUT_SAMPLE_RATE,
+            num_channels=1,
+            samples_per_channel=len(data) // 2,
+        )
+        await source.capture_frame(frame)
 
 
 class PersonaAgent:
@@ -168,7 +196,6 @@ class PersonaAgent:
             user_id=user_id,
         )
         self._turn = TurnController(self._capture_wav)
-        self._frame_samples = max(1, _OUT_SAMPLE_RATE * _FRAME_MS // 1000)
         # Publishes the assistant's spoken words back as a live transcript (the client renders
         # LiveKit `TranscriptionEvent`s). `None` (no transport, e.g. unit tests) skips it.
         self._publish_transcript = publish_transcript
@@ -228,19 +255,7 @@ class PersonaAgent:
 
     async def _capture_wav(self, wav: bytes) -> None:
         """Sink: push one sentence's WAV onto the WebRTC track as 20 ms PCM frames."""
-        _, rtc, _ = _require_livekit()
-        pcm = wav_to_pcm16(wav, _OUT_SAMPLE_RATE)
-        stride = self._frame_samples * 2  # 2 bytes per int16 sample
-        for off in range(0, len(pcm), stride):
-            data = pcm[off : off + stride]
-            frame = rtc.AudioFrame(
-                data=data,
-                sample_rate=_OUT_SAMPLE_RATE,
-                num_channels=1,
-                samples_per_channel=len(data) // 2,
-            )
-            # capture_frame paces to realtime, so cancellation (barge-in) lands here.
-            await self._source.capture_frame(frame)
+        await _push_wav_to_source(self._source, wav)
 
     def on_user_speech_started(self) -> None:
         """Barge-in: the user started talking — stop the assistant immediately."""
@@ -598,6 +613,44 @@ def _participant_metadata(room: Any) -> str | None:
     return None
 
 
+def _local_metadata(ctx: Any) -> str | None:
+    """The agent's own participant metadata (the channel `_request_fnc` stamps a busy job on).
+
+    LiveKit bakes a job's accept metadata into the agent's join token, so it surfaces here as the
+    local participant's metadata once connected. Tolerant of a context without a room/participant.
+    """
+    part = getattr(getattr(ctx, "room", None), "local_participant", None)
+    meta = getattr(part, "metadata", None)
+    return meta if isinstance(meta, str) else None
+
+
+async def _serve_busy_clip(ctx: Any) -> None:
+    """Play the pre-rendered "all lines busy" clip to an over-capacity caller, then end the job.
+
+    Runs only for a job `_request_fnc` admitted on the over-cap path (tagged via accept metadata).
+    Deliberately builds no backend or `PersonaAgent`: the clip is a static WAV (see `busy.py`), so a
+    caller who slips past the load gate hears why instead of sitting in a silent room — with zero
+    model load or inference. Every step is best-effort (a failure to publish/play must still let the
+    job tear down) and the job is shut down at the end so the slot frees immediately.
+    """
+    _, rtc, _ = _require_livekit()
+    logger.info("at capacity: serving the busy clip to an over-capacity caller")
+    source = rtc.AudioSource(_OUT_SAMPLE_RATE, 1)
+    track = rtc.LocalAudioTrack.create_audio_track("assistant-voice", source)
+    with contextlib.suppress(Exception):
+        await ctx.room.local_participant.publish_track(
+            track, rtc.TrackPublishOptions(source=rtc.TrackSource.SOURCE_MICROPHONE)
+        )
+    # A data message first so a client can show a "busy" banner even if it isn't playing audio.
+    with contextlib.suppress(Exception):
+        await ctx.room.local_participant.publish_data(
+            busy_data_message(), reliable=True, topic="admission"
+        )
+    with contextlib.suppress(Exception):
+        await _push_wav_to_source(source, busy_clip_wav())
+    ctx.shutdown(reason="at capacity")
+
+
 async def _await_participant(ctx: Any) -> None:
     """Best-effort wait for the caller to join so its token metadata is readable.
 
@@ -780,6 +833,15 @@ async def entrypoint(ctx: Any, *, persona_id: str | None = None) -> None:
     # and the client's on-connect data message races the agent joining, so this is the reliable
     # channel; room/job metadata stay as a lower-priority fallback (explicit dispatch).
     await ctx.connect(auto_subscribe=agents.AutoSubscribe.AUDIO_ONLY)
+
+    # Admission control (Feature I, step 3): a job admitted only because it slipped past the load
+    # gate is tagged busy in `_request_fnc` (via the agent's accept metadata). Play the pre-rendered
+    # "all lines busy" clip and disconnect — no backend/PersonaAgent is built, so this path loads no
+    # models. Done right after connect, before any heavy work.
+    if is_busy_metadata(_local_metadata(ctx)):
+        await _serve_busy_clip(ctx)
+        return
+
     await _await_participant(ctx)
 
     job_meta = getattr(getattr(ctx, "job", None), "metadata", None)
@@ -934,20 +996,23 @@ async def _request_fnc(req: Any) -> None:
 
     The load gate above already stops the server dispatching once we report full, so under
     automatic dispatch this rarely fires; it's the authoritative backstop for an explicitly
-    dispatched job and the hook where the friendly "busy" reply will live (Feature I step 3).
-    Today an over-capacity job is rejected and counted.
+    dispatched job. An over-capacity job is *counted* as rejected and then admitted on the **busy
+    path** (Feature I step 3): rather than a bare `reject()` that strands the caller in a silent
+    room, we accept with the busy marker (`busy_accept_metadata`) so the entrypoint plays the
+    pre-rendered "all lines busy" clip and disconnects — no models loaded. A still-under-cap job is
+    accepted normally.
     """
     capacity = max_sessions()
     active = _active_job_count(_LIVE_WORKER.get("worker"))
     if active >= capacity:
         logger.warning(
-            "at capacity (%d/%d active); rejecting job %s",
+            "at capacity (%d/%d active); admitting job %s on the busy path",
             active,
             capacity,
             getattr(req, "id", "?"),
         )
         record_rejected_session()
-        await req.reject()
+        await req.accept(metadata=busy_accept_metadata())
         return
     await req.accept()
 

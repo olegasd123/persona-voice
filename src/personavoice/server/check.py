@@ -13,6 +13,7 @@ from ..adapters.factory import Backend, build_backend
 from ..memory import MemoryStoreError
 from ..models import CheckResult, Persona
 from ..obs import metrics_enabled
+from ..orchestrator.busy import busy_clip_status
 from ..orchestrator.tools import ToolRegistry, default_tool_registry
 from ..voice.registry import VoiceRegistry
 from .config import (
@@ -43,12 +44,17 @@ class CheckReport:
     metrics_enabled: bool = False
     metrics_multiproc_dir: str = ""
     max_sessions: int = 1
+    admission_gate: bool = False
     errors: list[str] = field(default_factory=list)
     warnings: list[str] = field(default_factory=list)
 
     @property
     def ok(self) -> bool:
         return not self.errors and all(r.ok for r in self.adapter_results)
+
+
+def _as_bool(value: str | None) -> bool:
+    return (value or "").strip().lower() in ("1", "true", "yes", "on")
 
 
 def _validate_personas(
@@ -214,6 +220,21 @@ def run_check(settings: Settings) -> CheckReport:
             f"PERSONAVOICE_MAX_SESSIONS={report.max_sessions} admits more than one concurrent "
             "session per worker — safe only if the GPU has headroom for that many STT+TTS copies; "
             "otherwise prefer running more workers (LiveKit balances across them)"
+        )
+    # Over-capacity callers hear a "busy" clip (step 3). A set-but-unreadable custom clip silently
+    # falls back to the synthesized tone — worth flagging in case the operator expected their file.
+    busy_warning = busy_clip_status()
+    if busy_warning:
+        report.warnings.append(busy_warning)
+    # The optional token-server 503 early gate (step 4) reads the worker's live gauge, which only
+    # crosses processes via PROMETHEUS_MULTIPROC_DIR. Enabled without it, the gate can never see the
+    # count and silently fails open (always mints) — flag the misconfiguration.
+    report.admission_gate = _as_bool(os.getenv("PERSONAVOICE_ADMISSION_503"))
+    if report.admission_gate and not multiproc:
+        report.warnings.append(
+            "PERSONAVOICE_ADMISSION_503 is set but PROMETHEUS_MULTIPROC_DIR is not — the token "
+            "server can't read the worker's live session count, so the early gate never fires "
+            "(it fails open); set a shared PROMETHEUS_MULTIPROC_DIR on both processes"
         )
 
     return report

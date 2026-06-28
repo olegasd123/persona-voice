@@ -64,6 +64,7 @@ from pydantic import ValidationError
 from ..memory import MemoryStore
 from ..models import CEFRLevel, Demeanor, Persona, SessionOptions
 from ..obs import read_sessions, render_metrics
+from ..orchestrator.busy import busy_retry_after
 from ..persona.lora import served_loras
 from ..persona.registry import PersonaRegistry
 from ..persona.store import UserPersonaStore
@@ -101,16 +102,32 @@ _DEFAULT_MAX_CLONES = 50
 # Lazily builds a `VoiceCloner` bound to the active backend + the shared clones store.
 ClonerFactory = Callable[[], VoiceCloner]
 
+# Reads the live `(active, capacity)` session counts the agent worker publishes (the gauge backing
+# `/healthz`), or None when unknown (exporter off / no worker reporting). Injectable so the optional
+# early gate is unit-testable without a running worker.
+SessionsReader = Callable[[], "tuple[int, int] | None"]
+
 
 class TokenServiceError(Exception):
-    """A client-facing error with an HTTP status code."""
+    """A client-facing error with an HTTP status code (and optional headers / body fields)."""
 
     status = 400
 
-    def __init__(self, message: str, status: int | None = None) -> None:
+    def __init__(
+        self,
+        message: str,
+        status: int | None = None,
+        *,
+        headers: dict[str, str] | None = None,
+        extra: dict[str, Any] | None = None,
+    ) -> None:
         super().__init__(message)
         if status is not None:
             self.status = status
+        # Extra response headers (e.g. `Retry-After` on a 503) and extra JSON body fields merged
+        # alongside `{"error": ...}` (e.g. `retry_after`) — both empty for the common case.
+        self.headers = headers
+        self.extra = extra or {}
 
 
 class Unauthorized(TokenServiceError):
@@ -131,6 +148,12 @@ class TooManyRequests(TokenServiceError):
 
 class PayloadTooLarge(TokenServiceError):
     status = 413
+
+
+class Unavailable(TokenServiceError):
+    """All workers are at capacity (admission control's optional token-server early gate)."""
+
+    status = 503
 
 
 @dataclass
@@ -216,6 +239,8 @@ class TokenService:
         supports_lora: bool = False,
         lora_modules: str | None = None,
         memory: MemoryStore | None = None,
+        admission_gate: bool = False,
+        sessions_reader: SessionsReader = read_sessions,
     ) -> None:
         self._config = config
         self._registry = registry
@@ -248,6 +273,13 @@ class TokenService:
         # Per-user conversation memory store: backs the /consent routes (the same `consent.json`
         # the cascade checks before recording). None disables them (e.g. in unit tests).
         self._memory = memory
+        # Admission control's optional token-server early gate (Feature I, step 4): when on, `issue`
+        # returns 503 + Retry-After once the worker reports full instead of minting a token the
+        # caller can't use. `sessions_reader` is the live-count source (the shared gauge). It's an
+        # *optimization* over the worker's load gate — it has a read→mint→connect TOCTOU race — and
+        # fails open (mints) when the count is unknown, so it never blocks on its own.
+        self._admission_gate = admission_gate
+        self._sessions_reader = sessions_reader
 
     def check_auth(self, authorization: str | None) -> None:
         """Enforce the optional bearer token. No-op when `api_token` is unset (dev mode)."""
@@ -365,6 +397,31 @@ class TokenService:
                 ) from exc
         return opts
 
+    def _reject_if_full(self) -> None:
+        """Refuse to mint a token when the worker reports full (the optional 503 early gate).
+
+        No-op unless the gate is enabled. Reads the live count from the shared gauge and compares
+        against the *config* capacity (`max_sessions()`, the authoritative value `/healthz` also
+        reports). When the count is unknown (None — exporter off or no worker has reported) it fails
+        open and mints, leaving the worker's load gate as the real rail. Raises `Unavailable` (503)
+        with a `Retry-After` header and a `retry_after` body field when at/over capacity.
+        """
+        if not self._admission_gate:
+            return
+        sessions = self._sessions_reader()
+        if sessions is None:
+            return  # can't see the worker's load — fail open; the load gate is the real rail
+        active, _gauge_capacity = sessions
+        capacity = max_sessions()
+        if active >= capacity:
+            retry = busy_retry_after()
+            logger.info("admission gate: at capacity (%d/%d); returning 503", active, capacity)
+            raise Unavailable(
+                "all sessions are busy right now; please retry shortly",
+                headers={"Retry-After": str(retry)},
+                extra={"retry_after": retry},
+            )
+
     def issue(
         self,
         *,
@@ -396,6 +453,8 @@ class TokenService:
                 "LiveKit is not configured; set LIVEKIT_URL, LIVEKIT_API_KEY and "
                 "LIVEKIT_API_SECRET in the environment"
             )
+
+        self._reject_if_full()
 
         room = (room or "").strip() or _new_room()
         identity = (identity or "").strip() or _new_identity()
@@ -805,6 +864,9 @@ def build_service(settings: Settings | None = None) -> TokenService:
     max_user_personas = int(
         os.getenv("PERSONAVOICE_MAX_USER_PERSONAS", str(_DEFAULT_MAX_USER_PERSONAS)).strip() or 0
     )
+    # Optional admission-control early gate (Feature I, step 4): off by default so behavior is
+    # unchanged; when on, /token returns 503 once the worker's live gauge reports full.
+    admission_gate = _as_bool(os.getenv("PERSONAVOICE_ADMISSION_503"))
     return TokenService(
         TokenServiceConfig.from_env(),
         registry,
@@ -824,6 +886,7 @@ def build_service(settings: Settings | None = None) -> TokenService:
         supports_lora=supports_lora,
         lora_modules=lora_modules,
         memory=memory,
+        admission_gate=admission_gate,
     )
 
 
@@ -857,10 +920,20 @@ def _make_handler(
         def log_message(self, fmt: str, *args: Any) -> None:
             logger.debug("%s - %s", self.address_string(), fmt % args)
 
-        def _send_json(self, status: int, body: dict[str, Any]) -> None:
-            self._send_raw(status, json.dumps(body).encode("utf-8"), "application/json")
+        def _send_json(
+            self, status: int, body: dict[str, Any], headers: dict[str, str] | None = None
+        ) -> None:
+            self._send_raw(
+                status, json.dumps(body).encode("utf-8"), "application/json", headers=headers
+            )
 
-        def _send_raw(self, status: int, payload: bytes, content_type: str) -> None:
+        def _send_raw(
+            self,
+            status: int,
+            payload: bytes,
+            content_type: str,
+            headers: dict[str, str] | None = None,
+        ) -> None:
             self.send_response(status)
             self.send_header("Content-Type", content_type)
             self.send_header("Content-Length", str(len(payload)))
@@ -868,6 +941,9 @@ def _make_handler(
             self.send_header("Access-Control-Allow-Origin", "*")
             self.send_header("Access-Control-Allow-Headers", "Authorization, Content-Type")
             self.send_header("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
+            # Per-response extras, e.g. `Retry-After` on a 503 from the admission gate.
+            for name, value in (headers or {}).items():
+                self.send_header(name, value)
             self.end_headers()
             self.wfile.write(payload)
 
@@ -985,7 +1061,7 @@ def _make_handler(
                 else:
                     self._send_json(404, {"error": f"no route for {method} {path}"})
             except TokenServiceError as exc:
-                self._send_json(exc.status, {"error": str(exc)})
+                self._send_json(exc.status, {"error": str(exc), **exc.extra}, headers=exc.headers)
             except Exception as exc:  # pragma: no cover - defensive 500
                 logger.exception("token server error")
                 self._send_json(500, {"error": f"internal error: {exc}"})
@@ -1084,7 +1160,11 @@ def run(settings: Settings | None = None) -> None:
     scheme = "https" if cfg.tls_enabled else "http"
     auth = "on" if cfg.api_token else "off (open)"
     rl = f"{limiter.rate:g} rps" if limiter.enabled else "off"
-    print(f"Token server listening on {scheme}://{host}:{port}  (auth: {auth}, rate-limit: {rl})")
+    gate = "on (503 when full)" if service._admission_gate else "off"
+    print(
+        f"Token server listening on {scheme}://{host}:{port}  "
+        f"(auth: {auth}, rate-limit: {rl}, admission gate: {gate})"
+    )
     print(f"  LiveKit URL: {cfg.livekit_url or '(unset)'}")
     try:
         httpd.serve_forever()

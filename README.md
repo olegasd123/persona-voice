@@ -611,9 +611,18 @@ caller runs in a second process that loads its own STT+TTS copy and OOMs a 16 GB
 worker therefore admits **one session at a time** by default — set `PERSONAVOICE_MAX_SESSIONS` to
 change the cap, but scale out by running more workers (LiveKit balances across them) rather than
 raising it on one box. The worker reports its live load to LiveKit so the server stops dispatching
-once it's full, and rejects an over-capacity job as a backstop. The count is visible on
-`GET /healthz` (`sessions_active` / `sessions_max`) and `GET /metrics`
+once it's full, and is the backstop for an over-capacity job that still slips through. The count is
+visible on `GET /healthz` (`sessions_active` / `sessions_max`) and `GET /metrics`
 (`personavoice_sessions_active`, `personavoice_sessions_max`, `personavoice_sessions_rejected_total`).
+
+Rather than strand a turned-away caller in a silent room, an over-capacity job is briefly admitted
+to play a **"busy" clip** (a synthesized telephone busy tone by default, or your own WAV via
+`PERSONAVOICE_BUSY_CLIP`) plus a `{"event":"busy"}` data message, then disconnected — no models are
+loaded on that path. For a nicer UX you can also enable the **token-server early gate** with
+`PERSONAVOICE_ADMISSION_503=1`: `/token` then returns `503 + Retry-After` once the worker reports
+full, so the client backs off before connecting. It reads the worker's live count, so it needs a
+shared `PROMETHEUS_MULTIPROC_DIR`, and is an optimization on top of the worker's load gate (it has a
+read→mint→connect race) — it fails open and mints when the count is unreadable.
 
 **Load test and security.** Hammer the token server and confirm rate limiting kicks in:
 

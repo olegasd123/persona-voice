@@ -7,11 +7,21 @@ count is supplied by a fake worker.
 
 from __future__ import annotations
 
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
 
 from personavoice.orchestrator import agent
+from personavoice.orchestrator.busy import (
+    ADMISSION_KEY,
+    busy_accept_metadata,
+    busy_clip_status,
+    busy_clip_wav,
+    busy_data_message,
+    busy_retry_after,
+    is_busy_metadata,
+)
 from personavoice.server.config import max_sessions
 
 
@@ -82,15 +92,17 @@ def test_load_fnc_publishes_and_reports(monkeypatch: pytest.MonkeyPatch) -> None
 
 
 class _FakeRequest:
-    """Records which terminal call request_fnc made."""
+    """Records which terminal call request_fnc made (and any accept metadata)."""
 
     def __init__(self) -> None:
         self.id = "job-1"
         self.accepted = False
         self.rejected = False
+        self.accept_metadata: str | None = None
 
-    async def accept(self, **_kw: object) -> None:
+    async def accept(self, *, metadata: str = "", **_kw: object) -> None:
         self.accepted = True
+        self.accept_metadata = metadata
 
     async def reject(self, *, terminate: bool = True) -> None:
         self.rejected = True
@@ -106,10 +118,13 @@ async def test_request_fnc_accepts_under_capacity(monkeypatch: pytest.MonkeyPatc
     await agent._request_fnc(req)
 
     assert req.accepted and not req.rejected
+    assert not req.accept_metadata  # a normal accept carries no busy marker
     assert rejected == []
 
 
-async def test_request_fnc_rejects_at_capacity(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_request_fnc_admits_busy_path_at_capacity(monkeypatch: pytest.MonkeyPatch) -> None:
+    # Over cap, the job is counted as rejected but admitted on the busy path (accept + marker) so
+    # the entrypoint can play the "all lines busy" clip instead of stranding the caller in silence.
     monkeypatch.setenv("PERSONAVOICE_MAX_SESSIONS", "1")
     monkeypatch.setitem(agent._LIVE_WORKER, "worker", SimpleNamespace(active_jobs=[object()]))
     rejected: list[int] = []
@@ -118,5 +133,87 @@ async def test_request_fnc_rejects_at_capacity(monkeypatch: pytest.MonkeyPatch) 
     req = _FakeRequest()
     await agent._request_fnc(req)
 
-    assert req.rejected and not req.accepted
-    assert rejected == [1]  # counted for /metrics
+    assert req.accepted and not req.rejected
+    assert is_busy_metadata(req.accept_metadata)  # tagged so the entrypoint takes the busy path
+    assert rejected == [1]  # still counted for /metrics
+
+
+# --- Busy clip (Feature I, step 3) — the pure, offline-testable pieces ------------------------
+
+
+def test_busy_accept_metadata_round_trips() -> None:
+    assert is_busy_metadata(busy_accept_metadata())
+
+
+@pytest.mark.parametrize(
+    "meta",
+    [
+        None,
+        "",
+        "   ",
+        "hr_interviewer",
+        '{"persona": "tutor"}',
+        "{not json",
+        '{"pv_admission": "x"}',
+    ],
+)
+def test_is_busy_metadata_rejects_non_busy(meta: str | None) -> None:
+    # A normal job's metadata (a bare id, a persona JSON, garbage) must not take the busy path.
+    assert not is_busy_metadata(meta)
+    assert ADMISSION_KEY in busy_accept_metadata()  # guards the marker key name against drift
+
+
+def test_busy_clip_wav_synthesizes_a_valid_wav(monkeypatch: pytest.MonkeyPatch) -> None:
+    # No custom clip + no numpy/TTS: a recognizable busy tone is synthesized with the stdlib only.
+    import io
+    import wave
+
+    monkeypatch.delenv("PERSONAVOICE_BUSY_CLIP", raising=False)
+    data = busy_clip_wav()
+    assert data[:4] == b"RIFF"
+    with wave.open(io.BytesIO(data), "rb") as w:
+        assert w.getnchannels() == 1
+        assert w.getsampwidth() == 2
+        assert w.getnframes() > 0  # actually carries audio
+
+
+def test_busy_clip_wav_prefers_operator_file(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    clip = tmp_path / "busy.wav"
+    clip.write_bytes(b"RIFFcustom-clip-bytes")
+    monkeypatch.setenv("PERSONAVOICE_BUSY_CLIP", str(clip))
+    assert busy_clip_wav() == b"RIFFcustom-clip-bytes"
+
+
+def test_busy_clip_wav_falls_back_when_file_unreadable(monkeypatch: pytest.MonkeyPatch) -> None:
+    # A misconfigured path must not raise on the reject path — fall back to the synthesized tone.
+    monkeypatch.setenv("PERSONAVOICE_BUSY_CLIP", "/no/such/clip.wav")
+    assert busy_clip_wav()[:4] == b"RIFF"
+
+
+def test_busy_clip_status_flags_missing_file(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("PERSONAVOICE_BUSY_CLIP", raising=False)
+    assert busy_clip_status() is None  # unset → nothing to warn about
+    monkeypatch.setenv("PERSONAVOICE_BUSY_CLIP", "/no/such/clip.wav")
+    warning = busy_clip_status()
+    assert warning is not None and "PERSONAVOICE_BUSY_CLIP" in warning
+
+
+def test_busy_data_message_carries_reason_and_retry() -> None:
+    import json
+
+    msg = json.loads(busy_data_message())
+    assert msg["event"] == "busy"
+    assert msg["message"]
+    assert msg["retry_after"] == busy_retry_after()
+
+
+def test_busy_retry_after_default_env_and_floor(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("PERSONAVOICE_BUSY_RETRY_AFTER", raising=False)
+    assert busy_retry_after() == 10
+    monkeypatch.setenv("PERSONAVOICE_BUSY_RETRY_AFTER", "30")
+    assert busy_retry_after() == 30
+    for raw in ("0", "-5", "nope", ""):
+        monkeypatch.setenv("PERSONAVOICE_BUSY_RETRY_AFTER", raw)
+        assert busy_retry_after() >= 1  # never invites an instant-retry storm

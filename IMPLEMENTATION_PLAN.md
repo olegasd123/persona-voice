@@ -120,7 +120,7 @@ device + LiveKit call run still pending.
 | F | **Dynamic emotion / prosody** `[Done]` | Naturalness | M | Med | A (emotion plumbing) |
 | G | **Semantic endpointing** `[Done]` | Naturalness | M | Med | — |
 | H | **Prometheus `/metrics`** `[Done]` | Ops | S | Low | obs/metrics |
-| I | **Concurrency / admission control** `[Partial]` (steps 1–2 done) | Ops | M | Med | H (visibility, soft) |
+| I | **Concurrency / admission control** `[Partial]` (steps 1–4 done; 5 deferred) | Ops | M | Med | H (visibility, soft) |
 | J | **Web client** | Reach | L | Low | token server |
 | K | **Persona authoring helper** → folded into **N3** | DX | S | Low | persona loader |
 | L | **Memory introspection (client)** | Trust | S | Low | memory facade |
@@ -696,6 +696,20 @@ the client lib is absent. Small, isolated, high ops value.
 
 ## 9. Feature I — Concurrency / admission control `[Partial]`
 
+> **Status (steps 3–4):** Step 3 (busy clip) + step 4 (token-server 503 gate) implemented +
+> unit-tested offline (`tests/test_admission_control.py`, `tests/test_token_server.py`; full suite
+> green, ruff + mypy clean). Step 3: over-cap jobs are no longer bare-rejected — `_request_fnc`
+> counts the rejection and *accepts* with a busy marker (`busy_accept_metadata`), and `entrypoint`
+> short-circuits to `_serve_busy_clip`, which publishes a track, plays a **pre-rendered** clip
+> (`orchestrator/busy.py`: a synthesized stdlib telephone busy tone, or a `PERSONAVOICE_BUSY_CLIP`
+> WAV), sends a `{"event":"busy"}` data message, and `ctx.shutdown()`s — **no backend/model load on
+> that path**. Step 4: opt-in `PERSONAVOICE_ADMISSION_503` makes `TokenService.issue` return `503 +
+> Retry-After` (+ `retry_after` body) once the shared gauge reports `active >= max_sessions()`;
+> fails open (mints) when the count is unknown, so it never blocks on its own. `--check` flags a
+> set-but-unreadable busy clip and the 503 gate enabled without `PROMETHEUS_MULTIPROC_DIR`;
+> `.env.example` + README updated. *Live two-caller run (busy clip audible + 503 on the 4080) still
+> pending a GPU/LiveKit server.* Step 5 (queueing) remains deferred.
+
 > **Status:** Steps 1–2 implemented + unit-tested offline, and **verified live on the Mac stack**
 > (admission control confirmed in worker logs: `threshold 0.5`, load `1.0`↔`0.0`, "at full
 > capacity, marking as unavailable"). The agent worker caps concurrency via a custom `load_fnc`
@@ -710,8 +724,8 @@ the client lib is absent. Small, isolated, high ops value.
 > **lazily on first write** — eager creation at import wrote files LiveKit then unlinked, leaving
 > the worker writing to a dangling inode (`sessions_*` stuck at 0); regression-tested. `--check`
 > prints the cap and warns when > 1. `.env.example`, README, compose env updated. Steps 3 (busy
-> clip), 4 (token-server 503 gate), 5 (queueing) remain. *Live two-caller OOM check on the 4080
-> still pending a GPU run.*
+> clip) + 4 (token-server 503 gate) are now also done (see the steps-3–4 status above); step 5
+> (queueing) remains deferred. *Live two-caller OOM check on the 4080 still pending a GPU run.*
 
 The VRAM budget assumes **one** conversation, but nothing caps simultaneous callers — and the
 failure is harder than "degraded." On non-Windows, the LiveKit worker dispatches each job into its
@@ -756,15 +770,18 @@ logic.
    write** so they survive LiveKit's startup wipe of the multiproc dir (see Status); because
    LiveKit clears that dir on every start, the stale-file-after-restart concern is moot.
 
-3. **Pre-rendered "busy" clip on the over-cap path (½ day).** A bare `reject()` leaves the caller
-   in a silent room. When over cap, briefly accept, play a **pre-rendered** "all lines busy, try
-   again shortly" `.wav` (no LLM/TTS inference, no model load — zero GPU), send a data message, and
-   disconnect, so the user hears why.
+3. **Pre-rendered "busy" clip on the over-cap path `[Done]`.** A bare `reject()` leaves the caller
+   in a silent room. When over cap, `_request_fnc` counts the rejection and *accepts* with a busy
+   marker; `entrypoint` short-circuits to `_serve_busy_clip`, which plays a **pre-rendered** clip
+   (`orchestrator/busy.py` — a synthesized stdlib busy tone or a `PERSONAVOICE_BUSY_CLIP` WAV, no
+   LLM/TTS inference, no model load — zero GPU), sends a `{"event":"busy"}` data message, and
+   disconnects, so the user hears why.
 
-4. **Token-server `503` early gate (few hours, optional).** Have the token server read the shared
-   gauge and return `503 + Retry-After` instead of minting when full, so the client never connects.
-   Nicer UX, but it has a TOCTOU race (read → mint → connect) — an *optimization* on top of step 1,
-   never a replacement.
+4. **Token-server `503` early gate `[Done]` (opt-in).** With `PERSONAVOICE_ADMISSION_503=1` the
+   token server reads the shared gauge and returns `503 + Retry-After` (+ `retry_after` body)
+   instead of minting when full, so the client never connects. Nicer UX, but it has a TOCTOU race
+   (read → mint → connect) — an *optimization* on top of step 1, never a replacement — so it's off
+   by default and **fails open** (mints) when the count is unreadable.
 
 5. **Queueing (deferred).** Only if demand later warrants it: a 1-deep queue with an audible
    "you're next, ~30 s" and a hard timeout. Not now.

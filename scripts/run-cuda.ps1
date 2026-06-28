@@ -119,6 +119,8 @@ $env:PERSONAVOICE_TOOL_MAX_ITERS = '4'
 $env:PERSONAVOICE_TOOL_TIMEOUT = '10'
 $env:PERSONAVOICE_SEMANTIC_ENDPOINTING = '1'
 $env:PERSONAVOICE_ENDPOINTING_GRACE_MS = '2500'
+$env:PERSONAVOICE_BUSY_RETRY_AFTER = '10'
+$env:PERSONAVOICE_ADMISSION_503 = '1'
 
 # Prometheus /metrics: the worker writes its per-turn counters here and the token-server
 # container mounts + reads the same dir (see docker-compose.livekit.yml), so

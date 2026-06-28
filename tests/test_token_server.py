@@ -23,6 +23,7 @@ from personavoice.server.token_server import (
     TokenService,
     TokenServiceConfig,
     Unauthorized,
+    Unavailable,
     build_service,
     make_server,
 )
@@ -151,6 +152,64 @@ def test_issue_requires_livekit_credentials(registry: PersonaRegistry) -> None:
     svc = make_service(registry, configured=False)
     with pytest.raises(ServerMisconfigured, match="LiveKit is not configured"):
         svc.issue()
+
+
+# --- Admission control: token-server 503 early gate (Feature I, step 4) -----------------------
+
+
+def _gated_service(registry: PersonaRegistry, reader: object, *, gate: bool = True) -> TokenService:
+    """A `TokenService` with the optional early gate wired to a fake live-count reader."""
+    config = TokenServiceConfig(
+        livekit_url="wss://livekit.example:7880", api_key="APIkey", api_secret=SECRET
+    )
+    return TokenService(
+        config,
+        registry,
+        default_persona="companion",
+        backend="mac",
+        admission_gate=gate,
+        sessions_reader=reader,  # type: ignore[arg-type]
+    )
+
+
+def test_issue_503_when_worker_full(
+    registry: PersonaRegistry, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Gate on + the worker reports active >= config capacity → refuse to mint with 503 + retry hint.
+    monkeypatch.setenv("PERSONAVOICE_MAX_SESSIONS", "1")
+    monkeypatch.setenv("PERSONAVOICE_BUSY_RETRY_AFTER", "7")
+    svc = _gated_service(registry, lambda: (1, 1))
+    with pytest.raises(Unavailable) as exc:
+        svc.issue()
+    assert exc.value.status == 503
+    assert exc.value.headers == {"Retry-After": "7"}
+    assert exc.value.extra == {"retry_after": 7}
+
+
+def test_issue_mints_under_capacity_with_gate(
+    registry: PersonaRegistry, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("PERSONAVOICE_MAX_SESSIONS", "2")
+    svc = _gated_service(registry, lambda: (1, 2))  # one slot free
+    assert svc.issue()["persona"] == "companion"
+
+
+def test_issue_fails_open_when_count_unknown(
+    registry: PersonaRegistry, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # The reader returns None (exporter off / no worker reporting) → mint anyway; the worker's load
+    # gate is the real rail, this is only an optimization on top.
+    monkeypatch.setenv("PERSONAVOICE_MAX_SESSIONS", "1")
+    svc = _gated_service(registry, lambda: None)
+    assert svc.issue()["persona"] == "companion"
+
+
+def test_issue_ignores_count_when_gate_off(
+    registry: PersonaRegistry, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("PERSONAVOICE_MAX_SESSIONS", "1")
+    svc = _gated_service(registry, lambda: (5, 1), gate=False)  # over cap, but gate disabled
+    assert svc.issue()["persona"] == "companion"
 
 
 def test_blank_fields_fall_back_to_defaults(registry: PersonaRegistry) -> None:
@@ -885,6 +944,34 @@ def test_http_healthz_reports_session_load(
     assert body["sessions_max"] == 2  # from config, not the gauge
     if metrics_enabled():
         assert body["sessions_active"] == 1
+
+
+def test_http_token_503_when_full(
+    registry: PersonaRegistry, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # End-to-end: a gated token server returns 503 with a Retry-After header and a retry_after body
+    # field once the (fake) worker reports full, so the client backs off instead of connecting.
+    monkeypatch.setenv("PERSONAVOICE_MAX_SESSIONS", "1")
+    monkeypatch.setenv("PERSONAVOICE_BUSY_RETRY_AFTER", "12")
+    svc = _gated_service(registry, lambda: (1, 1))
+    httpd = make_server(svc, "127.0.0.1", 0)
+    thread = threading.Thread(target=httpd.serve_forever, daemon=True)
+    thread.start()
+    host, port = httpd.server_address[0], httpd.server_address[1]
+    base = f"http://{host}:{port}"
+    try:
+        req = urllib.request.Request(
+            f"{base}/token", data=b"{}", headers={"Content-Type": "application/json"}, method="POST"
+        )
+        with pytest.raises(urllib.error.HTTPError) as exc:
+            urllib.request.urlopen(req, timeout=5)
+        assert exc.value.code == 503
+        assert exc.value.headers.get("Retry-After") == "12"
+        assert json.loads(exc.value.read())["retry_after"] == 12
+    finally:
+        httpd.shutdown()
+        httpd.server_close()
+        thread.join(timeout=2)
 
 
 def test_http_metrics_is_open(live_server: tuple[str, TokenService]) -> None:
