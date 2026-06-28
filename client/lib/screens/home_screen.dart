@@ -13,6 +13,7 @@ import '../services/voice_session.dart';
 import 'call_screen.dart';
 import 'persona_form_screen.dart';
 import 'persona_options_sheet.dart';
+import 'queue_screen.dart';
 import 'settings_screen.dart';
 import 'voice_library_screen.dart';
 
@@ -157,7 +158,7 @@ class _HomeScreenState extends State<HomeScreen> {
       await widget.prefs.setOptionsFor(persona.id, const SessionOptions()); // drop stale options
       if (mounted) await _loadPersonas();
     } catch (e) {
-      if (mounted) _snack('Could not delete: $e');
+      if (mounted) _snack(friendlyTokenError(e), error: true);
     } finally {
       client.close();
     }
@@ -178,28 +179,61 @@ class _HomeScreenState extends State<HomeScreen> {
     try {
       final grant = await client.requestToken(persona: persona.id, options: options);
       if (!mounted) return;
-      final session = VoiceSession();
-      await Navigator.of(context).push(MaterialPageRoute(
-        builder: (_) => CallScreen(
-          session: session,
-          grant: grant,
-          personas: _personas,
-          options: options,
-          initialMicMode: widget.prefs.defaultMicMode,
-        ),
-      ));
+      _enterCall(grant, options);
+    } on TokenClientException catch (e) {
+      if (!mounted) return;
+      // Every session is busy: queue (wait for a free slot) instead of failing with an error.
+      if (e.isBusy) {
+        _enterQueue(persona, options, e.retryAfter);
+      } else {
+        _snack(friendlyTokenError(e), error: true);
+      }
     } catch (e) {
-      if (mounted) _snack('Could not connect: $e');
+      if (mounted) _snack(friendlyTokenError(e), error: true);
     } finally {
       client.close();
       if (mounted) setState(() => _connectingId = null);
     }
   }
 
-  void _snack(String message) {
+  /// Drop into the live call with a freshly minted token.
+  void _enterCall(JoinGrant grant, SessionOptions options) {
+    Navigator.of(context).push(MaterialPageRoute(
+      builder: (_) => CallScreen(
+        session: VoiceSession(),
+        grant: grant,
+        personas: _personas,
+        options: options,
+        initialMicMode: widget.prefs.defaultMicMode,
+      ),
+    ));
+  }
+
+  /// All sessions busy: open the queue page, which waits for a slot and then enters the call.
+  void _enterQueue(Persona persona, SessionOptions options, int? retryAfter) {
+    Navigator.of(context).push(MaterialPageRoute(
+      builder: (_) => QueueScreen(
+        settings: _settings,
+        persona: persona,
+        personas: _personas,
+        options: options,
+        initialMicMode: widget.prefs.defaultMicMode,
+        initialRetryAfter: retryAfter,
+      ),
+    ));
+  }
+
+  void _snack(String message, {bool error = false}) {
+    final scheme = Theme.of(context).colorScheme;
     ScaffoldMessenger.of(context)
       ..clearSnackBars()
-      ..showSnackBar(SnackBar(content: Text(message)));
+      ..showSnackBar(SnackBar(
+        content: Text(
+          message,
+          style: error ? TextStyle(color: scheme.onErrorContainer) : null,
+        ),
+        backgroundColor: error ? scheme.errorContainer : null,
+      ));
   }
 
   // Last-called persona floats to the top so the common case is one tap away; the rest keep

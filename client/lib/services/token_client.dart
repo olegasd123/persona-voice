@@ -51,10 +51,43 @@ class ConsentState {
 }
 
 class TokenClientException implements Exception {
-  TokenClientException(this.message);
+  TokenClientException(this.message, {this.statusCode, this.retryAfter});
+
   final String message;
+
+  /// The HTTP status, when the failure was an HTTP response (null for a transport/parse error).
+  /// `503` is the admission-control "all sessions busy" signal the queue waits on.
+  final int? statusCode;
+
+  /// Seconds the server suggests waiting before retrying (`retry_after` body field / `Retry-After`
+  /// header), present on a `503`. Null when the server didn't advise one.
+  final int? retryAfter;
+
+  /// Whether this is the "all sessions are busy" response — the cue to queue rather than fail.
+  bool get isBusy => statusCode == 503;
+
   @override
   String toString() => message;
+}
+
+/// A short, user-facing line for a token request failure (the raw server text / exception type is
+/// for logs, not a SnackBar). Keep it actionable and free of HTTP/jargon.
+String friendlyTokenError(Object error) {
+  if (error is TokenClientException) {
+    switch (error.statusCode) {
+      case 401:
+      case 403:
+        return 'Not authorized — check the API token in Settings.';
+      case 503:
+        return 'The assistant is busy right now. Please try again shortly.';
+      case null:
+        // Transport / parse failure (server down, bad URL): the raw message is usually noise.
+        return 'Could not reach the server. Check your connection and the address in Settings.';
+      default:
+        return error.message;
+    }
+  }
+  return 'Something went wrong. Please try again.';
 }
 
 /// Thin HTTP client for the persona-voice token server (`server/token_server.py`).
@@ -238,13 +271,26 @@ class TokenClient {
     try {
       body = jsonDecode(resp.body) as Map<String, dynamic>;
     } catch (_) {
-      throw TokenClientException('HTTP ${resp.statusCode}: ${resp.body}');
+      throw TokenClientException('HTTP ${resp.statusCode}: ${resp.body}',
+          statusCode: resp.statusCode);
     }
     if (resp.statusCode >= 400) {
       throw TokenClientException(
-          '${body['error'] ?? 'request failed'} (HTTP ${resp.statusCode})');
+        '${body['error'] ?? 'request failed'} (HTTP ${resp.statusCode})',
+        statusCode: resp.statusCode,
+        retryAfter: _retryAfter(body, resp.headers),
+      );
     }
     return body;
+  }
+
+  /// The retry hint from the `retry_after` body field, falling back to the `Retry-After` header.
+  static int? _retryAfter(Map<String, dynamic> body, Map<String, String> headers) {
+    final fromBody = body['retry_after'];
+    if (fromBody is num) return fromBody.toInt();
+    final fromHeader = headers['retry-after'];
+    if (fromHeader != null) return int.tryParse(fromHeader.trim());
+    return null;
   }
 
   void close() => _http.close();

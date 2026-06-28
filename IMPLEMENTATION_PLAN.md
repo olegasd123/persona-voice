@@ -120,7 +120,7 @@ device + LiveKit call run still pending.
 | F | **Dynamic emotion / prosody** `[Done]` | Naturalness | M | Med | A (emotion plumbing) |
 | G | **Semantic endpointing** `[Done]` | Naturalness | M | Med | — |
 | H | **Prometheus `/metrics`** `[Done]` | Ops | S | Low | obs/metrics |
-| I | **Concurrency / admission control** `[Partial]` (steps 1–4 done; 5 deferred) | Ops | M | Med | H (visibility, soft) |
+| I | **Concurrency / admission control** `[Partial]` (steps 1–5 done; server-FIFO queue optional) | Ops | M | Med | H (visibility, soft) |
 | J | **Web client** | Reach | L | Low | token server |
 | K | **Persona authoring helper** → folded into **N3** | DX | S | Low | persona loader |
 | L | **Memory introspection (client)** | Trust | S | Low | memory facade |
@@ -783,10 +783,18 @@ logic.
    (read → mint → connect) — an *optimization* on top of step 1, never a replacement — so it's off
    by default and **fails open** (mints) when the count is unreadable.
 
-5. **Queueing (deferred).** Only if demand later warrants it: a 1-deep queue with an audible
-   "you're next, ~30 s" and a hard timeout. Not now.
+5. **Queueing — client-side, lightweight `[Done]`.** Rather than an in-call queue (a caller
+   silent in a LiveKit room, which we deliberately avoided), the **client** does a *pre-connection*
+   wait: on a `503` it opens a Queue page that re-asks `/token` on the server's `Retry-After`
+   interval and drops the user straight into the call the moment a slot frees — no LiveKit session
+   is held while waiting (`client/lib/services/queue_controller.dart`, `screens/queue_screen.dart`).
+   This needs the step-4 gate **on** so a full worker returns `503`. No server state, so there's no
+   real position/fairness: two simultaneous waiters race for the freed slot (the loser hits the
+   worker's busy clip and can re-queue). A server-side FIFO with true positions remains a future
+   option if demand warrants it.
 
-Steps 1–2 are the real content (the OOM rail + visibility); 3–4 are UX polish; 5 is deferred.
+Steps 1–2 are the real content (the OOM rail + visibility); 3–4 are UX polish; 5 is the
+client-side pre-connection queue (a server-side FIFO with positions is the remaining upgrade).
 
 **Acceptance:** two concurrent connects never OOM (the second is rejected, not crashed); the
 rejected caller hears the busy clip (step 3); `/healthz` and `/metrics` report live session count

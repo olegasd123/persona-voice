@@ -462,4 +462,45 @@ void main() {
           .having((e) => e.message, 'message', contains('clone quota reached'))),
     );
   });
+
+  test('a 503 surfaces as busy with the retry_after hint (for the queue)', () async {
+    final mock = MockClient((req) async {
+      return http.Response(
+        jsonEncode({'error': 'all sessions are busy', 'retry_after': 12}),
+        503,
+      );
+    });
+    try {
+      await TokenClient(_settings(), httpClient: mock).requestToken(persona: 'x');
+      fail('expected a TokenClientException');
+    } on TokenClientException catch (e) {
+      expect(e.isBusy, isTrue);
+      expect(e.statusCode, 503);
+      expect(e.retryAfter, 12);
+    }
+  });
+
+  test('retry_after falls back to the Retry-After header', () async {
+    final mock = MockClient((req) async {
+      return http.Response(jsonEncode({'error': 'busy'}), 503,
+          headers: {'retry-after': '15'});
+    });
+    try {
+      await TokenClient(_settings(), httpClient: mock).requestToken(persona: 'x');
+      fail('expected a TokenClientException');
+    } on TokenClientException catch (e) {
+      expect(e.retryAfter, 15);
+    }
+  });
+
+  test('friendlyTokenError maps statuses to user-facing copy', () {
+    expect(friendlyTokenError(TokenClientException('x', statusCode: 503)), contains('busy'));
+    expect(friendlyTokenError(TokenClientException('x', statusCode: 401)),
+        contains('authorized'));
+    // A transport/parse failure (no status) hides the raw message.
+    expect(friendlyTokenError(TokenClientException('socket boom')),
+        contains('Could not reach'));
+    // A non-TokenClient error gets a generic line.
+    expect(friendlyTokenError(StateError('boom')), isNotEmpty);
+  });
 }
