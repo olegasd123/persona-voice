@@ -36,7 +36,13 @@ from ..adapters.factory import Backend, build_backend
 from ..audio import pcm16_to_wav, wav_to_pcm16
 from ..memory import ConversationMemory
 from ..models import Persona, SessionOptions
-from ..obs import configure_logging, record_turn, turn_metrics_from_stream
+from ..obs import (
+    configure_logging,
+    record_rejected_session,
+    record_turn,
+    set_sessions,
+    turn_metrics_from_stream,
+)
 from ..persona.registry import PersonaRegistry
 from ..persona.store import UserPersonaStore
 from ..safety import Moderator, moderator_from_env
@@ -864,6 +870,97 @@ async def entrypoint(ctx: Any, *, persona_id: str | None = None) -> None:
         await agent.aclose()
 
 
+# --- Concurrency / admission control (Feature I) ----------------------------------------------
+# The VRAM budget assumes one conversation. On non-Windows each job runs in its own process that
+# loads its own STT+TTS copy, so a second concurrent caller doubles audio-model VRAM and OOMs a
+# 16 GB card. One session per worker is therefore the safe default; scale out by running more
+# workers (LiveKit balances across them), not by raising this. `num_idle_processes=1` alone does
+# *not* cap concurrency (it only caps the warm pool) — these hooks do.
+_DEFAULT_MAX_SESSIONS = 1
+# The main worker process owns the live count; `load_fnc` runs there (every 0.5 s and right before
+# each availability check) and stashes the worker so `request_fnc` — which only receives a
+# JobRequest — can read the same authoritative `active_jobs`.
+_LIVE_WORKER: dict[str, Any] = {}
+
+
+def _max_sessions() -> int:
+    """Per-worker concurrent-session cap, from `PERSONAVOICE_MAX_SESSIONS` (default 1, min 1)."""
+    raw = (os.getenv("PERSONAVOICE_MAX_SESSIONS") or str(_DEFAULT_MAX_SESSIONS)).strip()
+    try:
+        return max(1, int(raw))
+    except ValueError:
+        logger.warning("PERSONAVOICE_MAX_SESSIONS=%r is not an integer; using 1", raw)
+        return _DEFAULT_MAX_SESSIONS
+
+
+def _session_load(active: int, capacity: int) -> float:
+    """Load LiveKit gates dispatch on: 0.0 idle … 1.0 at/over capacity (capacity assumed ≥ 1)."""
+    if capacity <= 0:
+        return 1.0
+    return min(1.0, active / capacity)
+
+
+def _load_threshold(capacity: int) -> float:
+    """`load_threshold` for `WorkerOptions`: the worker reports unavailable once load reaches it.
+
+    `_session_load` is `active/capacity`, so a threshold just under the "all slots full" boundary
+    keeps `capacity-1` slots open and refuses the capacity-th. Must be < 1 (the framework rejects
+    `>= 1` in prod); `(capacity - 0.5)/capacity` gives 0.5 at capacity 1, rising toward 1.
+    """
+    capacity = max(1, capacity)
+    return (capacity - 0.5) / capacity
+
+
+def _active_job_count(worker: Any) -> int:
+    """Live LiveKit job count, defensively (assume 0 if the API ever drifts — fail open)."""
+    if worker is None:
+        return 0
+    try:
+        return len(worker.active_jobs)
+    except Exception:  # pragma: no cover - guards against LiveKit API drift
+        logger.debug("could not read worker.active_jobs; assuming 0", exc_info=True)
+        return 0
+
+
+def _worker_load_fnc(worker: Any) -> float:
+    """LiveKit `load_fnc`: report current load so the server stops dispatching at capacity.
+
+    This is the real OOM rail. It runs in the main worker process — every 0.5 s and, crucially,
+    immediately before each availability check — so reporting `active/capacity` here (combined
+    with `load_threshold` and the framework's reserved-slot accounting) is what prevents a second
+    job being dispatched, race-free. It doubles as the publish point for the session gauges
+    (Feature I step 2): one cheap place that already runs on every load refresh and on job end.
+    """
+    _LIVE_WORKER["worker"] = worker
+    capacity = _max_sessions()
+    active = _active_job_count(worker)
+    set_sessions(active, capacity)
+    return _session_load(active, capacity)
+
+
+async def _request_fnc(req: Any) -> None:
+    """LiveKit `request_fnc`: admit a job only while under the per-worker session cap.
+
+    The load gate above already stops the server dispatching once we report full, so under
+    automatic dispatch this rarely fires; it's the authoritative backstop for an explicitly
+    dispatched job and the hook where the friendly "busy" reply will live (Feature I step 3).
+    Today an over-capacity job is rejected and counted.
+    """
+    capacity = _max_sessions()
+    active = _active_job_count(_LIVE_WORKER.get("worker"))
+    if active >= capacity:
+        logger.warning(
+            "at capacity (%d/%d active); rejecting job %s",
+            active,
+            capacity,
+            getattr(req, "id", "?"),
+        )
+        record_rejected_session()
+        await req.reject()
+        return
+    await req.accept()
+
+
 def run() -> None:
     """CLI shim: hand control to the LiveKit Agents worker runtime.
 
@@ -876,10 +973,18 @@ def run() -> None:
     agents, _, _ = _require_livekit()
     if len(sys.argv) < 2 or sys.argv[1].startswith("-"):
         sys.argv = [sys.argv[0], "start"]
+    capacity = _max_sessions()
+    logger.info("admission control: max %d concurrent session(s) per worker", capacity)
     agents.cli.run_app(
         agents.WorkerOptions(
             entrypoint_fnc=entrypoint,
             prewarm_fnc=prewarm,
+            # Concurrency / admission control (Feature I): report load from the live job count so
+            # the server stops dispatching at capacity (the OOM rail), with an explicit reject as
+            # the backstop. See `_worker_load_fnc` / `_request_fnc`.
+            load_fnc=_worker_load_fnc,
+            load_threshold=_load_threshold(capacity),
+            request_fnc=_request_fnc,
             # Single shared GPU: keep exactly one warm runner so the models load once. The prod
             # default (one per CPU, up to 4) would prewarm several runners and multiply VRAM —
             # an OOM on a 16 GB card (each runner holds its own STT+TTS copy).

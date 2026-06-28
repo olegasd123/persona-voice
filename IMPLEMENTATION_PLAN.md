@@ -120,7 +120,7 @@ device + LiveKit call run still pending.
 | F | **Dynamic emotion / prosody** `[Done]` | Naturalness | M | Med | A (emotion plumbing) |
 | G | **Semantic endpointing** `[Done]` | Naturalness | M | Med | — |
 | H | **Prometheus `/metrics`** `[Done]` | Ops | S | Low | obs/metrics |
-| I | **Concurrency / admission control** | Ops | M | Med | — |
+| I | **Concurrency / admission control** `[Partial]` (steps 1–2 done) | Ops | M | Med | H (visibility, soft) |
 | J | **Web client** | Reach | L | Low | token server |
 | K | **Persona authoring helper** → folded into **N3** | DX | S | Low | persona loader |
 | L | **Memory introspection (client)** | Trust | S | Low | memory facade |
@@ -694,12 +694,80 @@ the client lib is absent. Small, isolated, high ops value.
 
 ---
 
-## 9. Feature I — Concurrency / admission control
+## 9. Feature I — Concurrency / admission control `[Partial]`
 
-The VRAM budget assumes **one** conversation. Nothing caps simultaneous callers on a 16 GB card.
-Add: a max-concurrent-sessions gate in the agent worker (reject/queue with a "busy" reply when
-full), a documented capacity number per backend, and a `/healthz` field exposing current load.
-Pairs with Feature H for visibility.
+> **Status:** Steps 1–2 implemented + unit-tested offline (no GPU/LiveKit). The agent worker now
+> caps concurrency via a custom `load_fnc` (reports `active_jobs / capacity`, so LiveKit stops
+> dispatching once full — the **race-safe OOM rail**, since the framework reserves the slot before
+> `request_fnc` runs) plus a `request_fnc` reject backstop; `load_threshold` is set per capacity
+> (`(cap-0.5)/cap`, always `< 1`, which the framework requires). Capacity is `PERSONAVOICE_MAX_SESSIONS`
+> (default 1). The live count is mirrored to the existing `PROMETHEUS_MULTIPROC_DIR` channel as
+> `personavoice_sessions_active` / `_sessions_max` (gauges) + `_sessions_rejected_total` (counter),
+> surfaced on `/healthz` (`sessions_active`/`sessions_max`) and `/metrics`; `--check` prints the cap
+> and warns when it's > 1. `.env.example` + README updated. Steps 3 (busy clip), 4 (token-server 503
+> gate), 5 (queueing) remain. *Live two-caller OOM check on the 4080 still pending a GPU run.*
+
+The VRAM budget assumes **one** conversation, but nothing caps simultaneous callers — and the
+failure is harder than "degraded." On non-Windows, the LiveKit worker dispatches each job into its
+**own subprocess**, and the process-global `_WARMED` cache (`orchestrator/agent.py`) only dedupes
+models *within* a process. So a second concurrent caller spawns a second process that loads a
+second copy of STT+TTS weights → **OOM on a 16 GB card**. This is the safety rail that keeps the
+box alive, not just politeness.
+
+> **Trap:** `num_idle_processes=1` (`agent.py`) does *not* cap concurrency. It only caps the warm
+> *idle* pool; LiveKit still spawns additional job processes on demand. Today there is zero
+> admission control — the first time two people call at once on CUDA, the worker OOMs.
+
+**Capacity is ~1 session per worker** on both backends (CUDA: vLLM batches the LLM in its own
+container, but the worker's STT+TTS don't share across job processes; Mac: MLX/Apple audio aren't
+built for parallel sessions — serialize). So the scaling story is: **cap each worker at its safe
+number (default 1) and scale out by running more workers — LiveKit's dispatcher already
+load-balances across them.** Admission control's job is narrow: protect a single worker from
+over-commit and emit a graceful "busy" when *all* workers are full. Capacity is configurable via
+`PERSONAVOICE_MAX_SESSIONS` (default 1), documented per backend in `.env.example`.
+
+**Reject, don't queue.** Real-time voice queuing (a caller in silence waiting for a slot) is worse
+than "busy, try again." Start reject-only; defer queueing (step 5).
+
+Build in layers, simplest/most load-bearing first. All of it is **offline-testable** (fake
+adapters, no GPU): the counter, the reject path, the busy-clip branch, and the gauge are pure
+logic.
+
+1. **`load_fnc` + `load_threshold` cap, `request_fnc` backstop — the OOM rail `[Done]`.** Both run
+   in the **main worker process**. The chosen design leans on the framework rather than a manual
+   counter: `load_fnc` reports `len(worker.active_jobs)/capacity`, and LiveKit calls it right before
+   each availability check *and* reserves the slot before `request_fnc` runs — so reporting load here
+   is race-free and self-decrementing (no `add_shutdown_callback` bookkeeping). `load_threshold` is
+   `(cap-0.5)/cap` (the framework rejects `>= 1` in prod). `request_fnc` then rejects + counts any
+   job that still slips through (e.g. explicit dispatch). See `_worker_load_fnc` / `_request_fnc`.
+
+2. **Active-session gauge + `/healthz` fields `[Done]`.** Reuses Feature H's existing
+   `PROMETHEUS_MULTIPROC_DIR` channel — a multiproc `Gauge(multiprocess_mode="livesum")` for
+   `personavoice_sessions_active` (+ `_sessions_max`) is exactly a cross-process counter the token
+   server reads via `read_sessions()`, no new coupling. Added `personavoice_sessions_rejected_total`.
+   `/healthz` gains `sessions_active` / `sessions_max` (omitted when no worker is reporting, so it
+   never shows a misleading zero). Caveat: `livesum` over-counts after an *unclean* worker restart
+   until `PROMETHEUS_MULTIPROC_DIR` is cleared — visibility only; the gate never reads the gauge.
+
+3. **Pre-rendered "busy" clip on the over-cap path (½ day).** A bare `reject()` leaves the caller
+   in a silent room. When over cap, briefly accept, play a **pre-rendered** "all lines busy, try
+   again shortly" `.wav` (no LLM/TTS inference, no model load — zero GPU), send a data message, and
+   disconnect, so the user hears why.
+
+4. **Token-server `503` early gate (few hours, optional).** Have the token server read the shared
+   gauge and return `503 + Retry-After` instead of minting when full, so the client never connects.
+   Nicer UX, but it has a TOCTOU race (read → mint → connect) — an *optimization* on top of step 1,
+   never a replacement.
+
+5. **Queueing (deferred).** Only if demand later warrants it: a 1-deep queue with an audible
+   "you're next, ~30 s" and a hard timeout. Not now.
+
+Steps 1–2 are the real content (the OOM rail + visibility); 3–4 are UX polish; 5 is deferred.
+
+**Acceptance:** two concurrent connects never OOM (the second is rejected, not crashed); the
+rejected caller hears the busy clip (step 3); `/healthz` and `/metrics` report live session count
+and a rejection counter; capacity is documented per backend and overridable via
+`PERSONAVOICE_MAX_SESSIONS`.
 
 ---
 

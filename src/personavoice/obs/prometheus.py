@@ -29,7 +29,7 @@ from __future__ import annotations
 
 import logging
 import os
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
     from .metrics import TurnMetrics
@@ -82,6 +82,28 @@ if AVAILABLE:
         ["persona"],
         buckets=_LATENCY_BUCKETS,
     )
+    # Concurrency / admission control (Feature I). The agent worker is the source of truth for
+    # the live count (LiveKit `active_jobs`); it mirrors that here so the token server's
+    # `/healthz` + `/metrics` can report load across processes. `livesum` aggregates across a
+    # fleet of workers (each gauge file summed), so `active`/`max` read as fleet totals. Only the
+    # worker's main process writes these, so steady state is one file per worker = exact. Like
+    # every multiproc metric, an *unclean* worker restart leaves a stale file that inflates the
+    # sum until `PROMETHEUS_MULTIPROC_DIR` is cleared; the gate in `agent.py` never reads this, so
+    # only the reported number (not safety) is affected. NB: this never gates — it only reports.
+    _SESSIONS_ACTIVE = _prom.Gauge(
+        "personavoice_sessions_active",
+        "Conversation sessions currently active (live count from the agent worker).",
+        multiprocess_mode="livesum",
+    )
+    _SESSIONS_MAX = _prom.Gauge(
+        "personavoice_sessions_max",
+        "Configured max concurrent sessions (capacity) the worker admits.",
+        multiprocess_mode="livesum",
+    )
+    _SESSIONS_REJECTED = _prom.Counter(
+        "personavoice_sessions_rejected_total",
+        "Jobs rejected by admission control because the worker was at capacity.",
+    )
 
 
 def metrics_enabled() -> bool:
@@ -114,6 +136,79 @@ def record_turn(m: TurnMetrics) -> None:
         logger.debug("failed to record turn metrics", exc_info=True)
 
 
+def set_sessions(active: int, capacity: int) -> None:
+    """Publish the worker's live session count + capacity (Feature I, admission control).
+
+    The agent worker holds the authoritative count (LiveKit `active_jobs`); this mirrors it into
+    the Prometheus channel so the token server can report load on `/healthz` and `/metrics`
+    without coupling to the worker. Best-effort: a no-op when `prometheus_client` is absent and
+    never raises (the gate in `agent.py` does not depend on this).
+    """
+    if not AVAILABLE:
+        return
+    try:
+        _SESSIONS_ACTIVE.set(active)
+        _SESSIONS_MAX.set(capacity)
+    except Exception:  # pragma: no cover - metrics are best-effort, never fatal
+        logger.debug("failed to publish session gauges", exc_info=True)
+
+
+def record_rejected_session() -> None:
+    """Count one admission-control rejection (a job refused because the worker was at capacity)."""
+    if not AVAILABLE:
+        return
+    try:
+        _SESSIONS_REJECTED.inc()
+    except Exception:  # pragma: no cover - metrics are best-effort, never fatal
+        logger.debug("failed to record rejected session", exc_info=True)
+
+
+def read_sessions() -> tuple[int, int] | None:
+    """Current `(active, capacity)` session counts for `/healthz`, or None when unknown.
+
+    Reads back the gauges the worker published, aggregating the per-process mmap files when
+    `PROMETHEUS_MULTIPROC_DIR` is set (worker + token server are separate processes). Returns
+    None when the exporter is absent or the worker hasn't reported yet (no gauge series), so the
+    route can simply omit the fields rather than show a misleading zero.
+    """
+    if not AVAILABLE:
+        return None
+    try:
+        registry = _collect_registry()
+        active = _gauge_total(registry, "personavoice_sessions_active")
+        capacity = _gauge_total(registry, "personavoice_sessions_max")
+    except Exception:  # pragma: no cover - best-effort, /healthz must still answer
+        logger.debug("failed to read session gauges", exc_info=True)
+        return None
+    if active is None and capacity is None:
+        return None
+    return int(active or 0), int(capacity or 0)
+
+
+def _collect_registry() -> Any:
+    """The registry `/metrics` renders: the multi-process aggregate when `PROMETHEUS_MULTIPROC_DIR`
+    is set (worker + token server are separate processes), else this process's default registry.
+    """
+    multiproc_dir = (os.environ.get("PROMETHEUS_MULTIPROC_DIR") or "").strip()
+    if multiproc_dir:
+        from prometheus_client import CollectorRegistry, multiprocess
+
+        registry = CollectorRegistry()
+        multiprocess.MultiProcessCollector(registry)
+        return registry
+    return _prom.REGISTRY
+
+
+def _gauge_total(registry: Any, name: str) -> float | None:
+    """Sum the samples of gauge `name` in `registry`, or None when the series isn't present."""
+    for metric in registry.collect():
+        if metric.name != name:
+            continue
+        samples = [s.value for s in metric.samples if s.name == name]
+        return sum(samples) if samples else None
+    return None
+
+
 def render_metrics() -> tuple[bytes, str]:
     """Render the current metrics as `(payload, content_type)` for the `/metrics` route.
 
@@ -123,12 +218,4 @@ def render_metrics() -> tuple[bytes, str]:
     """
     if not AVAILABLE:
         return b"", _CONTENT_TYPE
-    multiproc_dir = (os.environ.get("PROMETHEUS_MULTIPROC_DIR") or "").strip()
-    if multiproc_dir:
-        from prometheus_client import CollectorRegistry, multiprocess
-
-        registry = CollectorRegistry()
-        multiprocess.MultiProcessCollector(registry)
-    else:
-        registry = _prom.REGISTRY
-    return _prom.generate_latest(registry), _prom.CONTENT_TYPE_LATEST
+    return _prom.generate_latest(_collect_registry()), _prom.CONTENT_TYPE_LATEST

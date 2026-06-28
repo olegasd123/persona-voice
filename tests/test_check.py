@@ -166,3 +166,18 @@ def test_check_warns_on_missing_multiproc_dir(
     assert any(
         "PROMETHEUS_MULTIPROC_DIR" in w and "existing directory" in w for w in report.warnings
     )
+
+
+def test_check_reports_admission_control(
+    settings: Settings, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # The default cap (1) is reported without a warning; raising it flags the OOM risk.
+    monkeypatch.delenv("PERSONAVOICE_MAX_SESSIONS", raising=False)
+    report = run_check(settings)
+    assert report.max_sessions == 1
+    assert not any("PERSONAVOICE_MAX_SESSIONS" in w for w in report.warnings)
+
+    monkeypatch.setenv("PERSONAVOICE_MAX_SESSIONS", "4")
+    report = run_check(settings)
+    assert report.max_sessions == 4
+    assert any("PERSONAVOICE_MAX_SESSIONS" in w for w in report.warnings)

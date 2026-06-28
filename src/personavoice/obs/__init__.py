@@ -19,7 +19,14 @@ from .logging_setup import (
     log_level_from_env,
 )
 from .metrics import TurnMetrics, turn_metrics_from_stream
-from .prometheus import metrics_enabled, record_turn, render_metrics
+from .prometheus import (
+    metrics_enabled,
+    read_sessions,
+    record_rejected_session,
+    record_turn,
+    render_metrics,
+    set_sessions,
+)
 
 __all__ = [
     "TRACE",
@@ -29,7 +36,10 @@ __all__ = [
     "configure_logging",
     "log_level_from_env",
     "metrics_enabled",
+    "read_sessions",
+    "record_rejected_session",
     "record_turn",
     "render_metrics",
+    "set_sessions",
     "turn_metrics_from_stream",
 ]

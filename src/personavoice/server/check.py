@@ -41,6 +41,7 @@ class CheckReport:
     memory_users: int = 0
     metrics_enabled: bool = False
     metrics_multiproc_dir: str = ""
+    max_sessions: int = 1
     errors: list[str] = field(default_factory=list)
     warnings: list[str] = field(default_factory=list)
 
@@ -202,6 +203,18 @@ def run_check(settings: Settings) -> CheckReport:
         report.warnings.append(
             f"PROMETHEUS_MULTIPROC_DIR {multiproc!r} is not an existing directory — cross-process "
             "metrics will fail to record until it exists and is writable"
+        )
+
+    # 6. Admission control. Surface the per-worker session cap and flag a value above the safe 1
+    # — a single GPU OOMs on a second concurrent caller (its own STT+TTS copy in a new process).
+    from ..orchestrator.agent import _max_sessions
+
+    report.max_sessions = _max_sessions()
+    if report.max_sessions > 1:
+        report.warnings.append(
+            f"PERSONAVOICE_MAX_SESSIONS={report.max_sessions} admits more than one concurrent "
+            "session per worker — safe only if the GPU has headroom for that many STT+TTS copies; "
+            "otherwise prefer running more workers (LiveKit balances across them)"
         )
 
     return report

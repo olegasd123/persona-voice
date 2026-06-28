@@ -235,8 +235,8 @@ personavoice --token-server          # HTTP on PERSONAVOICE_HOST:PERSONAVOICE_PO
 
 | Route | Purpose |
 |-------|---------|
-| `GET /healthz` | liveness |
-| `GET /metrics` | Prometheus exposition (per-turn latency/outcome counters); empty unless the `metrics` extra is installed |
+| `GET /healthz` | liveness; adds `sessions_active` / `sessions_max` when the worker is reporting load |
+| `GET /metrics` | Prometheus exposition (per-turn latency/outcome counters + session load); empty unless the `metrics` extra is installed |
 | `GET /personas[?user=]` | `{"personas": [{"id","name","description","voice","custom"}], "default": <id>}` — curated + the user's custom personas |
 | `POST /personas?user=` | create a custom persona (body = a persona draft) |
 | `PUT /personas/{id}?user=` / `DELETE /personas/{id}?user=` | edit / delete one of the user's own personas (curated are read-only) |
@@ -605,6 +605,15 @@ The same per-turn record is also exported for **Prometheus**: the token server e
 server (which serves `/metrics`) are usually separate processes, set the standard
 `PROMETHEUS_MULTIPROC_DIR` to a shared, writable directory on both so their metrics aggregate;
 otherwise each process exports only its own.
+
+**Concurrency / admission control.** A single GPU holds one conversation: a second concurrent
+caller runs in a second process that loads its own STT+TTS copy and OOMs a 16 GB card. The agent
+worker therefore admits **one session at a time** by default — set `PERSONAVOICE_MAX_SESSIONS` to
+change the cap, but scale out by running more workers (LiveKit balances across them) rather than
+raising it on one box. The worker reports its live load to LiveKit so the server stops dispatching
+once it's full, and rejects an over-capacity job as a backstop. The count is visible on
+`GET /healthz` (`sessions_active` / `sessions_max`) and `GET /metrics`
+(`personavoice_sessions_active`, `personavoice_sessions_max`, `personavoice_sessions_rejected_total`).
 
 **Load test and security.** Hammer the token server and confirm rate limiting kicks in:
 

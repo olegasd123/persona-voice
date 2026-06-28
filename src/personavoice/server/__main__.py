@@ -80,6 +80,7 @@ def _print_report(report: CheckReport, settings: Settings, *, use_color: bool) -
         f", multiproc dir {report.metrics_multiproc_dir}" if report.metrics_multiproc_dir else ""
     )
     print(f"Metrics: /metrics — {exporter}{multiproc}")
+    print(f"Admission control: max {report.max_sessions} concurrent session(s)/worker")
     print()
 
     if report.warnings:

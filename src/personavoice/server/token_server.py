@@ -63,7 +63,7 @@ from pydantic import ValidationError
 
 from ..memory import MemoryStore
 from ..models import CEFRLevel, Demeanor, Persona, SessionOptions
-from ..obs import render_metrics
+from ..obs import read_sessions, render_metrics
 from ..persona.lora import served_loras
 from ..persona.registry import PersonaRegistry
 from ..persona.store import UserPersonaStore
@@ -900,7 +900,16 @@ def _make_handler(
             query = {k: v[0] for k, v in parse_qs(parsed.query).items()}
             try:
                 if path == "/healthz" and method == "GET":
-                    self._send_json(200, {"status": "ok", "backend": service._backend})
+                    body: dict[str, Any] = {"status": "ok", "backend": service._backend}
+                    # Admission-control load (Feature I), read from the gauges the agent worker
+                    # publishes over the shared metrics channel. Absent when the exporter is off
+                    # or no worker has reported yet — omit rather than show a misleading zero.
+                    sessions = read_sessions()
+                    if sessions is not None:
+                        active, capacity = sessions
+                        body["sessions_active"] = active
+                        body["sessions_max"] = capacity
+                    self._send_json(200, body)
                     return
                 # Prometheus scrape endpoint. Like /healthz it's unauthenticated and not
                 # rate-limited (scrapers don't send a bearer token and poll on a fixed interval);

@@ -63,6 +63,32 @@ def test_record_turn_skips_missing_latency_samples() -> None:
     assert 'personavoice_turn_seconds_count{persona="solo_metric"}' not in text
 
 
+@pytest.mark.skipif(not prom.AVAILABLE, reason="prometheus-client not installed")
+def test_session_gauges_round_trip() -> None:
+    # The worker publishes its live session count + capacity; the token server reads it back for
+    # /healthz, and the same series surface on /metrics.
+    prom.set_sessions(2, 3)
+    assert prom.read_sessions() == (2, 3)
+    # A later update wins (the gauge tracks *current* load, not a sum over time).
+    prom.set_sessions(0, 3)
+    assert prom.read_sessions() == (0, 3)
+
+    prom.record_rejected_session()
+    text = _scrape()
+    assert "personavoice_sessions_active 0.0" in text
+    assert "personavoice_sessions_max 3.0" in text
+    assert "personavoice_sessions_rejected_total" in text
+
+
+def test_session_helpers_no_op_when_absent(monkeypatch: pytest.MonkeyPatch) -> None:
+    # Mirrors record_turn: with the library absent, publishing is a no-op and reading is None, so
+    # the /healthz route simply omits the fields. Never raises.
+    monkeypatch.setattr(prom, "AVAILABLE", False)
+    prom.set_sessions(5, 5)
+    prom.record_rejected_session()
+    assert prom.read_sessions() is None
+
+
 def test_no_op_when_library_absent(monkeypatch: pytest.MonkeyPatch) -> None:
     # Simulate prometheus-client not being installed: record_turn does nothing and render returns
     # a valid (empty) exposition with the standard content type — never raising.
