@@ -111,40 +111,49 @@ def build_author_prompt(
 ) -> list[Msg]:
     """The message list asking the LLM to draft a persona from `description` (pure).
 
-    The system prompt spells out the persona schema, **enumerates** the legal `voice.ref` ids and
-    served `lora` names, and pins the numeric ranges, so the model fills a constrained shape.
+    Shows the **exact nested JSON shape** (with the legal `voice.ref` ids and served `lora` names
+    enumerated inline) rather than dotted field paths, because a local model will otherwise copy a
+    path like `voice.ref` as a literal flat key — which `Persona`'s `extra="forbid"` rejects.
     """
     cefr_values = ", ".join(level.value for level in CEFRLevel)
-    voice_line = (
-        f"  - voice.ref: choose exactly one of: {_enumerate(voices)}"
+    # The `llm` object: include the `lora` slot only when adapters are actually served.
+    if loras:
+        llm_field = (
+            '  "llm": {"temperature": 0.7, "top_p": 0.95, "max_tokens": 280, '
+            f'"lora": "<one of: {_enumerate(loras)}, or drop the key>"}},\n'
+        )
+        lora_note = ""
+    else:
+        llm_field = '  "llm": {"temperature": 0.7, "top_p": 0.95, "max_tokens": 280},\n'
+        lora_note = "No LoRA adapters are served on this backend, so omit the lora field. "
+    voice_field = (
+        f'  "voice": {{"ref": "<one of: {_enumerate(voices)}>", "emotion": "warm"}},\n'
         if voices
-        else "  - voice.ref: omit it (no voice library is configured)"
-    )
-    lora_line = (
-        f"  - llm.lora: choose one of: {_enumerate(loras)} (or null for none)"
-        if loras
-        else "  - llm.lora: leave null (no LoRA adapters are served on this backend)"
+        else '  (omit "voice": no voice library is configured)\n'
     )
     system = (
-        "You design personas for a voice assistant. Turn the user's plain-English description "
-        "into ONE persona as a strict JSON object — no prose, no markdown fences, JSON only.\n\n"
-        "The persona shape (omit a field to accept its default):\n"
-        '  - name: a short display name (required), e.g. "Patient French Tutor".\n'
-        "  - description: a one-line blurb shown in a picker.\n"
-        "  - system_prompt: the persona's instructions, addressed to it in the second person "
-        '("You are …"). Capture its character, tone, and any rules from the description. This '
-        "is the most important field — make it vivid and specific.\n"
-        f"{voice_line}\n"
-        "  - voice.emotion: a single word, e.g. warm | neutral | calm | bright.\n"
-        "  - llm.temperature: 0.0 to 1.2 (lower = more focused). llm.top_p: 0.0 to 1.0. "
-        "llm.max_tokens: 120 to 400 (spoken replies are short).\n"
-        f"{lora_line}\n"
-        "  - behavior.turn_style: one of concise | balanced | verbose.\n"
-        "  - behavior.follow_up_probability: 0.0 to 1.0 (how often it asks a follow-up).\n"
-        "  - memory.enabled: true/false (remember the user across sessions).\n"
-        f"  - session_defaults.cefr: one of {cefr_values} when the persona should speak at a "
-        "fixed language level (e.g. a B1 tutor), else omit it.\n"
-        "Do NOT set a demeanor, do NOT invent voices, LoRA names, tools, or any field not listed "
+        "You design personas for a voice assistant. Turn the user's plain-English description into "
+        "ONE persona as a single JSON object — no prose, no markdown fences, JSON only.\n\n"
+        "Use this EXACT nested shape. Use nested objects; do NOT flatten keys — write "
+        '{"voice": {"ref": "..."}}, never {"voice.ref": "..."}. Omit any field to take its '
+        "default:\n"
+        "{\n"
+        '  "name": "<short display name, e.g. Patient French Tutor>",\n'
+        '  "description": "<one-line blurb shown in a picker>",\n'
+        '  "system_prompt": "<instructions addressed to the persona as \\"You are …\\"; capture '
+        'its character, tone and rules; vivid and specific>",\n'
+        f"{llm_field}"
+        f"{voice_field}"
+        '  "behavior": {"turn_style": "<concise|balanced|verbose>", '
+        '"follow_up_probability": 0.5},\n'
+        '  "memory": {"enabled": false},\n'
+        f'  "session_defaults": {{"cefr": "<one of {cefr_values}; omit unless a fixed level '
+        'fits, e.g. a B1 tutor>"}}\n'
+        "}\n\n"
+        "Numeric ranges: temperature 0.0-1.2, top_p 0.0-1.0, max_tokens 120-400, "
+        "follow_up_probability 0.0-1.0. "
+        f"{lora_note}"
+        "Do NOT set a demeanor. Do NOT invent voices, LoRA names, tools, or any field not shown "
         "above. Reply with ONLY the JSON object."
     )
     user = (
@@ -198,6 +207,31 @@ def _format_validation_error(exc: ValidationError) -> str:
     first = errors[0]
     loc = ".".join(str(p) for p in first.get("loc", ())) or "persona"
     return f"{loc}: {first.get('msg')}"
+
+
+def unflatten_dotted_keys(data: dict[str, Any]) -> dict[str, Any]:
+    """Fold dotted top-level keys into nested objects: `{"voice.ref": x}` → `{"voice": {"ref": x}}`.
+
+    Local models sometimes emit the field *paths* from the prompt as flat keys; `Persona`'s
+    `extra="forbid"` would reject them (`voice.ref: Extra inputs are not permitted`). Splitting a
+    single-dot key back into a nested dict — merged with any real nested object for the same parent
+    — recovers a valid shape. No persona field name contains a dot, so this only ever rescues a
+    flattened draft; deeper paths and plain keys pass through untouched.
+    """
+    out: dict[str, Any] = {}
+    for key, value in data.items():
+        parent, sep, child = key.partition(".")
+        if sep and child and "." not in child:
+            bucket = out.get(parent)
+            if not isinstance(bucket, dict):
+                bucket = {}
+                out[parent] = bucket
+            bucket.setdefault(child, value)
+        elif isinstance(value, dict) and isinstance(out.get(key), dict):
+            out[key] = {**value, **out[key]}  # merge, letting folded dotted keys win
+        else:
+            out[key] = value
+    return out
 
 
 # --------------------------------------------------------------------------------------
@@ -284,6 +318,9 @@ def _persona_from_reply(
     obj = parse_persona_draft(text)
     if obj is None:
         raise PersonaDraftError("the model did not return a JSON object")
+    # Rescue a model that flattened the nested shape into dotted keys before anything else looks
+    # at the fields (so `voice.ref` becomes `voice: {ref: ...}` rather than a forbidden extra).
+    obj = unflatten_dotted_keys(obj)
     name = obj.get("name")
     if not isinstance(name, str) or not name.strip():
         raise PersonaDraftError("the draft is missing a 'name'")

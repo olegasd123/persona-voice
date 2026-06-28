@@ -74,11 +74,21 @@ async def _draft(settings: Settings, args: argparse.Namespace) -> int:
     )
 
     body = yaml.safe_dump(persona.model_dump(mode="json"), sort_keys=False, allow_unicode=True)
-    if args.out:
-        args.out.write_text(body)
-        print(f"wrote persona draft '{persona.id}' -> {args.out}", file=sys.stderr)
-    else:
+    if args.out is None:
         sys.stdout.write(body)
+        return 0
+
+    # The personas-dir loader requires each file's stem to equal its `id`, so default the filename
+    # to `<id>.yaml` when `--out` is a directory, and warn when an explicit filename won't match.
+    out = args.out / f"{persona.id}.yaml" if args.out.is_dir() else args.out
+    out.write_text(body)
+    print(f"wrote persona draft '{persona.id}' -> {out}", file=sys.stderr)
+    if out.stem != persona.id:
+        print(
+            f"warning: filename stem '{out.stem}' != persona id '{persona.id}'; the personas-dir "
+            f"loader will reject it — rename to '{persona.id}.yaml' to drop it under config/personas/.",
+            file=sys.stderr,
+        )
     return 0
 
 

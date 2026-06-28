@@ -13,6 +13,7 @@ from personavoice.persona.author import (
     draft_persona,
     parse_persona_draft,
     slugify,
+    unflatten_dotted_keys,
     unique_persona_id,
 )
 
@@ -93,7 +94,35 @@ def test_prompt_enumerates_voices_and_loras() -> None:
 def test_prompt_handles_empty_voice_and_lora_sets() -> None:
     system = build_author_prompt("a tutor", voices=[], loras=[]).pop(0).content
     assert "no voice library is configured" in system
-    assert "no LoRA adapters are served" in system
+    assert "No LoRA adapters are served" in system
+
+
+def test_prompt_shows_nested_shape_not_dotted_keys() -> None:
+    # The model must see nested objects, never dotted paths it would copy as flat keys.
+    system = build_author_prompt("a tutor", voices=VOICES, loras=LORAS).pop(0).content
+    assert '"voice": {"ref"' in system
+    assert "voice.ref" in system  # only as the explicit "never write this" example
+    assert "do NOT flatten keys" in system
+
+
+# --------------------------------------------------------------------------------------
+# unflatten_dotted_keys
+# --------------------------------------------------------------------------------------
+
+
+def test_unflatten_folds_dotted_keys_into_objects() -> None:
+    out = unflatten_dotted_keys({"name": "X", "voice.ref": "v", "llm.temperature": 0.3})
+    assert out == {"name": "X", "voice": {"ref": "v"}, "llm": {"temperature": 0.3}}
+
+
+def test_unflatten_merges_with_existing_nested_object() -> None:
+    out = unflatten_dotted_keys({"voice": {"emotion": "warm"}, "voice.ref": "v"})
+    assert out == {"voice": {"emotion": "warm", "ref": "v"}}
+
+
+def test_unflatten_leaves_plain_keys_untouched() -> None:
+    plain = {"name": "X", "llm": {"base_model": "m"}}
+    assert unflatten_dotted_keys(plain) == plain
 
 
 # --------------------------------------------------------------------------------------
@@ -118,6 +147,25 @@ async def test_draft_canned_json_yields_valid_persona() -> None:
     assert persona.id == "french-tutor"  # slug of the name
     assert persona.system_prompt == "You are a patient French tutor."
     assert persona.voice.ref == "voices/teacher_clear"
+
+
+async def test_draft_recovers_flattened_dotted_reply() -> None:
+    # A local model emitting dotted keys (the real-world failure) is rescued, no repair needed.
+    reply = json.dumps(
+        {
+            "name": "French Tutor",
+            "system_prompt": "You are a patient French tutor.",
+            "voice.ref": "voices/teacher_clear",
+            "voice.emotion": "warm",
+            "behavior.turn_style": "balanced",
+            "session_defaults.cefr": "b1",
+        }
+    )
+    llm = _ReplyLLM(reply)
+    persona = await _draft(llm)
+    assert llm.calls == 1  # fixed without a repair round-trip
+    assert persona.voice.ref == "voices/teacher_clear"
+    assert persona.session_defaults.cefr == CEFRLevel.b1
 
 
 async def test_draft_fills_required_defaults_from_minimal_reply() -> None:
