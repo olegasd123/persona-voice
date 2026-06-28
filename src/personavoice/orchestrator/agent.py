@@ -52,6 +52,7 @@ from ..server.config import (
     load_backend_config,
     load_user_persona_store,
     load_voice_registry,
+    max_sessions,
 )
 from ..voice.registry import VoiceRegistry
 from .completion import (
@@ -873,24 +874,14 @@ async def entrypoint(ctx: Any, *, persona_id: str | None = None) -> None:
 # --- Concurrency / admission control (Feature I) ----------------------------------------------
 # The VRAM budget assumes one conversation. On non-Windows each job runs in its own process that
 # loads its own STT+TTS copy, so a second concurrent caller doubles audio-model VRAM and OOMs a
-# 16 GB card. One session per worker is therefore the safe default; scale out by running more
-# workers (LiveKit balances across them), not by raising this. `num_idle_processes=1` alone does
-# *not* cap concurrency (it only caps the warm pool) — these hooks do.
-_DEFAULT_MAX_SESSIONS = 1
+# 16 GB card. One session per worker is therefore the safe default (`config.max_sessions`); scale
+# out by running more workers (LiveKit balances across them), not by raising this.
+# `num_idle_processes=1` alone does *not* cap concurrency (it only caps the warm pool) — these
+# hooks do.
 # The main worker process owns the live count; `load_fnc` runs there (every 0.5 s and right before
 # each availability check) and stashes the worker so `request_fnc` — which only receives a
 # JobRequest — can read the same authoritative `active_jobs`.
 _LIVE_WORKER: dict[str, Any] = {}
-
-
-def _max_sessions() -> int:
-    """Per-worker concurrent-session cap, from `PERSONAVOICE_MAX_SESSIONS` (default 1, min 1)."""
-    raw = (os.getenv("PERSONAVOICE_MAX_SESSIONS") or str(_DEFAULT_MAX_SESSIONS)).strip()
-    try:
-        return max(1, int(raw))
-    except ValueError:
-        logger.warning("PERSONAVOICE_MAX_SESSIONS=%r is not an integer; using 1", raw)
-        return _DEFAULT_MAX_SESSIONS
 
 
 def _session_load(active: int, capacity: int) -> float:
@@ -932,7 +923,7 @@ def _worker_load_fnc(worker: Any) -> float:
     (Feature I step 2): one cheap place that already runs on every load refresh and on job end.
     """
     _LIVE_WORKER["worker"] = worker
-    capacity = _max_sessions()
+    capacity = max_sessions()
     active = _active_job_count(worker)
     set_sessions(active, capacity)
     return _session_load(active, capacity)
@@ -946,7 +937,7 @@ async def _request_fnc(req: Any) -> None:
     dispatched job and the hook where the friendly "busy" reply will live (Feature I step 3).
     Today an over-capacity job is rejected and counted.
     """
-    capacity = _max_sessions()
+    capacity = max_sessions()
     active = _active_job_count(_LIVE_WORKER.get("worker"))
     if active >= capacity:
         logger.warning(
@@ -973,7 +964,7 @@ def run() -> None:
     agents, _, _ = _require_livekit()
     if len(sys.argv) < 2 or sys.argv[1].startswith("-"):
         sys.argv = [sys.argv[0], "start"]
-    capacity = _max_sessions()
+    capacity = max_sessions()
     logger.info("admission control: max %d concurrent session(s) per worker", capacity)
     agents.cli.run_app(
         agents.WorkerOptions(

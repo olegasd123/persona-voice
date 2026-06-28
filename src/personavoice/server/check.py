@@ -22,6 +22,7 @@ from .config import (
     load_backend_config,
     load_memory_store,
     load_voice_registry,
+    max_sessions,
 )
 
 
@@ -207,9 +208,7 @@ def run_check(settings: Settings) -> CheckReport:
 
     # 6. Admission control. Surface the per-worker session cap and flag a value above the safe 1
     # — a single GPU OOMs on a second concurrent caller (its own STT+TTS copy in a new process).
-    from ..orchestrator.agent import _max_sessions
-
-    report.max_sessions = _max_sessions()
+    report.max_sessions = max_sessions()
     if report.max_sessions > 1:
         report.warnings.append(
             f"PERSONAVOICE_MAX_SESSIONS={report.max_sessions} admits more than one concurrent "

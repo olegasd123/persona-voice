@@ -75,6 +75,7 @@ from .config import (
     load_memory_store,
     load_user_persona_store,
     load_voice_registry,
+    max_sessions,
 )
 from .ratelimit import RateLimiter, rate_limiter_from_env
 from .security import audit_security, has_errors
@@ -900,15 +901,19 @@ def _make_handler(
             query = {k: v[0] for k, v in parse_qs(parsed.query).items()}
             try:
                 if path == "/healthz" and method == "GET":
-                    body: dict[str, Any] = {"status": "ok", "backend": service._backend}
-                    # Admission-control load (Feature I), read from the gauges the agent worker
-                    # publishes over the shared metrics channel. Absent when the exporter is off
-                    # or no worker has reported yet — omit rather than show a misleading zero.
+                    # Admission-control load (Feature I). `sessions_max` is static config, so read
+                    # it directly (authoritative, always present) rather than round-tripping it
+                    # through a live gauge. `sessions_active` is the genuinely live value, read
+                    # from the gauge the worker publishes over the shared metrics channel — omitted
+                    # when the exporter is off or no worker has reported yet.
+                    body: dict[str, Any] = {
+                        "status": "ok",
+                        "backend": service._backend,
+                        "sessions_max": max_sessions(),
+                    }
                     sessions = read_sessions()
                     if sessions is not None:
-                        active, capacity = sessions
-                        body["sessions_active"] = active
-                        body["sessions_max"] = capacity
+                        body["sessions_active"] = sessions[0]
                     self._send_json(200, body)
                     return
                 # Prometheus scrape endpoint. Like /healthz it's unauthenticated and not

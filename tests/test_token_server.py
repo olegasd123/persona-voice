@@ -868,23 +868,23 @@ def test_http_healthz_is_open(live_server: tuple[str, TokenService]) -> None:
     assert body["status"] == "ok"
 
 
-def test_http_healthz_reports_session_load(live_server: tuple[str, TokenService]) -> None:
-    # Admission-control visibility (Feature I): /healthz surfaces the worker's published session
-    # gauges. With the exporter present we publish a known count and expect it back; without it,
-    # the fields are simply omitted (no misleading zero).
+def test_http_healthz_reports_session_load(
+    live_server: tuple[str, TokenService], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Admission-control visibility (Feature I). `sessions_max` comes from config so it's always
+    # present and authoritative; `sessions_active` comes from the worker's live gauge (only when
+    # the exporter is present).
     from personavoice.obs import metrics_enabled, set_sessions
 
+    monkeypatch.setenv("PERSONAVOICE_MAX_SESSIONS", "2")
     base, _ = live_server
     if metrics_enabled():
         set_sessions(1, 2)
-        status, body = _get(f"{base}/healthz")
-        assert status == 200
+    status, body = _get(f"{base}/healthz")
+    assert status == 200
+    assert body["sessions_max"] == 2  # from config, not the gauge
+    if metrics_enabled():
         assert body["sessions_active"] == 1
-        assert body["sessions_max"] == 2
-    else:
-        status, body = _get(f"{base}/healthz")
-        assert status == 200
-        assert "sessions_active" not in body
 
 
 def test_http_metrics_is_open(live_server: tuple[str, TokenService]) -> None:

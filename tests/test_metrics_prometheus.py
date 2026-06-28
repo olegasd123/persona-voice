@@ -6,6 +6,10 @@ the no-op degradation when the library is absent (simulated by flipping the modu
 
 from __future__ import annotations
 
+import os
+import subprocess
+import sys
+
 import pytest
 
 from personavoice.obs import TurnMetrics
@@ -78,6 +82,34 @@ def test_session_gauges_round_trip() -> None:
     assert "personavoice_sessions_active 0.0" in text
     assert "personavoice_sessions_max 3.0" in text
     assert "personavoice_sessions_rejected_total" in text
+
+
+@pytest.mark.skipif(not prom.AVAILABLE, reason="prometheus-client not installed")
+def test_session_gauge_survives_multiproc_dir_wipe(tmp_path) -> None:  # type: ignore[no-untyped-def]
+    # Regression: the agent worker imports this module, then LiveKit **wipes
+    # PROMETHEUS_MULTIPROC_DIR at startup** (worker.py). If the unlabeled session metrics were
+    # created at import they'd write files LiveKit unlinks, and the worker would then write to a
+    # dangling inode the token server can never read (sessions_* stuck at 0). Creating them lazily
+    # on first write — after the wipe — keeps them visible. Run in a fresh interpreter because the
+    # multiprocess value class is selected from the env at prometheus_client import.
+    mpdir = tmp_path / "metrics"
+    mpdir.mkdir()
+    code = (
+        "import os, glob\n"
+        "from personavoice.obs import set_sessions, read_sessions\n"
+        # mimic LiveKit's startup cleanup, AFTER personavoice.obs was imported above
+        "for f in glob.glob(os.path.join(os.environ['PROMETHEUS_MULTIPROC_DIR'], '*')):\n"
+        "    os.unlink(f)\n"
+        "set_sessions(0, 3)\n"
+        "print(read_sessions())\n"
+    )
+    env = {**os.environ, "PROMETHEUS_MULTIPROC_DIR": str(mpdir)}
+    out = subprocess.run(
+        [sys.executable, "-c", code], capture_output=True, text=True, env=env, check=False
+    )
+    assert out.returncode == 0, out.stderr
+    # Lazy creation -> the value written after the wipe is visible. (Eager would print "None".)
+    assert out.stdout.strip() == "(0, 3)"
 
 
 def test_session_helpers_no_op_when_absent(monkeypatch: pytest.MonkeyPatch) -> None:

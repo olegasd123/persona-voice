@@ -7,6 +7,7 @@ into validated models. Nothing here loads ML weights.
 
 from __future__ import annotations
 
+import logging
 import os
 from pathlib import Path
 
@@ -119,6 +120,24 @@ class Settings:
             memory_key=memory_key,
             user_personas_path=user_personas_path,
         )
+
+
+def max_sessions() -> int:
+    """Per-worker concurrent-session cap, from `PERSONAVOICE_MAX_SESSIONS` (default 1, min 1).
+
+    Canonical reader shared by the agent worker (which *enforces* it via admission control) and the
+    token server + `--check` (which *report* it). The default of 1 is the safe number for a single
+    GPU: a second concurrent caller runs in a second process that loads its own STT+TTS copy and
+    OOMs a 16 GB card. Garbage / non-positive values fall back to 1 rather than disabling the gate.
+    """
+    raw = (os.getenv("PERSONAVOICE_MAX_SESSIONS") or "1").strip()
+    try:
+        return max(1, int(raw))
+    except ValueError:
+        logging.getLogger("personavoice.config").warning(
+            "PERSONAVOICE_MAX_SESSIONS=%r is not an integer; using 1", raw
+        )
+        return 1
 
 
 def load_backend_config(settings: Settings) -> BackendConfig:

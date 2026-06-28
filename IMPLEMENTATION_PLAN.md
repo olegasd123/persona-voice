@@ -696,16 +696,22 @@ the client lib is absent. Small, isolated, high ops value.
 
 ## 9. Feature I — Concurrency / admission control `[Partial]`
 
-> **Status:** Steps 1–2 implemented + unit-tested offline (no GPU/LiveKit). The agent worker now
-> caps concurrency via a custom `load_fnc` (reports `active_jobs / capacity`, so LiveKit stops
-> dispatching once full — the **race-safe OOM rail**, since the framework reserves the slot before
-> `request_fnc` runs) plus a `request_fnc` reject backstop; `load_threshold` is set per capacity
-> (`(cap-0.5)/cap`, always `< 1`, which the framework requires). Capacity is `PERSONAVOICE_MAX_SESSIONS`
-> (default 1). The live count is mirrored to the existing `PROMETHEUS_MULTIPROC_DIR` channel as
-> `personavoice_sessions_active` / `_sessions_max` (gauges) + `_sessions_rejected_total` (counter),
-> surfaced on `/healthz` (`sessions_active`/`sessions_max`) and `/metrics`; `--check` prints the cap
-> and warns when it's > 1. `.env.example` + README updated. Steps 3 (busy clip), 4 (token-server 503
-> gate), 5 (queueing) remain. *Live two-caller OOM check on the 4080 still pending a GPU run.*
+> **Status:** Steps 1–2 implemented + unit-tested offline, and **verified live on the Mac stack**
+> (admission control confirmed in worker logs: `threshold 0.5`, load `1.0`↔`0.0`, "at full
+> capacity, marking as unavailable"). The agent worker caps concurrency via a custom `load_fnc`
+> (reports `active_jobs / capacity`, so LiveKit stops dispatching once full — the **race-safe OOM
+> rail**, since the framework reserves the slot before `request_fnc` runs) plus a `request_fnc`
+> reject backstop; `load_threshold` is per capacity (`(cap-0.5)/cap`, always `< 1`, which the
+> framework requires). Capacity is `config.max_sessions()` (`PERSONAVOICE_MAX_SESSIONS`, default 1),
+> shared by worker/token-server/`--check`. `/healthz` reports `sessions_max` from that config
+> (authoritative) and `sessions_active` from the worker's live gauge; `/metrics` carries
+> `personavoice_sessions_{active,max}` + `_sessions_rejected_total`. **Gotcha fixed:** LiveKit wipes
+> `PROMETHEUS_MULTIPROC_DIR` at worker startup, so the (unlabeled) session metrics are created
+> **lazily on first write** — eager creation at import wrote files LiveKit then unlinked, leaving
+> the worker writing to a dangling inode (`sessions_*` stuck at 0); regression-tested. `--check`
+> prints the cap and warns when > 1. `.env.example`, README, compose env updated. Steps 3 (busy
+> clip), 4 (token-server 503 gate), 5 (queueing) remain. *Live two-caller OOM check on the 4080
+> still pending a GPU run.*
 
 The VRAM budget assumes **one** conversation, but nothing caps simultaneous callers — and the
 failure is harder than "degraded." On non-Windows, the LiveKit worker dispatches each job into its
@@ -743,11 +749,12 @@ logic.
 
 2. **Active-session gauge + `/healthz` fields `[Done]`.** Reuses Feature H's existing
    `PROMETHEUS_MULTIPROC_DIR` channel — a multiproc `Gauge(multiprocess_mode="livesum")` for
-   `personavoice_sessions_active` (+ `_sessions_max`) is exactly a cross-process counter the token
-   server reads via `read_sessions()`, no new coupling. Added `personavoice_sessions_rejected_total`.
-   `/healthz` gains `sessions_active` / `sessions_max` (omitted when no worker is reporting, so it
-   never shows a misleading zero). Caveat: `livesum` over-counts after an *unclean* worker restart
-   until `PROMETHEUS_MULTIPROC_DIR` is cleared — visibility only; the gate never reads the gauge.
+   `personavoice_sessions_active` is the cross-process live count the token server reads via
+   `read_sessions()`. Added `personavoice_sessions_rejected_total`. `/healthz` reports
+   `sessions_max` from **config** (static, authoritative, always present) and `sessions_active`
+   from the gauge (omitted when no worker is reporting). The metrics are built **lazily on first
+   write** so they survive LiveKit's startup wipe of the multiproc dir (see Status); because
+   LiveKit clears that dir on every start, the stale-file-after-restart concern is moot.
 
 3. **Pre-rendered "busy" clip on the over-cap path (½ day).** A bare `reject()` leaves the caller
    in a silent room. When over cap, briefly accept, play a **pre-rendered** "all lines busy, try

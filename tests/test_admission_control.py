@@ -12,23 +12,24 @@ from types import SimpleNamespace
 import pytest
 
 from personavoice.orchestrator import agent
+from personavoice.server.config import max_sessions
 
 
 def test_max_sessions_defaults_to_one(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("PERSONAVOICE_MAX_SESSIONS", raising=False)
-    assert agent._max_sessions() == 1
+    assert max_sessions() == 1
 
 
 def test_max_sessions_reads_env(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("PERSONAVOICE_MAX_SESSIONS", "3")
-    assert agent._max_sessions() == 3
+    assert max_sessions() == 3
 
 
 @pytest.mark.parametrize("raw", ["", "  ", "nope", "0", "-2"])
 def test_max_sessions_floors_at_one(monkeypatch: pytest.MonkeyPatch, raw: str) -> None:
     # Garbage / non-positive values fall back to a safe 1 rather than disabling the gate.
     monkeypatch.setenv("PERSONAVOICE_MAX_SESSIONS", raw)
-    assert agent._max_sessions() == 1
+    assert max_sessions() == 1
 
 
 @pytest.mark.parametrize(

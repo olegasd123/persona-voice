@@ -82,28 +82,45 @@ if AVAILABLE:
         ["persona"],
         buckets=_LATENCY_BUCKETS,
     )
-    # Concurrency / admission control (Feature I). The agent worker is the source of truth for
-    # the live count (LiveKit `active_jobs`); it mirrors that here so the token server's
-    # `/healthz` + `/metrics` can report load across processes. `livesum` aggregates across a
-    # fleet of workers (each gauge file summed), so `active`/`max` read as fleet totals. Only the
-    # worker's main process writes these, so steady state is one file per worker = exact. Like
-    # every multiproc metric, an *unclean* worker restart leaves a stale file that inflates the
-    # sum until `PROMETHEUS_MULTIPROC_DIR` is cleared; the gate in `agent.py` never reads this, so
-    # only the reported number (not safety) is affected. NB: this never gates — it only reports.
-    _SESSIONS_ACTIVE = _prom.Gauge(
-        "personavoice_sessions_active",
-        "Conversation sessions currently active (live count from the agent worker).",
-        multiprocess_mode="livesum",
-    )
-    _SESSIONS_MAX = _prom.Gauge(
-        "personavoice_sessions_max",
-        "Configured max concurrent sessions (capacity) the worker admits.",
-        multiprocess_mode="livesum",
-    )
-    _SESSIONS_REJECTED = _prom.Counter(
-        "personavoice_sessions_rejected_total",
-        "Jobs rejected by admission control because the worker was at capacity.",
-    )
+
+# Concurrency / admission control session metrics (Feature I) are built **lazily on first write**,
+# not at import — see `_session_metric`.
+_SESSIONS: dict[str, Any] = {}
+
+
+def _session_metric(key: str) -> Any:
+    """Lazily build (once) and return the `active` / `max` / `rejected` session collectors.
+
+    Why lazy: the agent worker is the only writer, and LiveKit **wipes `PROMETHEUS_MULTIPROC_DIR`
+    at worker startup** — which happens *after* this module is imported. An *unlabeled* multiproc
+    metric writes its mmap file at creation, so creating these at import means LiveKit unlinks the
+    file and this process then writes to a dangling inode the token server can never glob (it reads
+    as 0). Deferring creation to the first write — which happens after worker startup, in
+    `load_fnc` / `request_fnc` — puts the file in the dir post-cleanup, so it's visible. (The
+    labeled turn metrics avoid this for free: a labeled metric creates no child/file until its
+    first `.labels()` call, which is already post-cleanup.)
+
+    The gate in `agent.py` never reads these — they only *report*; a worker restart that leaves a
+    stale file affects the reported number, never safety.
+    """
+    if not AVAILABLE:
+        return None
+    if not _SESSIONS:
+        _SESSIONS["active"] = _prom.Gauge(
+            "personavoice_sessions_active",
+            "Conversation sessions currently active (live count from the agent worker).",
+            multiprocess_mode="livesum",
+        )
+        _SESSIONS["max"] = _prom.Gauge(
+            "personavoice_sessions_max",
+            "Configured max concurrent sessions (capacity) the worker admits.",
+            multiprocess_mode="livesum",
+        )
+        _SESSIONS["rejected"] = _prom.Counter(
+            "personavoice_sessions_rejected_total",
+            "Jobs rejected by admission control because the worker was at capacity.",
+        )
+    return _SESSIONS[key]
 
 
 def metrics_enabled() -> bool:
@@ -147,8 +164,8 @@ def set_sessions(active: int, capacity: int) -> None:
     if not AVAILABLE:
         return
     try:
-        _SESSIONS_ACTIVE.set(active)
-        _SESSIONS_MAX.set(capacity)
+        _session_metric("active").set(active)
+        _session_metric("max").set(capacity)
     except Exception:  # pragma: no cover - metrics are best-effort, never fatal
         logger.debug("failed to publish session gauges", exc_info=True)
 
@@ -158,7 +175,7 @@ def record_rejected_session() -> None:
     if not AVAILABLE:
         return
     try:
-        _SESSIONS_REJECTED.inc()
+        _session_metric("rejected").inc()
     except Exception:  # pragma: no cover - metrics are best-effort, never fatal
         logger.debug("failed to record rejected session", exc_info=True)
 
