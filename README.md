@@ -621,8 +621,16 @@ to play a **"busy" clip** (a synthesized telephone busy tone by default, or your
 loaded on that path. For a nicer UX you can also enable the **token-server early gate** with
 `PERSONAVOICE_ADMISSION_503=1`: `/token` then returns `503 + Retry-After` once the worker reports
 full, so the client backs off before connecting. It reads the worker's live count, so it needs a
-shared `PROMETHEUS_MULTIPROC_DIR`, and is an optimization on top of the worker's load gate (it has a
-read→mint→connect race) — it fails open and mints when the count is unreadable.
+shared `PROMETHEUS_MULTIPROC_DIR` on both the worker and the token server, and is an optimization on
+top of the worker's load gate (it has a read→mint→connect race) — it fails open and mints when the
+count is unreadable.
+
+**Worker job executor (warm reuse).** On the Mac dev backend the worker runs each conversation in a
+**thread** (`PERSONAVOICE_JOB_EXECUTOR=thread`, the Mac default), so the models prewarmed at startup
+are reused across calls — a new call right after ending one is warm immediately. LiveKit's off-Windows
+default is a **process** per job, which reloads every model each conversation; on a single-session
+worker that makes every call pay the cold start (and back-to-back calls stall on the next prewarm).
+Set `PERSONAVOICE_JOB_EXECUTOR=process` to opt back into per-job isolation.
 
 **Load test and security.** Hammer the token server and confirm rate limiting kicks in:
 

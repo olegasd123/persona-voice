@@ -66,6 +66,11 @@ services:
       # Admission control (Feature I): /healthz reports `sessions_max` from this (static config),
       # so pass the SAME value the native worker uses. Default 1 = one session per worker.
       - PERSONAVOICE_MAX_SESSIONS=${PERSONAVOICE_MAX_SESSIONS:-1}
+      # Optional 503 early gate (Feature I, step 4): the gate runs HERE (in TokenService.issue), so
+      # it must be set on this container, not just on the native worker. Off unless set; reads the
+      # shared metrics dir below for the worker's live count. Retry-After comes from BUSY_RETRY_AFTER.
+      - PERSONAVOICE_ADMISSION_503=${PERSONAVOICE_ADMISSION_503:-}
+      - PERSONAVOICE_BUSY_RETRY_AFTER=${PERSONAVOICE_BUSY_RETRY_AFTER:-10}
       # Prometheus multi-process dir for /metrics. This is the ONE env var deliberately passed
       # INTO the container (unlike the data-dir vars below): prometheus_client picks multi-process
       # mode by the *presence* of this variable at import, so the token-server needs it set to its

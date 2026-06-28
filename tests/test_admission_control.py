@@ -217,3 +217,32 @@ def test_busy_retry_after_default_env_and_floor(monkeypatch: pytest.MonkeyPatch)
     for raw in ("0", "-5", "nope", ""):
         monkeypatch.setenv("PERSONAVOICE_BUSY_RETRY_AFTER", raw)
         assert busy_retry_after() >= 1  # never invites an instant-retry storm
+
+
+# --- Job executor selection (warm-process reuse so back-to-back calls don't re-prewarm) -------
+
+_FAKE_AGENTS = SimpleNamespace(JobExecutorType=SimpleNamespace(THREAD="THREAD", PROCESS="PROCESS"))
+
+
+def test_job_executor_defaults_thread_on_mac(monkeypatch: pytest.MonkeyPatch) -> None:
+    # Mac default = THREAD so the warm process (and its loaded models) is reused across calls.
+    monkeypatch.delenv("PERSONAVOICE_JOB_EXECUTOR", raising=False)
+    assert agent._job_executor_type(_FAKE_AGENTS, "mac") == "THREAD"
+
+
+def test_job_executor_defaults_process_off_mac(monkeypatch: pytest.MonkeyPatch) -> None:
+    # CUDA/Linux keep LiveKit's validated PROCESS default unless explicitly overridden.
+    monkeypatch.delenv("PERSONAVOICE_JOB_EXECUTOR", raising=False)
+    assert agent._job_executor_type(_FAKE_AGENTS, "cuda") == "PROCESS"
+
+
+def test_job_executor_env_overrides_both_ways(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("PERSONAVOICE_JOB_EXECUTOR", "process")
+    assert agent._job_executor_type(_FAKE_AGENTS, "mac") == "PROCESS"
+    monkeypatch.setenv("PERSONAVOICE_JOB_EXECUTOR", "THREAD")  # case-insensitive
+    assert agent._job_executor_type(_FAKE_AGENTS, "cuda") == "THREAD"
+
+
+def test_job_executor_garbage_falls_back_to_process(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("PERSONAVOICE_JOB_EXECUTOR", "nonsense")
+    assert agent._job_executor_type(_FAKE_AGENTS, "mac") == "PROCESS"

@@ -1017,6 +1017,34 @@ async def _request_fnc(req: Any) -> None:
     await req.accept()
 
 
+def _job_executor_type(agents: Any, backend: str) -> Any:
+    """Pick the LiveKit job executor: THREAD (reuse the warm process) vs PROCESS (isolate).
+
+    LiveKit's default off Windows is **PROCESS** — every job runs in its own subprocess that
+    re-runs `prewarm` and reloads STT/LLM/TTS from scratch. With one session per worker that means
+    *every* conversation pays the full model-load cold start, and ending a call then immediately
+    starting another stalls the new one behind a fresh prewarm (the warm spare hasn't reloaded yet).
+
+    **THREAD** keeps every job in the worker process, so the process-global `_WARMED` cache (see
+    `prewarm`/`_ensure_warm`) is reused across conversations: models load **once** at startup and
+    every later call — back-to-back included — reuses them with no reload. That's the right shape
+    for the 1-session-per-worker design (and it also removes the second-process OOM that admission
+    control guards against, since there's only ever one copy of the audio models). The trade-off is
+    no per-job process isolation, which is fine for a serialized single session.
+
+    Default: THREAD on the Mac dev backend; LiveKit's platform default (PROCESS on Linux/CUDA, where
+    isolation is validated) elsewhere. Override with `PERSONAVOICE_JOB_EXECUTOR=thread|process`.
+    """
+    choice = (os.getenv("PERSONAVOICE_JOB_EXECUTOR") or "").strip().lower()
+    if not choice:
+        choice = "thread" if backend == "mac" else "process"
+    if choice == "thread":
+        return agents.JobExecutorType.THREAD
+    if choice != "process":
+        logger.warning("PERSONAVOICE_JOB_EXECUTOR=%r is not thread|process; using process", choice)
+    return agents.JobExecutorType.PROCESS
+
+
 def run() -> None:
     """CLI shim: hand control to the LiveKit Agents worker runtime.
 
@@ -1030,7 +1058,12 @@ def run() -> None:
     if len(sys.argv) < 2 or sys.argv[1].startswith("-"):
         sys.argv = [sys.argv[0], "start"]
     capacity = max_sessions()
-    logger.info("admission control: max %d concurrent session(s) per worker", capacity)
+    executor = _job_executor_type(agents, Settings.load().backend)
+    logger.info(
+        "admission control: max %d concurrent session(s) per worker; job executor=%s",
+        capacity,
+        executor.name.lower(),
+    )
     agents.cli.run_app(
         agents.WorkerOptions(
             entrypoint_fnc=entrypoint,
@@ -1041,6 +1074,10 @@ def run() -> None:
             load_fnc=_worker_load_fnc,
             load_threshold=_load_threshold(capacity),
             request_fnc=_request_fnc,
+            # THREAD on Mac (default) keeps all jobs in one process so the prewarmed models are
+            # reused across conversations — no per-call model reload / cold-start stall on the next
+            # caller. See `_job_executor_type`. PROCESS elsewhere unless overridden.
+            job_executor_type=executor,
             # Single shared GPU: keep exactly one warm runner so the models load once. The prod
             # default (one per CPU, up to 4) would prewarm several runners and multiply VRAM —
             # an OOM on a 16 GB card (each runner holds its own STT+TTS copy).
