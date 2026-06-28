@@ -239,6 +239,7 @@ personavoice --token-server          # HTTP on PERSONAVOICE_HOST:PERSONAVOICE_PO
 | `GET /metrics` | Prometheus exposition (per-turn latency/outcome counters + session load); empty unless the `metrics` extra is installed |
 | `GET /personas[?user=]` | `{"personas": [{"id","name","description","voice","custom"}], "default": <id>}` — curated + the user's custom personas |
 | `POST /personas?user=` | create a custom persona (body = a persona draft) |
+| `POST /personas/draft?user=` | draft a persona from `{"description": ...}` via the cascade LLM — validated, **not** persisted (drop into the edit form) |
 | `PUT /personas/{id}?user=` / `DELETE /personas/{id}?user=` | edit / delete one of the user's own personas (curated are read-only) |
 | `GET /loras` | served LoRA adapters for a custom persona's `llm.lora` (`{"loras": [...], "supports_lora"}`) |
 | `GET /voices` | selectable voice catalog for the active backend (`{"voices": [...], "supports_cloning"}`) |
@@ -387,6 +388,22 @@ the agent resolves a `{"persona": <id>, "user": <uid>}` against this store — *
 on id clash**, so a user can't shadow or delete a built-in. A persona's `llm.lora` routes to a
 vLLM-served adapter; `GET /loras` lists the selectable ones (empty on Mac/LM Studio, where a LoRA
 is merged into the base model at train time).
+
+**Authoring helper (draft from a description).** Writing a persona from scratch is a blank-page
+problem, so an optional generator turns a one-line description into a validated draft. `POST
+/personas/draft?user=` with `{"description": "a patient French tutor who only speaks in B1"}` asks
+the configured cascade LLM (LM Studio on Mac — fully offline) to fill the persona shape, then
+validates it against the `Persona` model and **clamps** anything unservable: the prompt enumerates
+the legal `voice.ref` ids and served LoRA names, an invalid choice is repaired to a legal one, a
+bad draft gets one repair retry, the id is de-duped against the curated + the user's own, and
+`demeanor` is never authored to `rude`. The draft is **returned, not persisted** — the client drops
+it into the existing New/Edit form, the user tweaks and confirms, and `POST /personas` does the
+write (human in the loop). The same path is on the CLI:
+
+```bash
+personavoice-persona draft "a patient French tutor who only speaks in B1"   # validated YAML → stdout
+personavoice-persona draft "a blunt PM interviewer" --out config/personas/pm2.yaml
+```
 
 ### Voice cloning (zero-shot)
 

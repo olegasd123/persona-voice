@@ -422,6 +422,7 @@ def make_persona_service(
     lora_modules: str | None = None,
     max_user_personas: int = 50,
     api_token: str | None = None,
+    draft_llm: object | None = None,
 ) -> tuple[TokenService, UserPersonaStore]:
     """A TokenService with a real user-persona store + a voice registry for blurbs."""
     store = UserPersonaStore(tmp_path / "user_personas.json")
@@ -442,11 +443,22 @@ def make_persona_service(
         voices=voices,
         user_personas=store,
         max_user_personas=max_user_personas,
+        draft_llm_factory=(lambda: draft_llm) if draft_llm is not None else None,
         llm_name="vllm" if supports_lora else "lmstudio",
         supports_lora=supports_lora,
         lora_modules=lora_modules,
     )
     return svc, store
+
+
+class _DraftLLM:
+    """An LLM stub for the draft route: `.chat` returns a fixed JSON persona body."""
+
+    def __init__(self, reply: str) -> None:
+        self.reply = reply
+
+    async def chat(self, messages: object, persona: object) -> str:
+        return self.reply
 
 
 _DRAFT = {"name": "French Tutor", "system_prompt": "Teach French, gently."}
@@ -720,6 +732,61 @@ def test_create_persona_validates_lora_on_lora_backend(
         "alice", {**_DRAFT, "llm": {"base_model": "m", "lora": "adapters/hr_interviewer"}}
     )
     assert ok["persona"]["llm"]["lora"] == "adapters/hr_interviewer"
+
+
+# --- persona drafting (authoring helper) ----------------------------------------------
+
+
+_DRAFT_REPLY = json.dumps(
+    {
+        "name": "French Tutor",
+        "system_prompt": "You are a patient French tutor.",
+        "voice": {"ref": "voices/companion_soft", "emotion": "warm"},
+        "session_defaults": {"cefr": "b1"},
+    }
+)
+
+
+def test_draft_persona_returns_draft_without_persisting(
+    registry: PersonaRegistry, tmp_path: Path
+) -> None:
+    svc, store = make_persona_service(registry, tmp_path, draft_llm=_DraftLLM(_DRAFT_REPLY))
+    result = svc.draft_persona("alice", "a patient French tutor who only speaks in B1")
+    assert result["custom"] is True
+    assert result["id"] == "french-tutor"
+    assert result["persona"]["system_prompt"] == "You are a patient French tutor."
+    assert result["persona"]["session_defaults"]["cefr"] == "B1"
+    # The draft is NOT written — the client confirms via POST /personas separately.
+    assert store.ids_for("alice") == []
+
+
+def test_draft_persona_id_avoids_curated_and_own(registry: PersonaRegistry, tmp_path: Path) -> None:
+    reply = json.dumps({"name": "Companion", "system_prompt": "You are a clone."})
+    svc, _ = make_persona_service(registry, tmp_path, draft_llm=_DraftLLM(reply))
+    result = svc.draft_persona("alice", "a companion")
+    assert result["id"] == "companion-2"  # never shadows the curated 'companion'
+
+
+def test_draft_persona_requires_user_and_description(
+    registry: PersonaRegistry, tmp_path: Path
+) -> None:
+    svc, _ = make_persona_service(registry, tmp_path, draft_llm=_DraftLLM(_DRAFT_REPLY))
+    with pytest.raises(BadRequest, match="user id is required"):
+        svc.draft_persona(None, "a tutor")
+    with pytest.raises(BadRequest, match="description is required"):
+        svc.draft_persona("alice", "   ")
+
+
+def test_draft_persona_disabled_without_factory(registry: PersonaRegistry, tmp_path: Path) -> None:
+    svc, _ = make_persona_service(registry, tmp_path)  # no draft_llm wired
+    with pytest.raises(ServerMisconfigured, match="not enabled"):
+        svc.draft_persona("alice", "a tutor")
+
+
+def test_draft_persona_bad_reply_is_bad_request(registry: PersonaRegistry, tmp_path: Path) -> None:
+    svc, _ = make_persona_service(registry, tmp_path, draft_llm=_DraftLLM("not json at all"))
+    with pytest.raises(BadRequest, match="could not draft"):
+        svc.draft_persona("alice", "a tutor")
 
 
 # --- consent (per-user recording opt-in) ----------------------------------------------

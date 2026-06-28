@@ -122,7 +122,7 @@ device + LiveKit call run still pending.
 | H | **Prometheus `/metrics`** `[Done]` | Ops | S | Low | obs/metrics |
 | I | **Concurrency / admission control** `[Partial]` (steps 1–5 done; server-FIFO queue optional) | Ops | M | Med | H (visibility, soft) |
 | J | **Web client** | Reach | L | Low | token server |
-| K | **Persona authoring helper** → folded into **N3** | DX | S | Low | persona loader |
+| K | **Persona authoring helper** `[Done]` (add-on to **N3**) | DX | S | Low | persona loader |
 | L | **Memory introspection (client)** | Trust | S | Low | memory facade |
 
 ---
@@ -815,10 +815,20 @@ session-options UI.
 
 ---
 
-## 11. Feature K — Persona authoring helper
+## 11. Feature K — Persona authoring helper `[Done]`
 
 > **Folded into N3** (§1.5) — multi-user **JSON persona store** with `POST/PUT/DELETE /personas`
 > and client authoring UI. The note below is now an *optional add-on* to N3, not separate work.
+>
+> **Status:** Done & unit-tested (offline). Core drafter `persona/author.py`
+> (`draft_persona(llm, description, *, voices, loras, existing_ids)`): prompt enumerates the legal
+> `voice.ref`/`lora` choices + numeric ranges → strict JSON → `Persona.model_validate` with one
+> repair retry → clamp voice/lora to servable, slugify+dedupe the id, never author `rude`. Surface:
+> `POST /personas/draft?user=` (returns a draft, does **not** persist — drops into the N3 edit form)
+> and the `personavoice-persona draft "…"` CLI (prints validated YAML). The LLM is injected
+> (`_ChatLLM`), defaulting to the configured cascade backend (offline LM Studio on Mac); a
+> Claude-API drafter is a drop-in. Live LLM drafting on a real backend still rides N3's pending
+> device/LiveKit verification.
 
 Personas are hand-written YAML validated by `--check`. An optional **generator** turns a
 plain-English description into a valid persona *draft* (system prompt + voice + behavior knobs +

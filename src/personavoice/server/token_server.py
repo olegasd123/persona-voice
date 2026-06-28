@@ -19,6 +19,7 @@ Endpoints (all JSON, permissive CORS so a browser client / Playground can call t
                                 "demeanor","custom"}], "default": <id>}
                                 (curated + the user's custom personas)
     POST   /personas?user=   -> create a custom persona; body = a persona draft
+    POST   /personas/draft?user= -> draft a persona from {"description": ...} (LLM); not persisted
     GET    /personas/{id}?user=   -> one persona's full body (for an edit form)
     PUT    /personas/{id}?user=   -> replace one of the user's own personas
     DELETE /personas/{id}?user=   -> delete one of the user's own personas
@@ -65,6 +66,8 @@ from ..memory import MemoryStore
 from ..models import CEFRLevel, Demeanor, Persona, SessionOptions
 from ..obs import read_sessions, render_metrics
 from ..orchestrator.busy import busy_retry_after
+from ..persona import author
+from ..persona.author import PersonaDraftError
 from ..persona.lora import served_loras
 from ..persona.registry import PersonaRegistry
 from ..persona.store import UserPersonaStore
@@ -101,6 +104,10 @@ _DEFAULT_MAX_CLONES = 50
 
 # Lazily builds a `VoiceCloner` bound to the active backend + the shared clones store.
 ClonerFactory = Callable[[], VoiceCloner]
+
+# Lazily builds the cascade LLM adapter used to draft a persona from a description (Feature K).
+# Returns the active backend's `.llm` (a `persona.author._ChatLLM`); None disables /personas/draft.
+DraftLLMFactory = Callable[[], Any]
 
 # Reads the live `(active, capacity)` session counts the agent worker publishes (the gauge backing
 # `/healthz`), or None when unknown (exporter off / no worker reporting). Injectable so the optional
@@ -235,6 +242,7 @@ class TokenService:
         protected_voices: Collection[str] = (),
         user_personas: UserPersonaStore | None = None,
         max_user_personas: int = _DEFAULT_MAX_USER_PERSONAS,
+        draft_llm_factory: DraftLLMFactory | None = None,
         llm_name: str = "",
         supports_lora: bool = False,
         lora_modules: str | None = None,
@@ -265,6 +273,10 @@ class TokenService:
         # user id; curated personas always win on id clash and are never stored/deletable here.
         self._user_personas = user_personas
         self._max_user_personas = max_user_personas
+        # Optional persona authoring helper (Feature K): builds the cascade LLM on demand to draft a
+        # persona from a description. None disables /personas/draft (e.g. in unit tests, or when no
+        # custom-persona store is wired). Drafting is one-shot and runs in the request thread.
+        self._draft_llm_factory = draft_llm_factory
         # Active LLM adapter name + whether it can hot-swap LoRA, plus the served `--lora-modules`
         # spec — drives the /loras picker and validates a custom persona's `llm.lora`.
         self._llm_name = llm_name
@@ -714,6 +726,52 @@ class TokenService:
             raise BadRequest(f"unknown persona {persona_id!r}")
         return {"deleted": persona_id}
 
+    def draft_persona(self, user: str | None, description: str | None) -> dict[str, Any]:
+        """Draft a custom persona for `user` from a plain-English description — *without* persisting.
+
+        Returns the same shape as create/update (`_stored_persona_payload`: a picker summary plus
+        the full persona body) so the client drops it straight into the New/Edit form; the user
+        tweaks and confirms, and the existing `POST /personas` does the write. The legal `voice.ref`
+        ids and served LoRA names are passed to the drafter so a draft can't invent an unservable
+        voice/LoRA, and the id is de-duped against the curated + the user's own personas.
+
+        Requires the optional `draft_llm_factory` (the cascade LLM, built lazily). Drafting is
+        one-shot and not latency-sensitive, so it runs in this request's worker thread.
+        """
+        user = self._require_user(user)
+        store = self._require_user_store()
+        if self._draft_llm_factory is None:
+            raise ServerMisconfigured("persona drafting is not enabled")
+        description = (description or "").strip()
+        if not description:
+            raise BadRequest("a persona description is required")
+        store.reload()
+        existing = set(self._registry.ids()) | set(store.ids_for(user))
+        voices = [f"voices/{vid}" for vid in self._voices.ids()] if self._voices is not None else []
+        loras = [
+            o.id
+            for o in served_loras(
+                supports_lora=self._supports_lora, lora_modules=self._lora_modules
+            )
+        ]
+        curated = self._curated()
+        llm = self._draft_llm_factory()
+        try:
+            persona = asyncio.run(
+                author.draft_persona(
+                    llm,
+                    description,
+                    voices=voices,
+                    loras=loras,
+                    existing_ids=existing,
+                    default_voice=curated.voice.ref if curated else None,
+                    default_base_model=curated.llm.base_model if curated else None,
+                )
+            )
+        except PersonaDraftError as exc:
+            raise BadRequest(f"could not draft a persona: {exc}") from exc
+        return self._stored_persona_payload(persona)
+
     # -- consent (per-user recording opt-in) -------------------------------------------
 
     def _require_memory(self) -> MemoryStore:
@@ -860,6 +918,17 @@ def build_service(settings: Settings | None = None) -> TokenService:
             backend = build_backend(load_backend_config(settings))
             return VoiceCloner(backend, store)
 
+    # Persona authoring helper (Feature K): draft a persona from a description via the cascade LLM.
+    # Only wired when custom personas are enabled (the route is user-scoped and writes via the same
+    # store). Lazily builds the backend so a draft request, not startup, pays for it.
+    draft_llm_factory: DraftLLMFactory | None = None
+    if user_personas is not None:
+        from ..adapters.factory import build_backend
+        from .config import load_backend_config
+
+        def draft_llm_factory() -> Any:  # type: ignore[misc]
+            return build_backend(load_backend_config(settings)).llm
+
     max_clones = int(os.getenv("PERSONAVOICE_MAX_CLONES", str(_DEFAULT_MAX_CLONES)).strip() or 0)
     max_user_personas = int(
         os.getenv("PERSONAVOICE_MAX_USER_PERSONAS", str(_DEFAULT_MAX_USER_PERSONAS)).strip() or 0
@@ -882,6 +951,7 @@ def build_service(settings: Settings | None = None) -> TokenService:
         protected_voices=seed_voice_names() - voices.preset_sample_stems(),
         user_personas=user_personas,
         max_user_personas=max_user_personas,
+        draft_llm_factory=draft_llm_factory,
         llm_name=llm_name,
         supports_lora=supports_lora,
         lora_modules=lora_modules,
@@ -1011,6 +1081,11 @@ def _make_handler(
                 elif path == "/personas" and method == "POST":
                     body = self._read_json_body()
                     self._send_json(201, service.create_persona(query.get("user"), body))
+                elif path == "/personas/draft" and method == "POST":
+                    body = self._read_json_body()
+                    self._send_json(
+                        200, service.draft_persona(query.get("user"), body.get("description"))
+                    )
                 elif path.startswith("/personas/") and method == "GET":
                     pid = path[len("/personas/") :]
                     self._send_json(200, service.get_persona(query.get("user"), pid))
