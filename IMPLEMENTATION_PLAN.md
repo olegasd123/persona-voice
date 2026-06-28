@@ -820,10 +820,58 @@ session-options UI.
 > **Folded into N3** (§1.5) — multi-user **JSON persona store** with `POST/PUT/DELETE /personas`
 > and client authoring UI. The note below is now an *optional add-on* to N3, not separate work.
 
-Personas are hand-written YAML validated by `--check`. An optional generator could turn a
-plain-English description into a valid persona draft (prompt + voice + behavior knobs), validated
-against the `Persona` model + voice registry before it's written to the user store. Small DX win
-on top of N3's authoring routes.
+Personas are hand-written YAML validated by `--check`. An optional **generator** turns a
+plain-English description into a valid persona *draft* (system prompt + voice + behavior knobs +
+session defaults), validated against the `Persona` model + voice registry before it's written to
+the user store. Small DX win on top of N3's authoring routes — it lowers the blank-page cost; it
+adds no new capability, which is why it stays parked behind N3's device/LiveKit verification.
+
+**Substrate already exists** (why this is S/Low — it's a prompt + validate/repair wrapper):
+
+- `Persona` model with `extra="forbid"` (`src/personavoice/models.py`) — rejects hallucinated
+  fields for free.
+- Validation path — `Persona.model_validate(raw)` (`persona/loader.py`).
+- Voice registry + catalog with `available`/`reason` (`persona/registry.py`) — the legal
+  `voice.ref` values.
+- Served-LoRA picker — `served_loras(...)` (`persona/lora.py`) — the legal `llm.lora` values.
+- User store — `UserPersonaStore.record(user_id, persona)` (`persona/store.py`).
+- A configured cascade LLM backend to do the generation.
+
+**Core drafter — new `persona/author.py`:**
+
+```
+draft_persona(description, *, voices, loras, existing_ids) -> Persona
+```
+
+- Prompt the LLM with the `Persona` schema and the **enumerated** legal `voice.ref` ids and
+  `lora` names, plus numeric ranges (`temperature`, `follow_up_probability ∈ [0,1]`, …).
+  Constraining the choice set up front is what keeps drafts valid instead of inventing voices.
+- Ask for structured JSON, then `Persona.model_validate` it. `extra="forbid"` catches stray
+  fields; separately re-resolve `voice.ref` against the registry and `lora` against
+  `served_loras` (drop/repair anything not servable on this backend).
+- **One repair retry**: on `ValidationError`, feed the error text back to the model; if it still
+  fails, return the error rather than a bad persona.
+- Derive `id` from `name` (slugify); ensure no clash with curated personas or the user's
+  `existing_ids`. Leave `demeanor`/`rude` unset by default — authoring shouldn't opt into the
+  rude path.
+
+**Surface — draft-into-form, not auto-persist (recommended):**
+
+- **Server:** `POST /personas/draft` (auth'd, user-scoped) returns a Persona draft **without
+  persisting**. The client drops it into the existing N3 New/Edit form pre-filled; the user tweaks
+  and confirms; the existing `POST /personas` does the write. Human stays in the loop, reuses all
+  of N3.
+- **CLI:** a `personavoice-persona draft "a patient French tutor who only speaks in B1"` verb that
+  prints validated YAML to stdout / a file — mirrors the `--check` validation path.
+
+**Model choice:** default to the already-configured cascade LLM so it stays fully offline (LM
+Studio). Drafting is one-shot and not latency-sensitive, so make the backend pluggable and
+optionally allow a Claude API path (e.g. `claude-opus-4-8` / `claude-sonnet-4-6`) for noticeably
+better prompt-writing — offline-by-default.
+
+**Tests (offline, per §13):** fake LLM adapter returning canned JSON → assert a valid `Persona`;
+bad-field case → repair loop fixes or fails cleanly; invalid `voice.ref`/`lora` → clamped to a
+legal value; id-clash case → no curated/own shadowing. Plus `ruff` + `mypy`.
 
 ---
 
