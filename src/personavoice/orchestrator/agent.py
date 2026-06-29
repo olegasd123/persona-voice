@@ -199,7 +199,13 @@ class PersonaAgent:
         # Publishes the assistant's spoken words back as a live transcript (the client renders
         # LiveKit `TranscriptionEvent`s). `None` (no transport, e.g. unit tests) skips it.
         self._publish_transcript = publish_transcript
-        # Strong refs to in-flight best-effort "final transcript" publishes (see `_speak`).
+        # Publishes the *user's* transcribed turns, attributed to their own participant/track so
+        # the client tags them as the user (not the assistant). Installed once the user's audio
+        # track is subscribed (its sid is unknown at construction); see
+        # `set_user_transcript_publisher`. `None` until then / in tests skips it.
+        self._publish_user_transcript: TranscriptPublisher | None = None
+        # Strong refs to in-flight best-effort "final transcript" publishes (see `_speak` and
+        # `_publish_user_line`).
         self._pending: set[asyncio.Task[None]] = set()
 
     @property
@@ -252,6 +258,14 @@ class PersonaAgent:
         logger.info(
             "session options updated mid-session: %s", new_effective.model_dump(exclude_none=True)
         )
+
+    def set_user_transcript_publisher(self, publisher: TranscriptPublisher) -> None:
+        """Install the publisher for the user's transcribed turns (see `_publish_user_line`).
+
+        Done from the entrypoint once the user's audio track is subscribed — its track sid,
+        needed to attribute the transcription to the user, isn't known when the agent is built.
+        """
+        self._publish_user_transcript = publisher
 
     async def _capture_wav(self, wav: bytes) -> None:
         """Sink: push one sentence's WAV onto the WebRTC track as 20 ms PCM frames."""
@@ -321,7 +335,26 @@ class PersonaAgent:
     def _speak_user_turn(self, text: str, stt_s: float | None) -> None:
         """Log and stream the persona's reply to a (possibly merged) user turn."""
         logger.info("user: %s", text)
+        self._publish_user_line(text)
         self._turn.begin(self._speak(text, stt_s))
+
+    def _publish_user_line(self, text: str) -> None:
+        """Publish the user's transcribed turn as one final transcript segment (fire-and-forget).
+
+        Emitted just before the assistant reply starts streaming, so the user's bubble lands
+        ahead of the answer. STT here is one-shot per VAD utterance, so the segment is published
+        `final` straight away — there's no interim→final growth like the assistant side. With
+        semantic endpointing this runs on the *merged* turn, so a held-then-continued utterance
+        shows as one line. Best-effort: scheduled as a task (this runs from sync turn code) whose
+        ref is held in `_pending`; a publish failure must never break the turn. No-op until the
+        user publisher is installed (`set_user_transcript_publisher`) or in tests without one.
+        """
+        publish = self._publish_user_transcript
+        if publish is None:
+            return
+        task = asyncio.create_task(publish(uuid.uuid4().hex, text, True))
+        self._pending.add(task)
+        task.add_done_callback(self._pending.discard)
 
     def _schedule_flush(self) -> None:
         """Arm the grace timer that answers a held utterance if no continuation arrives."""
@@ -467,13 +500,23 @@ async def _consume_track(
         await vad_stream.aclose()
 
 
-def make_transcript_publisher(local_participant: Any, track_sid: str | None) -> TranscriptPublisher:
-    """Build the `TranscriptPublisher` that pushes assistant transcripts over WebRTC.
+def make_transcript_publisher(
+    local_participant: Any,
+    track_sid: str | None,
+    participant_identity: str | None = None,
+) -> TranscriptPublisher:
+    """Build a `TranscriptPublisher` that pushes transcripts over WebRTC.
 
     Lives here (not in `PersonaAgent`) so the LiveKit-specific `rtc.Transcription` construction
     stays out of the testable turn logic. Each call publishes one segment (growing `text`,
     flipped to `final` at the end); failures are swallowed so a transcript hiccup never breaks
     the turn. If the track sid is unknown, returns a no-op.
+
+    `participant_identity` is whom the segment is attributed to; it defaults to the publishing
+    (local) participant — the assistant. For the *user's* transcript we publish on the user's
+    behalf, so pass their identity + their audio track sid: the agent may publish a
+    transcription for any participant's track, and the client tags it by that identity (so the
+    user's words render as the user, not the assistant).
     """
 
     async def _noop(_seg_id: str, _text: str, _is_final: bool) -> None:
@@ -481,6 +524,7 @@ def make_transcript_publisher(local_participant: Any, track_sid: str | None) -> 
 
     if local_participant is None or not track_sid:
         return _noop
+    identity = participant_identity or local_participant.identity
 
     async def _publish(seg_id: str, text: str, is_final: bool) -> None:
         _, rtc, _ = _require_livekit()
@@ -495,13 +539,13 @@ def make_transcript_publisher(local_participant: Any, track_sid: str | None) -> 
             )
             await local_participant.publish_transcription(
                 rtc.Transcription(
-                    participant_identity=local_participant.identity,
+                    participant_identity=identity,
                     track_sid=track_sid,
                     segments=[segment],
                 )
             )
         except Exception:  # transcript publishing must never break the turn
-            logger.debug("failed to publish assistant transcript", exc_info=True)
+            logger.debug("failed to publish transcript for %s", identity, exc_info=True)
 
     return _publish
 
@@ -902,8 +946,20 @@ async def entrypoint(ctx: Any, *, persona_id: str | None = None) -> None:
     consumers: set[asyncio.Task[None]] = set()  # keep strong refs so tasks aren't GC'd
 
     @ctx.room.on("track_subscribed")
-    def _on_track(track: Any, *_: Any) -> None:
+    def _on_track(track: Any, publication: Any = None, participant: Any = None, *_: Any) -> None:
         if track.kind == rtc.TrackKind.KIND_AUDIO:
+            # Attribute the user's transcript to their own participant + audio track so the client
+            # tags it as the user; the agent publishes the transcription on their behalf. The sid
+            # is only knowable now (track subscribed), which is why this is wired here, not at
+            # PersonaAgent construction. Falls back gracefully if the SDK omits publication/sender.
+            user_sid = getattr(publication, "sid", None) or getattr(track, "sid", None)
+            user_identity = getattr(participant, "identity", None)
+            if user_identity:
+                agent.set_user_transcript_publisher(
+                    make_transcript_publisher(
+                        ctx.room.local_participant, user_sid, participant_identity=user_identity
+                    )
+                )
             task = asyncio.create_task(_consume_track(agent, track, silero, vad))
             consumers.add(task)
             task.add_done_callback(consumers.discard)

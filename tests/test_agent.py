@@ -291,6 +291,78 @@ def test_make_transcript_publisher_builds_and_publishes(monkeypatch: pytest.Monk
     assert (seg.id, seg.text, seg.final, seg.language) == ("seg-1", "Hello there.", True, "en")
 
 
+def test_make_transcript_publisher_attributes_explicit_identity(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # The user's transcript is published by the agent (local participant) but attributed to the
+    # user's identity + their audio track, so the client renders it as the user, not the agent.
+    sent: list[object] = []
+
+    class FakeLP:
+        identity = "assistant-1"
+
+        async def publish_transcription(self, transcription: object) -> None:
+            sent.append(transcription)
+
+    fake_rtc = SimpleNamespace(
+        TranscriptionSegment=lambda **kw: SimpleNamespace(**kw),
+        Transcription=lambda **kw: SimpleNamespace(**kw),
+    )
+    monkeypatch.setattr(agent, "_require_livekit", lambda: (None, fake_rtc, None))
+
+    pub = agent.make_transcript_publisher(FakeLP(), "TR_user_track", participant_identity="user-7")
+    asyncio.run(pub("seg-1", "hello there", True))
+
+    assert len(sent) == 1
+    assert sent[0].participant_identity == "user-7"  # the user, not "assistant-1"
+    assert sent[0].track_sid == "TR_user_track"
+
+
+async def test_user_turn_publishes_final_user_line(config_dir: Path) -> None:
+    pytest.importorskip("numpy")
+    pytest.importorskip("soundfile")
+
+    backend = make_backend(stt_text="hello there", llm_reply="Hi back.")
+    user_lines: list[tuple[str, str, bool]] = []
+
+    async def publish_user(seg_id: str, text: str, is_final: bool) -> None:
+        user_lines.append((seg_id, text, is_final))
+
+    ag = agent.PersonaAgent(backend, _companion(config_dir), FakeSource())
+    ag.set_user_transcript_publisher(publish_user)
+
+    async def sink(_wav: bytes) -> None:
+        pass
+
+    ag._turn = TurnController(sink)
+    await ag.on_user_utterance(b"\x00\x00" * 1600, 16000)
+    await ag._turn.join()
+    # The user line is published fire-and-forget from the (sync) turn path; let it drain.
+    await asyncio.gather(*list(ag._pending))
+
+    # One final segment carrying the STT'd turn (STT is one-shot per utterance — no interim
+    # growth like the assistant side has).
+    assert [(text, is_final) for _id, text, is_final in user_lines] == [("hello there", True)]
+
+
+async def test_no_user_publisher_means_no_user_line(config_dir: Path) -> None:
+    pytest.importorskip("numpy")
+    pytest.importorskip("soundfile")
+
+    # Without a user publisher installed, a turn still proceeds and nothing is scheduled for it.
+    backend = make_backend(stt_text="hello there", llm_reply="Hi.")
+    ag = agent.PersonaAgent(backend, _companion(config_dir), FakeSource())  # no user publisher
+
+    async def sink(_wav: bytes) -> None:
+        pass
+
+    ag._turn = TurnController(sink)
+    await ag.on_user_utterance(b"\x00\x00" * 1600, 16000)
+    await ag._turn.join()
+
+    assert ag._pending == set()  # no assistant publisher either → nothing scheduled
+
+
 # --- persona selection (switch via API) -----------------------------------------------
 
 
