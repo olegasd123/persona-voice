@@ -7,12 +7,15 @@ PODS:
     - Flutter
     - flutter_webrtc
     - WebRTC-SDK (= 144.7559.01)
+  - record_darwin (1.0.0):
+    - Flutter
   - WebRTC-SDK (144.7559.01)
 
 DEPENDENCIES:
   - Flutter (from `Flutter`)
   - flutter_webrtc (from `.symlinks/plugins/flutter_webrtc/ios`)
   - livekit_client (from `.symlinks/plugins/livekit_client/ios`)
+  - record_darwin (from `.symlinks/plugins/record_darwin/ios`)
 
 SPEC REPOS:
   trunk:
@@ -25,11 +28,14 @@ EXTERNAL SOURCES:
     :path: ".symlinks/plugins/flutter_webrtc/ios"
   livekit_client:
     :path: ".symlinks/plugins/livekit_client/ios"
+  record_darwin:
+    :path: ".symlinks/plugins/record_darwin/ios"
 
 SPEC CHECKSUMS:
   Flutter: cabc95a1d2626b1b06e7179b784ebcf0c0cde467
   flutter_webrtc: ec91d94b484ad49cf191ef93413f64a40ffd3b4c
   livekit_client: 549b62f57d4bae9385f541922b621e7ce84aae4b
+  record_darwin: fb1f375f1d9603714f55b8708a903bbb91ffdb0a
   WebRTC-SDK: ab9b5319e458c2bfebdc92b3600740da35d5630d
 
 PODFILE CHECKSUM: 6a35a94ec9f74b2481bfc9d8b6de790643461942

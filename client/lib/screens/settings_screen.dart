@@ -4,8 +4,11 @@ import '../models/app_preferences.dart';
 import '../models/connection_settings.dart';
 import '../services/token_client.dart';
 import '../services/voice_session.dart' show MicMode;
+import 'memory_screen.dart';
+import 'voice_library_screen.dart';
 
-/// Connection details (server URL, API token, your name) + app defaults (mic mode, theme).
+/// Connection details (server URL, API token, account id, display name) + app defaults
+/// (mic mode, theme).
 /// This is where the config that used to clutter the home screen now lives — you only come
 /// here on first run or when something needs changing.
 class SettingsScreen extends StatefulWidget {
@@ -26,10 +29,19 @@ class _SettingsScreenState extends State<SettingsScreen> {
   final _settings = ConnectionSettings();
   final _urlCtrl = TextEditingController();
   final _tokenCtrl = TextEditingController();
-  final _identityCtrl = TextEditingController();
+  final _displayNameCtrl = TextEditingController();
+  final _userIdCtrl = TextEditingController();
 
   bool _testing = false;
   ({bool ok, String message})? _testResult;
+
+  // Server-side recording consent for the active account. Loaded lazily; [_consentUser] is the
+  // account id the current [_consent] belongs to, so a stale in-flight load can't clobber a
+  // newer one after the account id changes.
+  ConsentState? _consent;
+  String _consentUser = '';
+  bool _consentLoading = false;
+  String? _consentError;
 
   @override
   void initState() {
@@ -44,11 +56,15 @@ class _SettingsScreenState extends State<SettingsScreen> {
       _settings
         ..tokenServerUrl = s.tokenServerUrl
         ..apiToken = s.apiToken
-        ..identity = s.identity;
+        ..displayName = s.displayName
+        ..userId = s.userId
+        ..participantId = s.participantId;
       _urlCtrl.text = s.tokenServerUrl;
       _tokenCtrl.text = s.apiToken;
-      _identityCtrl.text = s.identity;
+      _displayNameCtrl.text = s.displayName;
+      _userIdCtrl.text = s.userId;
     });
+    _loadConsent();
   }
 
   // Persist connection fields as they change; the home screen re-fetches on return so any
@@ -57,14 +73,92 @@ class _SettingsScreenState extends State<SettingsScreen> {
     _settings
       ..tokenServerUrl = _urlCtrl.text
       ..apiToken = _tokenCtrl.text
-      ..identity = _identityCtrl.text;
+      ..displayName = _displayNameCtrl.text
+      ..userId = _userIdCtrl.text;
     _settings.save();
     // A changed server invalidates the last test result.
     if (_testResult != null) setState(() => _testResult = null);
   }
 
+  /// Reload consent when the active account changed (a different id is a different opt-in).
+  void _maybeReloadConsent() {
+    if (_settings.effectiveUser != _consentUser) _loadConsent();
+  }
+
+  /// Fetch the active account's consent state. [_consentUser] guards against a stale response
+  /// overwriting a newer one after the account id changes.
+  Future<void> _loadConsent() async {
+    final user = _settings.effectiveUser;
+    setState(() {
+      _consentUser = user;
+      _consentLoading = true;
+      _consentError = null;
+    });
+    final client = TokenClient(_settings);
+    try {
+      final state = await client.fetchConsent();
+      if (mounted && _consentUser == user) setState(() => _consent = state);
+    } catch (e) {
+      if (mounted && _consentUser == user) {
+        setState(() {
+          _consent = null;
+          _consentError = '$e';
+        });
+      }
+    } finally {
+      client.close();
+      if (mounted && _consentUser == user) setState(() => _consentLoading = false);
+    }
+  }
+
+  /// Write a new consent state, optimistically reflecting it and rolling back on failure.
+  Future<void> _setConsent({required bool granted, bool? allowTraining}) async {
+    final prev = _consent;
+    final training = granted && (allowTraining ?? prev?.allowTraining ?? false);
+    final user = _settings.effectiveUser;
+    setState(() {
+      _consent = ConsentState(granted: granted, allowTraining: training);
+      _consentError = null;
+    });
+    final client = TokenClient(_settings);
+    try {
+      final state = await client.setConsent(granted: granted, allowTraining: training);
+      if (mounted && _consentUser == user) setState(() => _consent = state);
+    } catch (e) {
+      if (mounted && _consentUser == user) {
+        setState(() {
+          _consent = prev;
+          _consentError = '$e';
+        });
+      }
+    } finally {
+      client.close();
+    }
+  }
+
+  String get _consentSubtitle {
+    if (_consent != null) {
+      return _consent!.granted
+          ? 'Saved on the server for this account so the assistant can recall them.'
+          : 'Off — nothing is kept between calls.';
+    }
+    return _consentError == null
+        ? 'Checking…'
+        : 'Couldn’t reach the server — check the connection above.';
+  }
+
+  /// What the account-id field resolves to once normalized — shown live so a typo (which
+  /// silently switches buckets) is visible rather than mistaken for lost data.
+  String get _accountHelper {
+    final id = ConnectionSettings.normalizeUserId(_userIdCtrl.text);
+    return id.isEmpty
+        ? 'Anonymous — using the shared “default” space.'
+        : 'Active account: $id  ·  reuse this id on any device.';
+  }
+
   Future<void> _testConnection() async {
     _persistConnection();
+    _loadConsent(); // the server/token may have changed; refresh the consent toggle too
     setState(() {
       _testing = true;
       _testResult = null;
@@ -91,7 +185,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
   void dispose() {
     _urlCtrl.dispose();
     _tokenCtrl.dispose();
-    _identityCtrl.dispose();
+    _displayNameCtrl.dispose();
+    _userIdCtrl.dispose();
     super.dispose();
   }
 
@@ -146,14 +241,97 @@ class _SettingsScreenState extends State<SettingsScreen> {
           const SizedBox(height: 24),
           _SectionLabel('You'),
           TextField(
-            controller: _identityCtrl,
+            controller: _userIdCtrl,
+            decoration: InputDecoration(
+              labelText: 'Account ID (optional)',
+              hintText: 'e.g. “personal” or “work”',
+              helperText: _accountHelper,
+              helperMaxLines: 2,
+              border: const OutlineInputBorder(),
+              prefixIcon: const Icon(Icons.badge_outlined),
+            ),
+            autocorrect: false,
+            enableSuggestions: false,
+            // Rebuild so the resolved-account helper tracks the field as you type.
+            onChanged: (_) {
+              _persistConnection();
+              _maybeReloadConsent(); // a different account is a different opt-in
+              setState(() {});
+            },
+          ),
+          const SizedBox(height: 12),
+          TextField(
+            controller: _displayNameCtrl,
             decoration: const InputDecoration(
               labelText: 'Display name (optional)',
               hintText: 'How the assistant addresses you',
+              helperText: 'Cosmetic — changing it won’t switch your account.',
               border: OutlineInputBorder(),
               prefixIcon: Icon(Icons.person_outline),
             ),
             onChanged: (_) => _persistConnection(),
+          ),
+          const SizedBox(height: 24),
+          _SectionLabel('Privacy'),
+          Card(
+            margin: EdgeInsets.zero,
+            child: Column(
+              children: [
+                SwitchListTile(
+                  secondary: const Icon(Icons.history_edu_outlined),
+                  title: const Text('Remember our conversations'),
+                  subtitle: Text(_consentSubtitle),
+                  // Disabled until the current state is known (can't toggle what we couldn't read).
+                  value: _consent?.granted ?? false,
+                  onChanged: (_consent == null || _consentLoading)
+                      ? null
+                      : (v) => _setConsent(granted: v),
+                ),
+                if (_consent?.granted ?? false)
+                  SwitchListTile(
+                    secondary: const Icon(Icons.school_outlined),
+                    title: const Text('Help improve voices & personas'),
+                    subtitle: const Text(
+                      'Allow my transcripts to be used to train voices and personas.',
+                    ),
+                    value: _consent?.allowTraining ?? false,
+                    onChanged: _consentLoading
+                        ? null
+                        : (v) => _setConsent(granted: true, allowTraining: v),
+                  ),
+              ],
+            ),
+          ),
+          if (_consentError != null) ...[
+            const SizedBox(height: 8),
+            _TestResultBanner(ok: false, message: _consentError!),
+          ],
+          const SizedBox(height: 12),
+          Card(
+            margin: EdgeInsets.zero,
+            child: ListTile(
+              leading: const Icon(Icons.psychology_outlined),
+              title: const Text('What I remember'),
+              subtitle: const Text('See and erase what the assistant has stored about you'),
+              trailing: const Icon(Icons.chevron_right),
+              onTap: () => Navigator.of(context).push(MaterialPageRoute(
+                builder: (_) => MemoryScreen(settings: _settings),
+              )),
+            ),
+          ),
+          const SizedBox(height: 24),
+          _SectionLabel('Voices'),
+          Card(
+            margin: EdgeInsets.zero,
+            child: ListTile(
+              leading: const Icon(Icons.record_voice_over_outlined),
+              title: const Text('Voice library'),
+              subtitle: const Text('Browse voices and add your own clones'),
+              trailing: const Icon(Icons.chevron_right),
+              onTap: () => Navigator.of(context).push(MaterialPageRoute(
+                builder: (_) => VoiceLibraryScreen(settings: _settings),
+              )),
+            ),
           ),
           const SizedBox(height: 24),
           _SectionLabel('Call defaults'),

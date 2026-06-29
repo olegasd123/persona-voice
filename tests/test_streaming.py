@@ -4,9 +4,11 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from personavoice.models import Role
+from personavoice.models import Role, SessionOptions, VoiceDef
 from personavoice.orchestrator import StreamingPipeline, StreamMetrics
 from personavoice.persona import load_persona
+from personavoice.safety import KeywordModerator
+from personavoice.voice import VoiceRegistry
 
 from .fakes import make_backend
 
@@ -105,3 +107,90 @@ async def test_builds_persona_system_prompt(config_dir: Path) -> None:
     messages = backend.llm.last_messages  # type: ignore[attr-defined]
     assert messages[0].role == Role.system
     assert persona.system_prompt.strip()[:20] in messages[0].content
+
+
+# --- session options (voice override) + moderation ------------------------------------
+
+
+async def test_options_thread_into_system_prompt(config_dir: Path) -> None:
+    from personavoice.models import Demeanor
+
+    backend = make_backend(llm_reply="hi")
+    pipe = StreamingPipeline(
+        backend, _companion(config_dir), options=SessionOptions(demeanor=Demeanor.rude)
+    )
+    async for _ in pipe.stream_response("hello"):
+        pass
+    assert "brusque" in backend.llm.last_messages[0].content  # type: ignore[attr-defined]
+
+
+async def test_voice_choice_override(config_dir: Path) -> None:
+    backend = make_backend(llm_reply="Hi.")
+    voices = VoiceRegistry({"alt": VoiceDef(presets={"fake_tts": "alt_preset"})})
+    pipe = StreamingPipeline(
+        backend, _companion(config_dir), voices, options=SessionOptions(voice="alt")
+    )
+    async for _ in pipe.stream_response("hi"):
+        pass
+    assert backend.tts.last_voice.id == "alt_preset"  # type: ignore[attr-defined]
+
+
+# --- dynamic emotion ------------------------------------------------------
+
+
+async def test_dynamic_emotion_strips_tag_and_applies_to_voice(config_dir: Path) -> None:
+    backend = make_backend(llm_reply="[excited] Hello there.")
+    pipe = StreamingPipeline(backend, _companion(config_dir), dynamic_emotion=True)
+    metrics = StreamMetrics()
+
+    async for _ in pipe.stream_response("hi", metrics=metrics):
+        pass
+
+    # The tag is parsed off: TTS, the assembled reply, and history never see it...
+    assert backend.tts.chunks == ["Hello there."]  # type: ignore[attr-defined]
+    assert metrics.reply == "Hello there."
+    assert pipe.history[-1].content == "Hello there."
+    # ...and it drives the voice for this turn.
+    assert backend.tts.last_voice.emotion == "excited"  # type: ignore[attr-defined]
+
+
+async def test_dynamic_emotion_off_leaves_tag_and_voice_untouched(config_dir: Path) -> None:
+    # With dynamic emotion off (default), a stray tag is just spoken text and the voice is unchanged.
+    backend = make_backend(llm_reply="[excited] Hello there.")
+    pipe = StreamingPipeline(backend, _companion(config_dir))
+
+    async for _ in pipe.stream_response("hi"):
+        pass
+
+    assert "".join(backend.tts.chunks) == "[excited] Hello there."  # type: ignore[attr-defined]
+    assert backend.tts.last_voice.emotion != "excited"  # type: ignore[attr-defined]
+
+
+async def test_dynamic_emotion_directive_only_when_enabled(config_dir: Path) -> None:
+    needle = "emotion tag in square brackets"
+
+    on = make_backend(llm_reply="hi")
+    async for _ in StreamingPipeline(
+        on, _companion(config_dir), dynamic_emotion=True
+    ).stream_response("hello"):
+        pass
+    assert needle in on.llm.last_messages[0].content  # type: ignore[attr-defined]
+
+    off = make_backend(llm_reply="hi")
+    async for _ in StreamingPipeline(off, _companion(config_dir)).stream_response("hello"):
+        pass
+    assert needle not in off.llm.last_messages[0].content  # type: ignore[attr-defined]
+
+
+async def test_moderation_input_short_circuits(config_dir: Path) -> None:
+    backend = make_backend(llm_reply="THIS SHOULD NOT BE SPOKEN")
+    pipe = StreamingPipeline(backend, _companion(config_dir), moderator=KeywordModerator())
+
+    chunks = [c async for c in pipe.stream_response("I want to die")]
+
+    spoken = b"".join(chunks).decode()  # the fake wav carries the spoken text
+    assert "988" in spoken  # the calm crisis reply was voiced
+    assert backend.llm.last_messages is None  # type: ignore[attr-defined]  # LLM bypassed
+    # The canned reply is committed to history like a normal turn.
+    assert [m.role for m in pipe.history] == [Role.user, Role.assistant]
+    assert "988" in pipe.history[-1].content

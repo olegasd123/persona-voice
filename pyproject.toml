@@ -40,7 +40,7 @@ cuda = [
     "soundfile>=0.12",
     "numpy>=1.26",
     "httpx>=0.27",          # OpenAI-compatible HTTP for the vLLM server
-    # vLLM (LLM), CUDA TTS (chatterbox-tts / orpheus-speech), and Parakeet STT
+    # vLLM (LLM), CUDA TTS (chatterbox-tts), and Parakeet STT
     # (nemo_toolkit[asr]) are installed in the server image, not here: they need a CUDA
     # toolchain / are heavy. faster-whisper (above) is the default CUDA STT. See Dockerfile.
 ]
@@ -54,11 +54,6 @@ livekit = [
 clone = [
     "chatterbox-tts>=0.1",
 ]
-# F5-TTS-mlx is the Apple-Silicon cloning backend. Its default checkpoint's *weights* are
-# CC-BY-NC (non-commercial) — fine for Mac dev, but ship with Chatterbox. See the README.
-clone-mac = [
-    "f5-tts-mlx>=0.2",
-]
 # --- Persona LoRA fine-tuning -------------------------------------------
 # Mac LoRA training via mlx-lm (also in the `mac` extra). The CUDA QLoRA trainer
 # (LLaMA-Factory / Unsloth) is heavy + needs a CUDA toolchain, so it's installed in the
@@ -68,8 +63,8 @@ train = [
 ]
 # --- Voice fine-tuning A/B eval -----------------------------------------
 # Speaker-similarity scoring for the fine-tuned-vs-clone A/B. The voice trainers themselves
-# (F5-TTS / Chatterbox, CUDA) are heavy + need a CUDA toolchain, so they live in the training
-# image, not here — see training/voice/README.md.
+# are heavy + need a CUDA toolchain, so they live in the training image, not here — see
+# training/voice/README.md.
 voice-eval = [
     "resemblyzer>=0.1",     # speaker embeddings for the voice-quality A/B (PERSONAVOICE eval)
 ]
@@ -82,6 +77,12 @@ memory = [
 ]
 memory-embeddings = [
     "sentence-transformers>=2.7",  # optional semantic retrieval (EmbeddingRetriever)
+]
+# --- Prometheus metrics -------------------------------------------------------
+# Optional: turns the per-turn latency/outcome record into scrapeable counters/histograms and
+# backs the token server's /metrics route. No-op (empty /metrics) when this isn't installed.
+metrics = [
+    "prometheus-client>=0.20",
 ]
 # --- Tooling --------------------------------------------------------------------------
 dev = [
@@ -99,6 +100,8 @@ dev = [
     # but part of the dev/test environment so `pytest` passes without a mac/cuda extra.
     "numpy>=1.26",
     "soundfile>=0.12",
+    # So the metrics tests exercise the real exporter (the no-op path is covered by monkeypatch).
+    "prometheus-client>=0.20",
 ]
 
 [project.scripts]
@@ -107,7 +110,9 @@ personavoice-demo = "personavoice.orchestrator.demo:main"
 personavoice-stream-demo = "personavoice.orchestrator.stream_demo:main"
 personavoice-agent = "personavoice.orchestrator.agent:run"
 personavoice-token-server = "personavoice.server.token_server:main"
+personavoice-persona = "personavoice.persona.cli:main"
 personavoice-clone = "personavoice.voice.cli:main"
+personavoice-seed-voices = "personavoice.voice.seed:main"
 personavoice-train = "personavoice.training.cli:main"
 personavoice-voice-train = "personavoice.training.voice.cli:main"
 personavoice-memory = "personavoice.memory.cli:main"
@@ -137,7 +142,10 @@ asyncio_mode = "auto"
 testpaths = ["tests"]
 
 [tool.mypy]
-python_version = "3.11"
+# 3.12 (not 3.11) so mypy can parse numpy's bundled stubs, which use PEP 695
+# `type` statements that are only valid syntax at the 3.12+ target. Runtime
+# still supports 3.11 (see requires-python); the 3.11 CI job exercises that.
+python_version = "3.12"
 plugins = ["pydantic.mypy"]
 ignore_missing_imports = true
 namespace_packages = true

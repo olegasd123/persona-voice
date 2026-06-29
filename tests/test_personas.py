@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 
-from personavoice.models import Role
+from personavoice.models import CEFRLevel, Demeanor, Role, SessionOptions
 from personavoice.persona import (
     PersonaRegistry,
     build_messages,
@@ -39,6 +39,65 @@ def test_build_messages_shape(config_dir: Path) -> None:
     assert messages[0].role == Role.system
     assert messages[-1].role == Role.user
     assert messages[-1].content == "hi there"
+
+
+def test_demeanor_natural_is_a_noop(config_dir: Path) -> None:
+    persona = load_persona(config_dir / "personas" / "companion.yaml")
+    base = render_system_prompt(persona)
+    natural = render_system_prompt(persona, SessionOptions(demeanor=Demeanor.natural))
+    assert natural == base  # the authored persona, unchanged
+
+
+def test_demeanor_rude_directive_is_bounded(config_dir: Path) -> None:
+    persona = load_persona(config_dir / "personas" / "companion.yaml")
+    prompt = render_system_prompt(persona, SessionOptions(demeanor=Demeanor.rude))
+    assert "brusque" in prompt
+    assert "not abusive" in prompt  # the bound the moderation layer then enforces
+
+
+def test_demeanor_kind_directive_present(config_dir: Path) -> None:
+    persona = load_persona(config_dir / "personas" / "companion.yaml")
+    prompt = render_system_prompt(persona, SessionOptions(demeanor=Demeanor.kind))
+    assert "warm" in prompt and "patient" in prompt
+
+
+def test_cefr_directive_injected_per_level(config_dir: Path) -> None:
+    persona = load_persona(config_dir / "personas" / "language_teacher.yaml")
+    for level in CEFRLevel:
+        prompt = render_system_prompt(persona, SessionOptions(cefr=level))
+        assert level.value in prompt  # "A1".."C2" named in its directive
+
+
+def test_options_absent_leaves_prompt_unchanged(config_dir: Path) -> None:
+    persona = load_persona(config_dir / "personas" / "companion.yaml")
+    assert render_system_prompt(persona, SessionOptions()) == render_system_prompt(persona)
+
+
+def test_spoken_language_nudge_stays_last(config_dir: Path) -> None:
+    persona = load_persona(config_dir / "personas" / "language_teacher.yaml")
+    prompt = render_system_prompt(
+        persona, SessionOptions(demeanor=Demeanor.rude, cefr=CEFRLevel.a1)
+    )
+    # The spoken-output guardrail must remain the final directive, after the overrides.
+    assert prompt.rstrip().endswith("without markdown, lists, or emoji.")
+
+
+def test_build_messages_threads_options(config_dir: Path) -> None:
+    persona = load_persona(config_dir / "personas" / "companion.yaml")
+    messages = build_messages(
+        persona, user_input="hi", options=SessionOptions(demeanor=Demeanor.rude)
+    )
+    assert "brusque" in messages[0].content
+
+
+def test_emotion_directive_only_when_enabled(config_dir: Path) -> None:
+    persona = load_persona(config_dir / "personas" / "companion.yaml")
+    needle = "emotion tag in square brackets"
+    assert needle not in render_system_prompt(persona)  # off by default
+    prompt = render_system_prompt(persona, dynamic_emotion=True)
+    assert needle in prompt
+    # The spoken-output guardrail still comes last, after the emotion directive.
+    assert prompt.rstrip().endswith("without markdown, lists, or emoji.")
 
 
 def test_unknown_persona_raises(config_dir: Path) -> None:

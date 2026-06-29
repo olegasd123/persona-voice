@@ -6,6 +6,16 @@ dependency change. It does not start any server.
 **`run-*` is every-run** — it starts the stack and the live conversation worker in the
 foreground; **press `Ctrl+C` to stop** and every container it started is torn down.
 
+To override environment variables use:
+
+```powershell
+$env:PERSONAVOICE_LOG_LEVEL = "TRACE"
+```
+
+```sh
+export PERSONAVOICE_LOG_LEVEL="TRACE"
+```
+
 Splitting the two keeps `run-*` fast: it no longer rebuilds the token-server image or
 re-checks/installs Python deps on every start.
 

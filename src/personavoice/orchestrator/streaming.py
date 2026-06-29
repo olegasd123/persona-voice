@@ -21,12 +21,15 @@ from collections.abc import AsyncIterator, Awaitable, Callable
 from dataclasses import dataclass
 
 from ..adapters.factory import Backend
+from ..emotion import dynamic_emotion_enabled, split_leading_emotion
 from ..memory import ConversationMemory
-from ..models import Msg, Persona, Role
+from ..models import Msg, Persona, Role, SessionOptions
 from ..persona.prompt import build_messages
+from ..safety import Moderator
 from ..voice.registry import VoiceRegistry
 from .chunker import chunk_kwargs_from_env, stream_sentences
 from .pipeline import voice_ref_for
+from .tools import ToolRegistry, ToolSpec
 
 
 @dataclass
@@ -53,13 +56,34 @@ class StreamingPipeline:
         persona: Persona,
         voices: VoiceRegistry | None = None,
         *,
+        options: SessionOptions | None = None,
+        moderator: Moderator | None = None,
+        tools: ToolRegistry | None = None,
         memory: ConversationMemory | None = None,
         user_id: str | None = None,
         chunk_kwargs: dict[str, int | None] | None = None,
+        dynamic_emotion: bool | None = None,
     ) -> None:
         self.backend = backend
         self.persona = persona
         self.voices = voices
+        # Per-session overrides (voice / cefr / demeanor). None = persona defaults.
+        self.options = options
+        # Tool / function calling. None = no tools; a persona only calls tools it
+        # lists in `persona.tools`, resolved against this registry per turn. Adapters that can't
+        # do function calling ignore the schemas, so this degrades gracefully.
+        self.tools = tools
+        # Per-utterance emotion: when on, the persona prompt gains the emotion-tag
+        # directive and each reply's leading `[emotion]` tag is stripped and applied to the voice.
+        # Defaults to the env toggle (off) so behavior is unchanged unless an operator opts in.
+        self.dynamic_emotion = (
+            dynamic_emotion if dynamic_emotion is not None else dynamic_emotion_enabled()
+        )
+        # Optional input guard. None = no moderation (behavior unchanged). On the streaming
+        # path the guard runs on *input* (a flagged/crisis utterance short-circuits to a safe
+        # spoken reply); the bounded `rude` prompt and the turn-based output guard cover the
+        # output side (full-reply output moderation pre-TTS would defeat streaming).
+        self.moderator = moderator
         self.history: list[Msg] = []
         # TTS chunk-sizing knobs (latency); resolved from the environment by default so
         # the live agent and demos pick up `PERSONAVOICE_TTS_*` without extra wiring.
@@ -94,18 +118,55 @@ class StreamingPipeline:
         use_internal = history is None
         history = self.history if use_internal else history
 
-        memory_context = await self._recall(user_text)
-        messages = build_messages(
-            self.persona, history=history, user_input=user_text, memory_context=memory_context
+        # Input moderation: a flagged/crisis utterance short-circuits to a safe spoken reply,
+        # skipping the LLM (and memory recall) entirely.
+        canned = await self._safe_input_reply(user_text)
+        if canned is None:
+            memory_context = await self._recall(user_text)
+            messages = build_messages(
+                self.persona,
+                history=history,
+                user_input=user_text,
+                memory_context=memory_context,
+                options=self.options,
+                dynamic_emotion=self.dynamic_emotion,
+            )
+        else:
+            messages = []
+        voice = voice_ref_for(
+            self.persona, self.backend, self.voices, voice_choice=self._voice_choice
         )
-        voice = voice_ref_for(self.persona, self.backend, self.voices)
         collected: list[str] = []
         t0 = time.perf_counter()
 
-        async def _tokens() -> AsyncIterator[str]:
-            async for tok in self.backend.llm.stream_chat(messages, self.persona):
+        tool_specs = self._tool_specs()
+
+        async def _raw() -> AsyncIterator[str]:
+            """The reply token stream — a canned safe reply, or the LLM — timing the first token.
+
+            When the persona declares tools, the LLM stream resolves any tool calls first (no
+            audio is produced during the tool round-trips); the follow-up reply then streams as
+            usual. With no tools this is the plain `stream_chat` path.
+            """
+            if canned is not None:
                 if metrics is not None and metrics.first_token is None:
                     metrics.first_token = time.perf_counter() - t0
+                yield canned
+                return
+            if tool_specs:
+                token_stream = self.backend.llm.stream_chat_with_tools(
+                    messages, self.persona, tool_specs
+                )
+            else:
+                token_stream = self.backend.llm.stream_chat(messages, self.persona)
+            async for tok in token_stream:
+                if metrics is not None and metrics.first_token is None:
+                    metrics.first_token = time.perf_counter() - t0
+                yield tok
+
+        async def _collect(it: AsyncIterator[str]) -> AsyncIterator[str]:
+            """Tap the (post-tag) tokens to assemble the spoken reply for history/metrics."""
+            async for tok in it:
                 collected.append(tok)
                 yield tok
 
@@ -117,14 +178,24 @@ class StreamingPipeline:
                         await on_sentence(sentence)
                 yield sentence
 
-        sentences = _tap(
-            stream_sentences(
-                _tokens(),
-                max_chunk_chars=self.chunk_kwargs.get("max_chunk_chars") or 240,
-                first_chunk_chars=self.chunk_kwargs.get("first_chunk_chars"),
-            )
-        )
         try:
+            # Per-utterance emotion: peel a leading `[emotion]` tag off the reply
+            # (buffering only its leading window) and apply it to this turn's voice — before TTS
+            # captures `voice`. Skipped for a canned safe reply (no LLM, no tag) and when off, so
+            # the original passthrough is untouched. Inside `try` so a first-token error still
+            # commits the (empty) turn in `finally`, as before.
+            body = _raw()
+            if self.dynamic_emotion and canned is None:
+                emotion, body = await split_leading_emotion(body)
+                if emotion is not None:
+                    voice = voice.model_copy(update={"emotion": emotion})
+            sentences = _tap(
+                stream_sentences(
+                    _collect(body),
+                    max_chunk_chars=self.chunk_kwargs.get("max_chunk_chars") or 240,
+                    first_chunk_chars=self.chunk_kwargs.get("first_chunk_chars"),
+                )
+            )
             async for audio in self.backend.tts.stream_tts(sentences, voice):
                 if metrics is not None and metrics.first_audio is None:
                     metrics.first_audio = time.perf_counter() - t0
@@ -141,6 +212,25 @@ class StreamingPipeline:
                 self.history.append(Msg(role=Role.user, content=user_text))
                 self.history.append(Msg(role=Role.assistant, content=reply))
             await self._remember(user_text, reply)
+
+    @property
+    def _voice_choice(self) -> str | None:
+        return self.options.voice if self.options else None
+
+    def _tool_specs(self) -> list[ToolSpec]:
+        """The tools the current persona may call this turn (empty unless it opts in)."""
+        if self.tools is None or not self.persona.tools:
+            return []
+        return self.tools.select(self.persona.tools)
+
+    async def _safe_input_reply(self, user_text: str) -> str | None:
+        """A safe canned reply when the input is flagged, else None (run the normal turn)."""
+        if self.moderator is None:
+            return None
+        verdict = await self.moderator.check_input(user_text)
+        if verdict.flagged and verdict.replacement is not None:
+            return verdict.replacement
+        return None
 
     async def _recall(self, user_text: str) -> str | None:
         """Memory block to inject for this turn (None when memory is off / no consent)."""

@@ -6,11 +6,15 @@ CLI. This is the acceptance check: it must pass on both the Mac and the 4080.
 
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass, field
 
 from ..adapters.factory import Backend, build_backend
 from ..memory import MemoryStoreError
 from ..models import CheckResult, Persona
+from ..obs import metrics_enabled
+from ..orchestrator.busy import busy_clip_status
+from ..orchestrator.tools import ToolRegistry, default_tool_registry
 from ..voice.registry import VoiceRegistry
 from .config import (
     ConfigError,
@@ -19,6 +23,7 @@ from .config import (
     load_backend_config,
     load_memory_store,
     load_voice_registry,
+    max_sessions,
 )
 
 
@@ -32,15 +37,24 @@ class CheckReport:
     clone_assignments: dict[str, str] = field(default_factory=dict)
     finetuned: list[str] = field(default_factory=list)
     finetuned_assignments: dict[str, str] = field(default_factory=dict)
+    tools: list[str] = field(default_factory=list)
     memory_dir: str = ""
     memory_encrypted: bool = False
     memory_users: int = 0
+    metrics_enabled: bool = False
+    metrics_multiproc_dir: str = ""
+    max_sessions: int = 1
+    admission_gate: bool = False
     errors: list[str] = field(default_factory=list)
     warnings: list[str] = field(default_factory=list)
 
     @property
     def ok(self) -> bool:
         return not self.errors and all(r.ok for r in self.adapter_results)
+
+
+def _as_bool(value: str | None) -> bool:
+    return (value or "").strip().lower() in ("1", "true", "yes", "on")
 
 
 def _validate_personas(
@@ -67,6 +81,29 @@ def _validate_personas(
             warnings.append(
                 f"persona {persona.id!r} voice {ref!r} has no {tts!r} preset and {tts!r} "
                 f"can't clone — it will use the default voice (won't sound distinct)"
+            )
+    return warnings
+
+
+def _validate_tools(
+    personas: dict[str, Persona], registry: ToolRegistry, backend: Backend
+) -> list[str]:
+    """Cross-check personas' declared tools against the registry + backend (warnings only)."""
+    warnings: list[str] = []
+    for persona in personas.values():
+        unknown = registry.unknown(persona.tools)
+        if unknown:
+            warnings.append(
+                f"persona {persona.id!r} references unknown tool(s) {', '.join(unknown)!r} — "
+                f"not in the tool registry ({', '.join(registry.names()) or 'empty'}); they are "
+                "skipped at call time"
+            )
+        # A persona wants tools but the active LLM backend can't route function calls: it will
+        # answer without ever calling them (graceful, but the capability is silently inert).
+        if persona.tools and not getattr(backend.llm, "supports_tools", False):
+            warnings.append(
+                f"persona {persona.id!r} declares tools but the active LLM {backend.llm.name!r} "
+                "can't route function calls — it will answer without tools"
             )
     return warnings
 
@@ -125,6 +162,22 @@ def run_check(settings: Settings) -> CheckReport:
         report.finetuned_assignments = voices.finetuned.assignments
     report.warnings.extend(_validate_personas(personas, backend, voices))
 
+    # Clones/fine-tunes exist but the active TTS can't speak them (e.g. enrolled a voice, then
+    # ran Kokoro): the catalog lists them as unavailable and a session voice override
+    # would silently fall back. Flag it so the misconfig is visible.
+    if not getattr(backend.tts, "supports_cloning", False) and (report.clones or report.finetuned):
+        n = len(report.clones) + len(report.finetuned)
+        report.warnings.append(
+            f"{n} cloned/fine-tuned voice(s) present but the active TTS {backend.tts.name!r} "
+            "can't speak them — switch to a cloning backend (chatterbox on CUDA)"
+        )
+
+    # 3b. Tools. Surface the registered tools and flag personas whose declared
+    # tools are unknown or can't be routed on the active LLM backend.
+    tool_registry = default_tool_registry()
+    report.tools = tool_registry.names()
+    report.warnings.extend(_validate_tools(personas, tool_registry, backend))
+
     # 4. Memory. Surfaces the store location, at-rest encryption, and #users so a
     # misconfigured PERSONAVOICE_MEMORY_KEY (cryptography missing / bad key) fails the check.
     report.memory_dir = str(settings.memory_dir)
@@ -140,6 +193,48 @@ def run_check(settings: Settings) -> CheckReport:
         report.warnings.append(
             "a persona has memory enabled but PERSONAVOICE_MEMORY_KEY is unset — stored "
             "conversations are unencrypted at rest (fine for dev; set a key for real users)"
+        )
+
+    # 5. Metrics. The Prometheus exporter is optional; surface whether it's installed and flag
+    # the two ways PROMETHEUS_MULTIPROC_DIR (the cross-process aggregation dir) can silently
+    # break — set without the client lib, or pointing at a missing/unwritable directory.
+    report.metrics_enabled = metrics_enabled()
+    multiproc = (os.getenv("PROMETHEUS_MULTIPROC_DIR") or "").strip()
+    report.metrics_multiproc_dir = multiproc
+    if multiproc and not report.metrics_enabled:
+        report.warnings.append(
+            "PROMETHEUS_MULTIPROC_DIR is set but prometheus-client isn't installed — /metrics "
+            "serves an empty body; install the 'metrics' extra"
+        )
+    if multiproc and report.metrics_enabled and not os.path.isdir(multiproc):
+        report.warnings.append(
+            f"PROMETHEUS_MULTIPROC_DIR {multiproc!r} is not an existing directory — cross-process "
+            "metrics will fail to record until it exists and is writable"
+        )
+
+    # 6. Admission control. Surface the per-worker session cap and flag a value above the safe 1
+    # — a single GPU OOMs on a second concurrent caller (its own STT+TTS copy in a new process).
+    report.max_sessions = max_sessions()
+    if report.max_sessions > 1:
+        report.warnings.append(
+            f"PERSONAVOICE_MAX_SESSIONS={report.max_sessions} admits more than one concurrent "
+            "session per worker — safe only if the GPU has headroom for that many STT+TTS copies; "
+            "otherwise prefer running more workers (LiveKit balances across them)"
+        )
+    # Over-capacity callers hear a "busy" clip (step 3). A set-but-unreadable custom clip silently
+    # falls back to the synthesized tone — worth flagging in case the operator expected their file.
+    busy_warning = busy_clip_status()
+    if busy_warning:
+        report.warnings.append(busy_warning)
+    # The optional token-server 503 early gate (step 4) reads the worker's live gauge, which only
+    # crosses processes via PROMETHEUS_MULTIPROC_DIR. Enabled without it, the gate can never see the
+    # count and silently fails open (always mints) — flag the misconfiguration.
+    report.admission_gate = _as_bool(os.getenv("PERSONAVOICE_ADMISSION_503"))
+    if report.admission_gate and not multiproc:
+        report.warnings.append(
+            "PERSONAVOICE_ADMISSION_503 is set but PROMETHEUS_MULTIPROC_DIR is not — the token "
+            "server can't read the worker's live session count, so the early gate never fires "
+            "(it fails open); set a shared PROMETHEUS_MULTIPROC_DIR on both processes"
         )
 
     return report

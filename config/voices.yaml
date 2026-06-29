@@ -1,10 +1,9 @@
-# Voice registry — the logical voices personas reference (config/personas/*.yaml: voice.ref).
+# Voice registry - the logical voices personas reference (config/personas/*.yaml: voice.ref).
 #
-# Each maps to a backend-native preset so the four personas sound DISTINCT on whichever
-# backend is active: Kokoro presets (af_*/am_* — female/male) on the Mac, Orpheus presets
-# (tara/leah/jess/leo/...) on the 4080. Clone-only backends (Chatterbox/F5) have no preset
-# and fall back to their default voice until a clone is assigned, which then uses the
-# `sample` field (a ~10 s wav) added here per voice.
+# Each maps to a backend-native preset when the active backend offers presets. Kokoro presets
+# (af_*/am_* - female/male) keep the four personas distinct on the Mac. Clone-only backends
+# like Chatterbox have no preset and fall back to their default voice until a clone is assigned,
+# which then uses the `sample` field (a ~10 s wav) added here per voice.
 #
 # Personas reference these as `voices/<id>`; the `voices/` prefix is stripped on lookup.
 
@@ -13,25 +12,39 @@ companion_soft:
   emotion: warm
   presets:
     kokoro: af_heart
-    orpheus: tara
 
 hr_warm:
   description: warm, professional, feminine
   emotion: neutral-warm
   presets:
     kokoro: af_sarah
-    orpheus: leah
 
 teacher_clear:
   description: clear, friendly, feminine
   emotion: friendly
   presets:
     kokoro: af_nicole
-    orpheus: jess
 
 pm_calm:
   description: calm, measured, masculine
   emotion: neutral
   presets:
     kokoro: am_michael
-    orpheus: leo
+
+# Bundled out-of-the-box presets the user can pick per session (the seed wavs under
+# assets/seed_voices/). On a cloning backend (Chatterbox on CUDA) the `sample` wav is the
+# voice: the backend zero-shot-clones it. The `chatterbox` preset key only makes the catalog
+# list them and `has_preset` pass — Chatterbox speaks from `sample`, so its value is the
+# voice id, not a built-in preset name. They don't map onto Kokoro (preset-only), so they
+# don't appear on the Mac backend.
+Feminine:
+  description: Feminine
+  sample: assets/seed_voices/Feminine.wav
+  presets:
+    chatterbox: Feminine
+
+Masculine:
+  description: Masculine
+  sample: assets/seed_voices/Masculine.wav
+  presets:
+    chatterbox: Masculine

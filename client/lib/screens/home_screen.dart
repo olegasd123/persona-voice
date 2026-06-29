@@ -6,10 +6,16 @@ import 'package:permission_handler/permission_handler.dart';
 import '../models/app_preferences.dart';
 import '../models/connection_settings.dart';
 import '../models/persona.dart';
+import '../models/session_options.dart';
+import '../models/voice_option.dart';
 import '../services/token_client.dart';
 import '../services/voice_session.dart';
 import 'call_screen.dart';
+import 'persona_form_screen.dart';
+import 'persona_options_sheet.dart';
+import 'queue_screen.dart';
 import 'settings_screen.dart';
+import 'voice_library_screen.dart';
 
 /// The launch screen: a shelf of personas to call. Connection settings live in
 /// [SettingsScreen] now — here you just pick who to talk to and tap to call.
@@ -34,6 +40,7 @@ class _HomeScreenState extends State<HomeScreen> {
 
   List<Persona> _personas = [];
   String? _defaultId;
+  VoiceCatalog _catalog = VoiceCatalog.empty;
   _LoadState _state = _LoadState.loading;
   String? _error;
   String? _connectingId; // persona currently being dialled
@@ -49,7 +56,9 @@ class _HomeScreenState extends State<HomeScreen> {
     _settings
       ..tokenServerUrl = s.tokenServerUrl
       ..apiToken = s.apiToken
-      ..identity = s.identity;
+      ..displayName = s.displayName
+      ..userId = s.userId
+      ..participantId = s.participantId;
     await _loadPersonas();
   }
 
@@ -58,10 +67,17 @@ class _HomeScreenState extends State<HomeScreen> {
     final client = TokenClient(_settings);
     try {
       final (personas, defaultId) = await client.fetchPersonas();
+      // The voice catalog is best-effort — an older server or unconfigured registry shouldn't
+      // block the persona shelf; the customize sheet just falls back to CEFR/demeanor only.
+      var catalog = VoiceCatalog.empty;
+      try {
+        catalog = await client.fetchVoices();
+      } catch (_) {}
       if (!mounted) return;
       setState(() {
         _personas = personas;
         _defaultId = defaultId;
+        _catalog = catalog;
         _state = personas.isEmpty ? _LoadState.unconfigured : _LoadState.ok;
         _error = null;
       });
@@ -87,6 +103,67 @@ class _HomeScreenState extends State<HomeScreen> {
     await _bootstrap();
   }
 
+  Future<void> _openVoiceLibrary() async {
+    await Navigator.of(context).push(MaterialPageRoute(
+      builder: (_) => VoiceLibraryScreen(settings: _settings),
+    ));
+    // Adding/removing clones changes the catalog the customize sheet offers.
+    if (mounted) await _loadPersonas();
+  }
+
+  Future<void> _customize(Persona persona) async {
+    final result = await showPersonaOptionsSheet(
+      context,
+      persona: persona,
+      current: widget.prefs.optionsFor(persona.id),
+      catalog: _catalog,
+      onManageVoices: _openVoiceLibrary,
+    );
+    if (result == null) return; // dismissed without applying
+    await widget.prefs.setOptionsFor(persona.id, result);
+    if (mounted) setState(() {});
+  }
+
+  /// Open the New / Edit persona form. [personaId] null = create; set = edit a custom persona.
+  Future<void> _openPersonaForm({String? personaId}) async {
+    final saved = await Navigator.of(context).push<bool>(MaterialPageRoute(
+      builder: (_) => PersonaFormScreen(
+        settings: _settings,
+        catalog: _catalog,
+        personaId: personaId,
+      ),
+    ));
+    if (saved == true && mounted) await _loadPersonas();
+  }
+
+  Future<void> _deletePersona(Persona persona) async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: Text('Delete ${persona.name}?'),
+        content: const Text('This removes your custom persona. It can\'t be undone.'),
+        actions: [
+          TextButton(onPressed: () => Navigator.of(ctx).pop(false), child: const Text('Cancel')),
+          FilledButton.tonal(
+            onPressed: () => Navigator.of(ctx).pop(true),
+            child: const Text('Delete'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true) return;
+    final client = TokenClient(_settings);
+    try {
+      await client.deletePersona(persona.id);
+      await widget.prefs.setOptionsFor(persona.id, const SessionOptions()); // drop stale options
+      if (mounted) await _loadPersonas();
+    } catch (e) {
+      if (mounted) _snack(friendlyTokenError(e), error: true);
+    } finally {
+      client.close();
+    }
+  }
+
   Future<void> _call(Persona persona) async {
     final mic = await Permission.microphone.request();
     if (!mic.isGranted) {
@@ -98,30 +175,80 @@ class _HomeScreenState extends State<HomeScreen> {
 
     setState(() => _connectingId = persona.id);
     final client = TokenClient(_settings);
+    final options = widget.prefs.optionsFor(persona.id);
     try {
-      final grant = await client.requestToken(persona: persona.id);
+      final grant = await client.requestToken(persona: persona.id, options: options);
       if (!mounted) return;
-      final session = VoiceSession();
-      await Navigator.of(context).push(MaterialPageRoute(
-        builder: (_) => CallScreen(
-          session: session,
-          grant: grant,
-          personas: _personas,
-          initialMicMode: widget.prefs.defaultMicMode,
-        ),
-      ));
+      _enterCall(grant, options);
+    } on TokenClientException catch (e) {
+      if (!mounted) return;
+      // Every session is busy: queue (wait for a free slot) instead of failing with an error.
+      if (e.isBusy) {
+        _enterQueue(persona, options, e.retryAfter);
+      } else {
+        _snack(friendlyTokenError(e), error: true);
+      }
     } catch (e) {
-      if (mounted) _snack('Could not connect: $e');
+      if (mounted) _snack(friendlyTokenError(e), error: true);
     } finally {
       client.close();
       if (mounted) setState(() => _connectingId = null);
     }
   }
 
-  void _snack(String message) {
+  /// Drop into the live call with a freshly minted token.
+  void _enterCall(JoinGrant grant, SessionOptions options) {
+    Navigator.of(context).push(MaterialPageRoute(
+      builder: (_) => CallScreen(
+        session: VoiceSession(),
+        grant: grant,
+        personas: _personas,
+        options: options,
+        initialMicMode: widget.prefs.defaultMicMode,
+        // Lets the call rejoin a fresh room if the assistant never joins this one (the worker
+        // was still warming up when we connected). Mints a new token the same way as the initial
+        // connect — a new room re-triggers agent dispatch.
+        regrant: () => _mintGrant(grant.persona, options),
+      ),
+    ));
+  }
+
+  /// Mint a fresh join grant for [persona] (a new room each call). Shared by the initial connect
+  /// and the call's warm-up rejoin; owns the short-lived [TokenClient] it uses.
+  Future<JoinGrant> _mintGrant(String persona, SessionOptions options) async {
+    final client = TokenClient(_settings);
+    try {
+      return await client.requestToken(persona: persona, options: options);
+    } finally {
+      client.close();
+    }
+  }
+
+  /// All sessions busy: open the queue page, which waits for a slot and then enters the call.
+  void _enterQueue(Persona persona, SessionOptions options, int? retryAfter) {
+    Navigator.of(context).push(MaterialPageRoute(
+      builder: (_) => QueueScreen(
+        settings: _settings,
+        persona: persona,
+        personas: _personas,
+        options: options,
+        initialMicMode: widget.prefs.defaultMicMode,
+        initialRetryAfter: retryAfter,
+      ),
+    ));
+  }
+
+  void _snack(String message, {bool error = false}) {
+    final scheme = Theme.of(context).colorScheme;
     ScaffoldMessenger.of(context)
       ..clearSnackBars()
-      ..showSnackBar(SnackBar(content: Text(message)));
+      ..showSnackBar(SnackBar(
+        content: Text(
+          message,
+          style: error ? TextStyle(color: scheme.onErrorContainer) : null,
+        ),
+        backgroundColor: error ? scheme.errorContainer : null,
+      ));
   }
 
   // Last-called persona floats to the top so the common case is one tap away; the rest keep
@@ -142,6 +269,11 @@ class _HomeScreenState extends State<HomeScreen> {
       appBar: AppBar(
         title: const Text('Personas'),
         actions: [
+          IconButton(
+            icon: const Icon(Icons.record_voice_over_outlined),
+            tooltip: 'Voice library',
+            onPressed: _openVoiceLibrary,
+          ),
           IconButton(
             icon: const Icon(Icons.refresh),
             tooltip: 'Reload personas',
@@ -168,6 +300,14 @@ class _HomeScreenState extends State<HomeScreen> {
           ),
         ],
       ),
+      // Authoring needs a reachable server (the form fetches voices / LoRAs and posts the draft).
+      floatingActionButton: (_state == _LoadState.ok || _state == _LoadState.unconfigured)
+          ? FloatingActionButton.extended(
+              onPressed: _connectingId == null ? () => _openPersonaForm() : null,
+              icon: const Icon(Icons.add),
+              label: const Text('New persona'),
+            )
+          : null,
     );
   }
 
@@ -211,9 +351,14 @@ class _HomeScreenState extends State<HomeScreen> {
               persona: p,
               isDefault: p.id == _defaultId,
               isLastUsed: p.id == lastId,
+              options: widget.prefs.optionsFor(p.id),
+              catalog: _catalog,
               connecting: p.id == _connectingId,
               disabled: _connectingId != null && p.id != _connectingId,
               onTap: () => _call(p),
+              onCustomize: () => _customize(p),
+              onEdit: p.custom ? () => _openPersonaForm(personaId: p.id) : null,
+              onDelete: p.custom ? () => _deletePersona(p) : null,
             );
           },
         );
@@ -273,30 +418,69 @@ class _ConnectionChip extends StatelessWidget {
   }
 }
 
-/// A tappable persona row: avatar, name, description, voice — and a call affordance that
-/// becomes a spinner while dialling.
+/// A tappable persona row: avatar, name, description, and the voice / CEFR / demeanor it will
+/// speak with (reflecting any per-call override) — plus a call affordance that becomes a
+/// spinner while dialling.
 class _PersonaCard extends StatelessWidget {
   const _PersonaCard({
     required this.persona,
     required this.isDefault,
     required this.isLastUsed,
+    required this.options,
+    required this.catalog,
     required this.connecting,
     required this.disabled,
     required this.onTap,
+    required this.onCustomize,
+    this.onEdit,
+    this.onDelete,
   });
 
   final Persona persona;
   final bool isDefault;
   final bool isLastUsed;
+
+  /// The user's saved per-call overrides for this persona (voice / CEFR / demeanor); empty
+  /// when untouched. Drives the "Tuned" tag and the *effective* attributes shown on the card.
+  final SessionOptions options;
+
+  /// The active backend's voice catalog — used to resolve an overridden voice id to its
+  /// descriptor (and to tell presets, which have one, from clones/fine-tunes, which don't).
+  final VoiceCatalog catalog;
+
   final bool connecting;
   final bool disabled;
   final VoidCallback onTap;
+  final VoidCallback onCustomize;
+
+  /// Set only for user-authored (custom) personas — curated personas are read-only.
+  final VoidCallback? onEdit;
+  final VoidCallback? onDelete;
+
+  bool get hasOptions => options.isNotEmpty;
+
+  /// The voice blurb to show. When a voice override is set, that wins: a preset resolves to its
+  /// descriptor ("warm, soft, feminine"); a clone/fine-tune (no descriptor) or an unknown/stale
+  /// id hides the line. With no override, fall back to the persona's authored voice blurb (which
+  /// is itself empty when the authored voice is a clone). Null = render no voice line.
+  String? get _voiceDescriptor {
+    final overrideId = options.voice;
+    if (overrideId != null) {
+      final option = catalog.byId(overrideId);
+      return (option != null && option.isPreset) ? option.name : null;
+    }
+    return persona.voice.isNotEmpty ? persona.voice : null;
+  }
 
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
     final isDark = scheme.brightness == Brightness.dark;
     final subtitle = persona.description.isNotEmpty ? persona.description : persona.id;
+    // Effective attributes = the per-call override, falling back to the persona's own default.
+    final voiceDescriptor = _voiceDescriptor;
+    final cefr = options.cefr ?? persona.cefr;
+    final demeanor = options.demeanor ?? persona.demeanor;
     return Opacity(
       opacity: disabled ? 0.5 : 1,
       child: Card(
@@ -343,6 +527,12 @@ class _PersonaCard extends StatelessWidget {
                             )
                           else if (isDefault) _MiniTag('Default',
                               scheme.secondaryContainer, scheme.onSecondaryContainer),
+                          if (persona.custom)
+                            _MiniTag('Custom', scheme.tertiaryContainer,
+                                scheme.onTertiaryContainer),
+                          if (hasOptions)
+                            _MiniTag('Tuned', scheme.primaryContainer,
+                                scheme.onPrimaryContainer),
                         ],
                       ),
                       const SizedBox(height: 2),
@@ -352,7 +542,7 @@ class _PersonaCard extends StatelessWidget {
                         maxLines: 2,
                         overflow: TextOverflow.ellipsis,
                       ),
-                      if (persona.voice.isNotEmpty) ...[
+                      if (voiceDescriptor != null) ...[
                         const SizedBox(height: 4),
                         Row(
                           children: [
@@ -360,7 +550,7 @@ class _PersonaCard extends StatelessWidget {
                             const SizedBox(width: 4),
                             Flexible(
                               child: Text(
-                                persona.voice,
+                                voiceDescriptor,
                                 style: TextStyle(fontSize: 12, color: scheme.outline),
                                 overflow: TextOverflow.ellipsis,
                               ),
@@ -368,10 +558,53 @@ class _PersonaCard extends StatelessWidget {
                           ],
                         ),
                       ],
+                      if (cefr != null || demeanor != null) ...[
+                        const SizedBox(height: 4),
+                        Row(
+                          children: [
+                            if (cefr != null) ...[
+                              Icon(Icons.school_outlined, size: 13, color: scheme.outline),
+                              const SizedBox(width: 4),
+                              Text(cefr.label,
+                                  style: TextStyle(fontSize: 12, color: scheme.outline)),
+                            ],
+                            if (cefr != null && demeanor != null) const SizedBox(width: 12),
+                            if (demeanor != null) ...[
+                              Icon(Icons.mood_outlined, size: 13, color: scheme.outline),
+                              const SizedBox(width: 4),
+                              Text(demeanor.label,
+                                  style: TextStyle(fontSize: 12, color: scheme.outline)),
+                            ],
+                          ],
+                        ),
+                      ],
                     ],
                   ),
                 ),
-                const SizedBox(width: 8),
+                const SizedBox(width: 4),
+                if (onEdit != null || onDelete != null)
+                  PopupMenuButton<String>(
+                    tooltip: 'Edit or delete',
+                    enabled: !disabled && !connecting,
+                    onSelected: (v) {
+                      if (v == 'edit') onEdit?.call();
+                      if (v == 'delete') onDelete?.call();
+                    },
+                    itemBuilder: (_) => [
+                      if (onEdit != null)
+                        const PopupMenuItem(value: 'edit', child: Text('Edit')),
+                      if (onDelete != null)
+                        const PopupMenuItem(value: 'delete', child: Text('Delete')),
+                    ],
+                  ),
+                IconButton(
+                  icon: Icon(
+                    hasOptions ? Icons.tune : Icons.tune_outlined,
+                    color: hasOptions ? scheme.primary : scheme.outline,
+                  ),
+                  tooltip: 'Customize',
+                  onPressed: disabled || connecting ? null : onCustomize,
+                ),
                 connecting
                     ? const SizedBox(
                         width: 22, height: 22, child: CircularProgressIndicator(strokeWidth: 2))

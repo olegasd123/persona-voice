@@ -19,11 +19,35 @@ from pathlib import Path
 
 from ..adapters.factory import build_backend
 from ..audio import read_wav_file, write_wav_file
-from ..models import Persona
+from ..models import CEFRLevel, Demeanor, Persona, SessionOptions
 from ..persona.loader import load_persona
 from ..persona.registry import PersonaRegistry
+from ..safety import moderator_from_env
 from ..server.config import ConfigError, Settings, load_backend_config, load_voice_registry
 from .pipeline import Pipeline, TurnResult
+from .tools import default_tool_registry
+
+
+def add_session_option_args(parser: argparse.ArgumentParser) -> None:
+    """Add the shared `--voice/--cefr/--demeanor` session-override flags to a demo parser."""
+    parser.add_argument("--voice", help="voice-library id override for this session")
+    parser.add_argument(
+        "--cefr",
+        type=str.upper,
+        choices=[level.value for level in CEFRLevel],
+        help="CEFR language level override (language learners)",
+    )
+    parser.add_argument(
+        "--demeanor",
+        type=str.lower,
+        choices=[d.value for d in Demeanor],
+        help="demeanor override (kind / natural / rude)",
+    )
+
+
+def session_options_from_args(args: argparse.Namespace) -> SessionOptions:
+    """Build `SessionOptions` from the parsed `--voice/--cefr/--demeanor` flags."""
+    return SessionOptions(voice=args.voice, cefr=args.cefr, demeanor=args.demeanor)
 
 
 def _resolve_persona(settings: Settings, ref: str) -> Persona:
@@ -74,10 +98,22 @@ def _print_result(result: TurnResult, persona: Persona) -> None:
     )
 
 
-async def _run(settings: Settings, persona: Persona, audio_in: bytes) -> TurnResult:
+async def _run(
+    settings: Settings,
+    persona: Persona,
+    audio_in: bytes,
+    options: SessionOptions | None = None,
+) -> TurnResult:
     backend = build_backend(load_backend_config(settings))
     voices = load_voice_registry(settings)
-    pipeline = Pipeline(backend, persona, voices)
+    pipeline = Pipeline(
+        backend,
+        persona,
+        voices,
+        options=options,
+        moderator=moderator_from_env(),
+        tools=default_tool_registry(),
+    )
     return await pipeline.run_turn(audio_in)
 
 
@@ -95,6 +131,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--backend", choices=("mac", "cuda"), default=None, help="override BACKEND")
     parser.add_argument("--out", type=Path, default=Path("reply.wav"), help="output wav path")
     parser.add_argument("--play", action="store_true", help="play the reply after synthesizing")
+    add_session_option_args(parser)
     args = parser.parse_args(argv)
 
     try:
@@ -116,7 +153,7 @@ def main(argv: list[str] | None = None) -> int:
         audio_in = read_wav_file(args.wav)
 
     try:
-        result = asyncio.run(_run(settings, persona, audio_in))
+        result = asyncio.run(_run(settings, persona, audio_in, session_options_from_args(args)))
     except Exception as exc:  # surface backend/model errors without a traceback wall
         print(f"error: {exc}", file=sys.stderr)
         return 1

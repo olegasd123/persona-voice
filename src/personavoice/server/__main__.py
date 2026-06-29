@@ -66,10 +66,23 @@ def _print_report(report: CheckReport, settings: Settings, *, use_color: bool) -
         print(f"Fine-tuned voices ({len(report.finetuned)}): {listed}")
         print()
 
+    if report.tools:
+        print(f"Tools ({len(report.tools)}): {', '.join(report.tools)}")
+        print()
+
     if report.memory_dir:
         enc = "encrypted" if report.memory_encrypted else "plaintext"
         print(f"Memory: {report.memory_dir}  ({enc}, {report.memory_users} user(s))")
         print()
+
+    exporter = "prometheus-client installed" if report.metrics_enabled else "no-op (lib absent)"
+    multiproc = (
+        f", multiproc dir {report.metrics_multiproc_dir}" if report.metrics_multiproc_dir else ""
+    )
+    print(f"Metrics: /metrics — {exporter}{multiproc}")
+    gate = " (token-server 503 early gate on)" if report.admission_gate else ""
+    print(f"Admission control: max {report.max_sessions} concurrent session(s)/worker{gate}")
+    print()
 
     if report.warnings:
         print("Warnings:")

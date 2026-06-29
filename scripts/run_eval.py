@@ -35,7 +35,7 @@ from personavoice.eval.mos import MosSummary, summarize_mos_by_voice
 
 
 def default_gates() -> list[Gate]:
-    """Headline gates matching the plan's targets (override with `--gate`)."""
+    """Headline gates matching the project's target metrics (override with `--gate`)."""
     return [
         Gate("e2e_audio_ms", 900.0, CEILING, "time-to-first-audio budget"),
         Gate("wer", 0.15, CEILING, "STT word-error-rate"),

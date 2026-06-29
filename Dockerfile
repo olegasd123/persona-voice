@@ -1,6 +1,6 @@
 # Persona-Voice CUDA server image (RTX 4080 / prod).
 #
-# Runs the STT (faster-whisper / Parakeet) and TTS (Chatterbox / Orpheus) adapters on the
+# Runs the STT (faster-whisper / Parakeet) and TTS (Chatterbox) adapter on the
 # GPU. The LLM is served separately by the `vllm` service (see docker-compose.yml), so this
 # image deliberately does NOT bundle vLLM — keeping it lighter and the 16 GB VRAM budget
 # predictable.
@@ -40,10 +40,9 @@ WORKDIR /app
 COPY pyproject.toml README.md ./
 COPY src ./src
 RUN python3.12 -m pip install --upgrade pip \
-    && python3.12 -m pip install -e '.[cuda]' \
-    # GPU TTS: Chatterbox (MIT) is the default — torch ships with it. For Orpheus instead,
-    # add `orpheus-speech` (pulls a second in-process vLLM; the Llama-3.2 license also
-    # applies, and it's tight on a single 4080 alongside the LLM vLLM service).
+    # `metrics` adds the Prometheus exporter so the token server's /metrics route is live.
+    && python3.12 -m pip install -e '.[cuda,metrics]' \
+    # GPU TTS: Chatterbox (MIT) is the CUDA cloning backend.
     && python3.12 -m pip install chatterbox-tts
 
 COPY config ./config

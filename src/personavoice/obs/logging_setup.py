@@ -6,6 +6,10 @@ line-delimited JSON when `PERSONAVOICE_LOG_FORMAT=json` for log shippers. Level 
 `PERSONAVOICE_LOG_LEVEL` (default INFO). It's idempotent so calling it from multiple entry
 points doesn't stack duplicate handlers.
 
+We add one custom level, `TRACE` (15), that sits between DEBUG and INFO. It turns on our own
+verbose diagnostics (notably the full LLM request/response trace) on top of INFO, *without*
+DEBUG's library-wide firehose — so the accepted levels are DEBUG|TRACE|INFO|WARNING|ERROR.
+
 The `JsonFormatter` is pure (a `LogRecord` in, a JSON string out) so it's unit-testable; any
 keys passed via `logger.info(..., extra={"context": {...}})` are merged into the JSON object.
 """
@@ -17,10 +21,58 @@ import logging
 import os
 from collections.abc import Mapping
 
-_VALID_LEVELS = {"CRITICAL", "ERROR", "WARNING", "INFO", "DEBUG", "NOTSET"}
+# Custom level between DEBUG (10) and INFO (20). Setting PERSONAVOICE_LOG_LEVEL=TRACE shows our
+# TRACE diagnostics + INFO and above, but hides chatty third-party DEBUG records (level 10).
+TRACE = 15
+logging.addLevelName(TRACE, "TRACE")
+
+# Accepted PERSONAVOICE_LOG_LEVEL names → numeric level (loudest-first for readability).
+_LEVELS: dict[str, int] = {
+    "CRITICAL": logging.CRITICAL,
+    "ERROR": logging.ERROR,
+    "WARNING": logging.WARNING,
+    "INFO": logging.INFO,
+    "TRACE": TRACE,
+    "DEBUG": logging.DEBUG,
+    "NOTSET": logging.NOTSET,
+}
 
 # Attributes the stdlib sets on every LogRecord; anything else is a caller-supplied `extra`.
 _RESERVED = set(vars(logging.makeLogRecord({})).keys()) | {"message", "asctime", "taskName"}
+
+# The LLM request/response dump is our only TRACE-level output, so we tint TRACE records dim-gray
+# to make them easy to skim past in a busy terminal. ANSI only, and gated to a TTY (skipped when
+# NO_COLOR is set), so piped/redirected logs and JSON output never pick up escape codes.
+_GRAY = "\x1b[90m"
+_RESET = "\x1b[0m"
+_PLAIN_FMT = "%(asctime)s %(levelname)-7s %(name)s: %(message)s"
+
+
+class PlainFormatter(logging.Formatter):
+    """Plain-text formatter that tints TRACE records (the LLM request/response dump) gray.
+
+    Coloring is opt-in via `color=` (set from a TTY check in `configure_logging`); with it off this
+    behaves exactly like a stock `Formatter(_PLAIN_FMT)`. The gray spans the whole multi-line record
+    because ANSI color persists across newlines until the trailing reset.
+    """
+
+    def __init__(self, *, color: bool = False) -> None:
+        super().__init__(_PLAIN_FMT)
+        self._color = color
+
+    def format(self, record: logging.LogRecord) -> str:
+        text = super().format(record)
+        if self._color and record.levelno == TRACE:
+            return f"{_GRAY}{text}{_RESET}"
+        return text
+
+
+def _color_enabled(stream: object, env: Mapping[str, str]) -> bool:
+    """Tint TRACE output only when writing to a real terminal and NO_COLOR isn't set."""
+    if env.get("NO_COLOR"):
+        return False
+    isatty = getattr(stream, "isatty", None)
+    return bool(isatty and isatty())
 
 
 class JsonFormatter(logging.Formatter):
@@ -43,12 +95,13 @@ class JsonFormatter(logging.Formatter):
 
 
 def log_level_from_env(env: Mapping[str, str] | None = None) -> int:
-    """Resolve the numeric log level from `PERSONAVOICE_LOG_LEVEL` (default INFO)."""
+    """Resolve the numeric log level from `PERSONAVOICE_LOG_LEVEL` (default INFO).
+
+    Accepts DEBUG|TRACE|INFO|WARNING|ERROR (+ CRITICAL/NOTSET); an unknown value falls back to INFO.
+    """
     env = os.environ if env is None else env
     name = (env.get("PERSONAVOICE_LOG_LEVEL") or "INFO").strip().upper()
-    if name not in _VALID_LEVELS:
-        name = "INFO"
-    return getattr(logging, name, logging.INFO)
+    return _LEVELS.get(name, logging.INFO)
 
 
 def configure_logging(
@@ -80,5 +133,5 @@ def configure_logging(
     if json_format:
         handler.setFormatter(JsonFormatter())
     else:
-        handler.setFormatter(logging.Formatter("%(asctime)s %(levelname)-7s %(name)s: %(message)s"))
+        handler.setFormatter(PlainFormatter(color=_color_enabled(handler.stream, env)))
     root.addHandler(handler)

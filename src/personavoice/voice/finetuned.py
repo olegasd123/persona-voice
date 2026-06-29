@@ -10,7 +10,7 @@ instead of their base weights.
 + engine + provenance) and **per-persona assignments** to `<finetuned_dir>/finetuned.json`,
 non-destructively (it never rewrites a hand-authored persona/voices YAML). `VoiceRegistry`
 consults it before clones and static presets, but only on a backend that can actually load a
-fine-tuned checkpoint (the cloning backends — Chatterbox/F5).
+fine-tuned checkpoint (the Chatterbox cloning backend).
 """
 
 from __future__ import annotations
@@ -40,7 +40,7 @@ class FinetunedVoice(BaseModel):
 
     name: str
     checkpoint_path: str  # the trained model/checkpoint dir the TTS backend loads
-    engine: str | None = None  # "f5" | "chatterbox" (which trainer produced it)
+    engine: str | None = None  # which trainer produced it
     base_model: str | None = None  # the base checkpoint it was fine-tuned from
     speaker: str | None = None  # target speaker label (provenance)
     # A/B verdict vs the zero-shot clone, when an eval was run.

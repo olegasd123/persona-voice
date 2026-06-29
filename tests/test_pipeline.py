@@ -4,9 +4,11 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from personavoice.models import Role
+from personavoice.models import Demeanor, Role, SessionOptions, VoiceDef
 from personavoice.orchestrator import Pipeline
 from personavoice.persona import load_persona
+from personavoice.safety import KeywordModerator
+from personavoice.voice import VoiceRegistry
 
 from .fakes import make_backend
 
@@ -83,3 +85,68 @@ async def test_explicit_history_does_not_mutate_internal(config_dir: Path) -> No
     pipe = Pipeline(make_backend(), _companion(config_dir))
     await pipe.run_turn(b"x", history=[])
     assert pipe.history == []  # explicit history bypasses the internal accumulator
+
+
+# --- session options (voice override) + moderation ------------------------------------
+
+
+async def test_voice_choice_overrides_persona_voice(config_dir: Path) -> None:
+    backend = make_backend()
+    voices = VoiceRegistry({"alt": VoiceDef(presets={"fake_tts": "alt_preset"})})
+    pipe = Pipeline(backend, _companion(config_dir), voices, options=SessionOptions(voice="alt"))
+    await pipe.run_turn(b"x")
+    assert backend.tts.last_voice.id == "alt_preset"  # type: ignore[attr-defined]
+
+
+async def test_unavailable_voice_choice_falls_back_to_persona_default(config_dir: Path) -> None:
+    backend = make_backend()
+    voices = VoiceRegistry({"companion_soft": VoiceDef(presets={"fake_tts": "af_heart"})})
+    pipe = Pipeline(backend, _companion(config_dir), voices, options=SessionOptions(voice="ghost"))
+    await pipe.run_turn(b"x")
+    # The unknown choice can't resolve, so the persona's own voice is used.
+    assert backend.tts.last_voice.id == "af_heart"  # type: ignore[attr-defined]
+
+
+# --- dynamic emotion ------------------------------------------------------
+
+
+async def test_dynamic_emotion_strips_tag_and_applies_to_voice(config_dir: Path) -> None:
+    backend = make_backend(stt_text="hi", llm_reply="[sad] I'm here for you.")
+    pipe = Pipeline(backend, _companion(config_dir), dynamic_emotion=True)
+
+    result = await pipe.run_turn(b"x")
+
+    # The reply (and the synthesized text) is the spoken words only — no tag.
+    assert result.reply == "I'm here for you."
+    assert backend.tts.last_text == "I'm here for you."  # type: ignore[attr-defined]
+    assert backend.tts.last_voice.emotion == "sad"  # type: ignore[attr-defined]
+
+
+async def test_dynamic_emotion_off_leaves_tag_in_reply(config_dir: Path) -> None:
+    backend = make_backend(stt_text="hi", llm_reply="[sad] I'm here for you.")
+    pipe = Pipeline(backend, _companion(config_dir))  # off by default
+
+    result = await pipe.run_turn(b"x")
+
+    assert result.reply == "[sad] I'm here for you."  # untouched
+    assert backend.tts.last_voice.emotion != "sad"  # type: ignore[attr-defined]
+
+
+async def test_moderation_input_short_circuits_the_llm(config_dir: Path) -> None:
+    backend = make_backend(stt_text="I want to die", llm_reply="THIS SHOULD NOT BE SPOKEN")
+    pipe = Pipeline(backend, _companion(config_dir), moderator=KeywordModerator())
+    result = await pipe.run_turn(b"x")
+    assert "988" in result.reply  # the calm crisis reply
+    assert backend.llm.last_messages is None  # type: ignore[attr-defined]  # LLM bypassed
+
+
+async def test_moderation_bounds_abusive_output(config_dir: Path) -> None:
+    backend = make_backend(stt_text="hi", llm_reply="Honestly, you're an idiot.")
+    pipe = Pipeline(
+        backend,
+        _companion(config_dir),
+        options=SessionOptions(demeanor=Demeanor.rude),
+        moderator=KeywordModerator(),
+    )
+    result = await pipe.run_turn(b"x")
+    assert "idiot" not in result.reply  # replaced with the softened line
