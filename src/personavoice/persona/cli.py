@@ -1,4 +1,4 @@
-"""`personavoice-persona`: author personas from the command line (Feature K).
+"""`personavoice-persona`: author personas from the command line.
 
     personavoice-persona draft "a patient French tutor who only speaks in B1"
     personavoice-persona draft "a blunt PM interviewer" --out config/personas/pm2.yaml

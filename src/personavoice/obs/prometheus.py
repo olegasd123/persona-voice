@@ -83,7 +83,7 @@ if AVAILABLE:
         buckets=_LATENCY_BUCKETS,
     )
 
-# Concurrency / admission control session metrics (Feature I) are built **lazily on first write**,
+# Concurrency / admission control session metrics are built **lazily on first write**,
 # not at import — see `_session_metric`.
 _SESSIONS: dict[str, Any] = {}
 
@@ -154,7 +154,7 @@ def record_turn(m: TurnMetrics) -> None:
 
 
 def set_sessions(active: int, capacity: int) -> None:
-    """Publish the worker's live session count + capacity (Feature I, admission control).
+    """Publish the worker's live session count + capacity (admission control).
 
     The agent worker holds the authoritative count (LiveKit `active_jobs`); this mirrors it into
     the Prometheus channel so the token server can report load on `/healthz` and `/metrics`

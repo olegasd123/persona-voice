@@ -5,7 +5,7 @@
 config. Chatterbox is MIT, but it ships no official finetune CLI — point `trainer_script` at
 the community trainer used by your training image.
 
-Voice fine-tuning is CUDA-centric (the plan's training track). Building the plan is pure (no
+Voice fine-tuning is CUDA-centric (the training track). Building the plan is pure (no
 model libs, no disk), so it's fully unit-tested; `finetune.py` writes any config and runs the
 commands.
 """

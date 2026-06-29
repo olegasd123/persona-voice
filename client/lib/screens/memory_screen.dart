@@ -5,7 +5,7 @@ import '../services/token_client.dart';
 
 enum _LoadState { loading, ok, error }
 
-/// "What I remember about you" (Feature L): a read-only view of everything the server has stored
+/// "What I remember about you": a read-only view of everything the server has stored
 /// for this account — the distilled profile (summary + durable facts) plus recent conversation
 /// turns — with a button to forget it all. The read half of the consent story; the write gate is
 /// the "Remember our conversations" toggle in Settings.

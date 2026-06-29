@@ -6,7 +6,7 @@ keeps input handling and output bounded without coupling it into the cascade sta
 hosted guard) implement it. The default wired into the pipelines is `NoopModerator`, so the
 seam is present everywhere but behavior is unchanged until a real guard is configured.
 
-Two hook points, mirroring the plan:
+Two hook points:
 
 - **input**  — classify the user's transcript; a flagged category (crisis especially) can
   short-circuit to a safe reply instead of running the normal turn.

@@ -110,7 +110,7 @@ _MEMORY_TURNS_LIMIT = 20
 # Lazily builds a `VoiceCloner` bound to the active backend + the shared clones store.
 ClonerFactory = Callable[[], VoiceCloner]
 
-# Lazily builds the cascade LLM adapter used to draft a persona from a description (Feature K).
+# Lazily builds the cascade LLM adapter used to draft a persona from a description.
 # Returns the active backend's `.llm` (a `persona.author._ChatLLM`); None disables /personas/draft.
 DraftLLMFactory = Callable[[], Any]
 
@@ -278,7 +278,7 @@ class TokenService:
         # user id; curated personas always win on id clash and are never stored/deletable here.
         self._user_personas = user_personas
         self._max_user_personas = max_user_personas
-        # Optional persona authoring helper (Feature K): builds the cascade LLM on demand to draft a
+        # Optional persona authoring helper: builds the cascade LLM on demand to draft a
         # persona from a description. None disables /personas/draft (e.g. in unit tests, or when no
         # custom-persona store is wired). Drafting is one-shot and runs in the request thread.
         self._draft_llm_factory = draft_llm_factory
@@ -290,7 +290,7 @@ class TokenService:
         # Per-user conversation memory store: backs the /consent routes (the same `consent.json`
         # the cascade checks before recording). None disables them (e.g. in unit tests).
         self._memory = memory
-        # Admission control's optional token-server early gate (Feature I, step 4): when on, `issue`
+        # Admission control's optional token-server early gate: when on, `issue`
         # returns 503 + Retry-After once the worker reports full instead of minting a token the
         # caller can't use. `sessions_reader` is the live-count source (the shared gauge). It's an
         # *optimization* over the worker's load gate — it has a read→mint→connect TOCTOU race — and
@@ -826,7 +826,7 @@ class TokenService:
         )
         return self._consent_payload(user)
 
-    # -- memory introspection (Feature L) ----------------------------------------------
+    # -- memory introspection ----------------------------------------------------------
 
     def get_memory(self, user: str | None, *, limit: int = _MEMORY_TURNS_LIMIT) -> dict[str, Any]:
         """What we've stored about a user: the distilled profile + recent raw turns.
@@ -965,7 +965,7 @@ def build_service(settings: Settings | None = None) -> TokenService:
             backend = build_backend(load_backend_config(settings))
             return VoiceCloner(backend, store)
 
-    # Persona authoring helper (Feature K): draft a persona from a description via the cascade LLM.
+    # Persona authoring helper: draft a persona from a description via the cascade LLM.
     # Only wired when custom personas are enabled (the route is user-scoped and writes via the same
     # store). Lazily builds the backend so a draft request, not startup, pays for it.
     draft_llm_factory: DraftLLMFactory | None = None
@@ -980,7 +980,7 @@ def build_service(settings: Settings | None = None) -> TokenService:
     max_user_personas = int(
         os.getenv("PERSONAVOICE_MAX_USER_PERSONAS", str(_DEFAULT_MAX_USER_PERSONAS)).strip() or 0
     )
-    # Optional admission-control early gate (Feature I, step 4): off by default so behavior is
+    # Optional admission-control early gate: off by default so behavior is
     # unchanged; when on, /token returns 503 once the worker's live gauge reports full.
     admission_gate = _as_bool(os.getenv("PERSONAVOICE_ADMISSION_503"))
     return TokenService(
@@ -1094,7 +1094,7 @@ def _make_handler(
             query = {k: v[0] for k, v in parse_qs(parsed.query).items()}
             try:
                 if path == "/healthz" and method == "GET":
-                    # Admission-control load (Feature I). `sessions_max` is static config, so read
+                    # Admission-control load. `sessions_max` is static config, so read
                     # it directly (authoritative, always present) rather than round-tripping it
                     # through a live gauge. `sessions_active` is the genuinely live value, read
                     # from the gauge the worker publishes over the shared metrics channel — omitted

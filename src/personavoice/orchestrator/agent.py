@@ -878,7 +878,7 @@ async def entrypoint(ctx: Any, *, persona_id: str | None = None) -> None:
     # channel; room/job metadata stay as a lower-priority fallback (explicit dispatch).
     await ctx.connect(auto_subscribe=agents.AutoSubscribe.AUDIO_ONLY)
 
-    # Admission control (Feature I, step 3): a job admitted only because it slipped past the load
+    # Admission control: a job admitted only because it slipped past the load
     # gate is tagged busy in `_request_fnc` (via the agent's accept metadata). Play the pre-rendered
     # "all lines busy" clip and disconnect — no backend/PersonaAgent is built, so this path loads no
     # models. Done right after connect, before any heavy work.
@@ -989,7 +989,7 @@ async def entrypoint(ctx: Any, *, persona_id: str | None = None) -> None:
         await agent.aclose()
 
 
-# --- Concurrency / admission control (Feature I) ----------------------------------------------
+# --- Concurrency / admission control ----------------------------------------------------------
 # The VRAM budget assumes one conversation. On non-Windows each job runs in its own process that
 # loads its own STT+TTS copy, so a second concurrent caller doubles audio-model VRAM and OOMs a
 # 16 GB card. One session per worker is therefore the safe default (`config.max_sessions`); scale
@@ -1037,8 +1037,8 @@ def _worker_load_fnc(worker: Any) -> float:
     This is the real OOM rail. It runs in the main worker process — every 0.5 s and, crucially,
     immediately before each availability check — so reporting `active/capacity` here (combined
     with `load_threshold` and the framework's reserved-slot accounting) is what prevents a second
-    job being dispatched, race-free. It doubles as the publish point for the session gauges
-    (Feature I step 2): one cheap place that already runs on every load refresh and on job end.
+    job being dispatched, race-free. It doubles as the publish point for the session gauges:
+    one cheap place that already runs on every load refresh and on job end.
     """
     _LIVE_WORKER["worker"] = worker
     capacity = max_sessions()
@@ -1053,7 +1053,7 @@ async def _request_fnc(req: Any) -> None:
     The load gate above already stops the server dispatching once we report full, so under
     automatic dispatch this rarely fires; it's the authoritative backstop for an explicitly
     dispatched job. An over-capacity job is *counted* as rejected and then admitted on the **busy
-    path** (Feature I step 3): rather than a bare `reject()` that strands the caller in a silent
+    path**: rather than a bare `reject()` that strands the caller in a silent
     room, we accept with the busy marker (`busy_accept_metadata`) so the entrypoint plays the
     pre-rendered "all lines busy" clip and disconnects — no models loaded. A still-under-cap job is
     accepted normally.
@@ -1124,7 +1124,7 @@ def run() -> None:
         agents.WorkerOptions(
             entrypoint_fnc=entrypoint,
             prewarm_fnc=prewarm,
-            # Concurrency / admission control (Feature I): report load from the live job count so
+            # Concurrency / admission control: report load from the live job count so
             # the server stops dispatching at capacity (the OOM rail), with an explicit reject as
             # the backstop. See `_worker_load_fnc` / `_request_fnc`.
             load_fnc=_worker_load_fnc,

@@ -1,4 +1,4 @@
-"""The "all lines busy" reply for the admission-control over-capacity path (Feature I, step 3).
+"""The "all lines busy" reply for the admission-control over-capacity path.
 
 A bare `reject()` leaves an over-capacity caller alone in a silent room with no idea why. Instead
 the worker briefly *accepts* the job (marking it via the agent's accept metadata), plays this

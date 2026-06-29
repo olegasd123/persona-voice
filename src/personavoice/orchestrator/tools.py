@@ -17,8 +17,8 @@ a warning so a persona that references an unconfigured tool still runs.
 Everything here is pure (no network, no ML deps) and the one shipped tool (`get_current_time`)
 takes an injectable clock, so the whole surface is unit-testable offline — the same discipline as
 `emotion.py` / `chunker.py`. Side-effecting or networked tools (weather, web search) are
-deliberately *not* shipped here: they must be added behind explicit gating (the plan's
-"gate any side-effecting tool").
+deliberately *not* shipped here: they must be added behind explicit gating — any
+side-effecting tool stays gated.
 """
 
 from __future__ import annotations

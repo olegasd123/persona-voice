@@ -154,7 +154,7 @@ def test_issue_requires_livekit_credentials(registry: PersonaRegistry) -> None:
         svc.issue()
 
 
-# --- Admission control: token-server 503 early gate (Feature I, step 4) -----------------------
+# --- Admission control: token-server 503 early gate -------------------------------------------
 
 
 def _gated_service(registry: PersonaRegistry, reader: object, *, gate: bool = True) -> TokenService:
@@ -866,7 +866,7 @@ def test_consent_disabled_without_store(registry: PersonaRegistry) -> None:
         svc.set_consent("alice", granted=True)
 
 
-# --- memory introspection (Feature L) -------------------------------------------------
+# --- memory introspection -------------------------------------------------------------
 
 
 def _seed_memory(store: MemoryStore, user: str) -> None:
@@ -1089,7 +1089,7 @@ def test_http_healthz_is_open(live_server: tuple[str, TokenService]) -> None:
 def test_http_healthz_reports_session_load(
     live_server: tuple[str, TokenService], monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    # Admission-control visibility (Feature I). `sessions_max` comes from config so it's always
+    # Admission-control visibility. `sessions_max` comes from config so it's always
     # present and authoritative; `sessions_active` comes from the worker's live gauge (only when
     # the exporter is present).
     from personavoice.obs import metrics_enabled, set_sessions
@@ -1474,7 +1474,7 @@ def test_http_consent_missing_granted_400(
     assert "granted" in body["error"]
 
 
-# --- HTTP: memory introspection routes (Feature L) ------------------------------------
+# --- HTTP: memory introspection routes ------------------------------------------------
 
 
 def test_http_memory_round_trip(consent_server: tuple[str, TokenService, MemoryStore]) -> None:

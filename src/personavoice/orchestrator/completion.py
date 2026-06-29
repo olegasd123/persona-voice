@@ -3,8 +3,8 @@
 Endpointing is otherwise pure Silero-VAD silence (`endpointing.py`): the agent treats *any*
 trailing pause as the end of a turn. That can't tell a mid-thought pause ("I think… *pause*
 …it's fine") from a finished sentence, so it both barges in on the user mid-thought and, with a
-longer silence window, adds dead air. This module is the cheap "is this utterance complete?" gate
-the plan calls for: a punctuation/heuristic classifier over the *transcript* of a VAD segment.
+longer silence window, adds dead air. This module is the cheap "is this utterance complete?" gate:
+a punctuation/heuristic classifier over the *transcript* of a VAD segment.
 
 `agent.py` consults it after VAD fires END_OF_SPEECH and STT returns text: a fragment that looks
 unfinished (trails off into an ellipsis, ends on a trailing conjunction / preposition / determiner

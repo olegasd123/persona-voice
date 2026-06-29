@@ -1,4 +1,4 @@
-"""Persona authoring helper (Feature K): draft a valid `Persona` from plain English.
+"""Persona authoring helper: draft a valid `Persona` from plain English.
 
 `POST /personas?user=` already lets a user author a persona, but it's a blank-page problem:
 the client has to fill in a system prompt, a voice ref, behavior knobs and session defaults

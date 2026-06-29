@@ -1,4 +1,4 @@
-"""Concurrency / admission control (Feature I) — the worker-side gate in `orchestrator/agent.py`.
+"""Concurrency / admission control — the worker-side gate in `orchestrator/agent.py`.
 
 These are the pure pieces: the capacity knob, the load value LiveKit gates dispatch on, and the
 `request_fnc` accept/reject decision. No livekit/WebRTC or GPU needed — the live `active_jobs`
@@ -138,7 +138,7 @@ async def test_request_fnc_admits_busy_path_at_capacity(monkeypatch: pytest.Monk
     assert rejected == [1]  # still counted for /metrics
 
 
-# --- Busy clip (Feature I, step 3) — the pure, offline-testable pieces ------------------------
+# --- Busy clip — the pure, offline-testable pieces -------------------------------------------
 
 
 def test_busy_accept_metadata_round_trips() -> None:
