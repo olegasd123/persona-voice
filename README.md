@@ -400,9 +400,20 @@ bad draft gets one repair retry, the id is de-duped against the curated + the us
 it into the existing New/Edit form, the user tweaks and confirms, and `POST /personas` does the
 write (human in the loop). The same path is on the CLI:
 
+Option A — run as a module (no reinstall)
+
 ```bash
-personavoice-persona draft "a patient French tutor who only speaks in B1"   # validated YAML → stdout
-personavoice-persona draft "a blunt PM interviewer" --out config/personas/pm2.yaml
+cd /Users/oleg/Dev/Common/persona-voice
+.venv/bin/python -m personavoice.persona.cli draft "a patient French tutor who only speaks in B1"   # validated YAML → stdout
+.venv/bin/python -m personavoice.persona.cli draft "a patient French tutor who only speaks in B1" --out config/personas/{take id from validated YAML}.yaml
+```
+
+Option B — register the short command, then use it
+
+```bash
+cd /Users/oleg/Dev/Common/persona-voice
+.venv/bin/pip install -e . --no-deps        # regenerates the console scripts
+.venv/bin/personavoice-persona draft "a patient French tutor who only speaks in B1"
 ```
 
 ### Voice cloning (zero-shot)
