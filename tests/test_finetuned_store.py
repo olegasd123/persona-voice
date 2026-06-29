@@ -6,8 +6,6 @@ from pathlib import Path
 
 import pytest
 
-from personavoice.adapters.tts.f5_mlx import _f5_kwargs
-from personavoice.models import VoiceRef
 from personavoice.persona import load_personas
 from personavoice.voice import (
     ClonedVoice,
@@ -31,14 +29,16 @@ def test_store_missing_manifest_is_empty(tmp_path: Path) -> None:
 
 def test_store_record_assign_and_reload(tmp_path: Path) -> None:
     store = FinetunedVoicesStore.load(tmp_path)
-    store.record(FinetunedVoice(name="my_voice", checkpoint_path="/ckpt/my_voice", engine="f5"))
+    store.record(
+        FinetunedVoice(name="my_voice", checkpoint_path="/ckpt/my_voice", engine="chatterbox")
+    )
     store.assign("companion", "my_voice")
 
     reloaded = FinetunedVoicesStore.load(tmp_path)
     assert reloaded.names() == ["my_voice"]
     assert "my_voice" in reloaded
     assert reloaded.assignment_for("companion") == "my_voice"
-    assert reloaded.get("my_voice").engine == "f5"
+    assert reloaded.get("my_voice").engine == "chatterbox"
 
 
 def test_store_voice_ref_carries_model_path(tmp_path: Path) -> None:
@@ -75,21 +75,6 @@ def test_store_corrupt_manifest_raises(tmp_path: Path) -> None:
     (tmp_path / "finetuned.json").write_text("{ not json")
     with pytest.raises(FinetunedVoiceError, match="invalid finetuned manifest"):
         FinetunedVoicesStore.load(tmp_path)
-
-
-# --------------------------------------------------------------------------------------
-# adapter wiring: VoiceRef.model_path
-# --------------------------------------------------------------------------------------
-
-
-def test_f5_kwargs_model_path_overrides_base() -> None:
-    kwargs = _f5_kwargs("hi", VoiceRef(id="v", model_path="/ckpt/v"), model="base-model")
-    assert kwargs["model_name"] == "/ckpt/v"  # the fine-tuned checkpoint, not the base
-
-
-def test_f5_kwargs_without_model_path_uses_base() -> None:
-    kwargs = _f5_kwargs("hi", VoiceRef(id="v"), model="base-model")
-    assert kwargs["model_name"] == "base-model"
 
 
 # --------------------------------------------------------------------------------------

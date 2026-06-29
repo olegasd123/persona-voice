@@ -31,6 +31,8 @@ that only captures and plays audio. All the models run on the server.
 - **Clone a voice** from a short (~10 s) sample and make a persona speak in it.
 - **Fine-tune a persona "brain"** with a LoRA adapter when prompting is not enough.
 - **Fine-tune a high-fidelity voice** for a target speaker, beyond a zero-shot clone.
+- **Call tools mid-conversation** — a persona can opt into function calls (e.g. checking the
+  clock) that run server-side before it answers, on a tool-capable LLM backend.
 - **Remember a user across sessions** — a consent-gated, per-user memory that recalls earlier
   facts in later calls.
 - **Run the same code on two very different machines** (a Mac for development, a CUDA GPU for
@@ -76,9 +78,9 @@ Five design ideas hold it together:
 |-------|-----------|-------------|-------------|
 | **STT** | `whisper_mlx` | `faster_whisper` / `parakeet` | ~2 GB |
 | **LLM** | `lmstudio` / `ollama` / `mlx_lm` | `vllm` | ~5–6 GB |
-| **TTS** | `kokoro` (fast, no clone) / `f5_mlx` (clone) | `orpheus` (presets) / `chatterbox` (clone) | ~3–4 GB |
+| **TTS** | `kokoro` (fast, no clone) | `chatterbox` (clone) | ~3–4 GB |
 | **Glue** | LiveKit Agents | LiveKit Agents (identical) | — |
-| **Train** | `mlx-lm` LoRA | LLaMA-Factory QLoRA / F5-TTS | — |
+| **Train** | `mlx-lm` LoRA | LLaMA-Factory QLoRA / Chatterbox voice tuning | — |
 
 Select a backend with `BACKEND=mac|cuda`. Each backend's `config/backends/<backend>.yaml` names
 the adapter, the model, and the per-adapter options. Environment interpolation
@@ -129,7 +131,6 @@ cp .env.example .env        # defaults to BACKEND=mac
 # 3. Validate the config and load the adapters.
 python -m personavoice.server --check
 #   ...or: BACKEND=cuda python -m personavoice.server --check
-#   ...or: ./scripts/dev_server.sh
 
 # 4. Run the tests.
 pytest
@@ -210,6 +211,17 @@ reply onto the published audio track. When VAD detects the user starting to spea
 Connect any LiveKit client — the [Agents Playground](https://agents-playground.livekit.io/) or
 the Flutter app — to talk.
 
+**Semantic endpointing** (optional, `PERSONAVOICE_SEMANTIC_ENDPOINTING=1`) layers a cheap
+"did they actually finish?" gate on top of the VAD silence. Pure VAD treats every pause as the
+end of a turn, so a mid-thought pause ("I think… *pause* …it's fine") gets answered too early.
+With it on, a transcript that reads as unfinished — trails off into an ellipsis ("I think…"),
+ends on a trailing conjunction/preposition/article or a filler like "um", or trails off on a
+hedging lead-in like "I guess" / "the thing is" (`orchestrator/completion.py`) — is **held** and
+merged with the next utterance into one turn. A grace window (`PERSONAVOICE_ENDPOINTING_GRACE_MS`, default 1500 ms) bounds the
+cost of a misjudged hold: if no continuation arrives, the held text is answered as-is. The gate is
+deliberately conservative (it only holds on clear continuation cues), so the worst case is that
+delay, never a dropped turn.
+
 ### Token server and self-hosted LiveKit
 
 A real client cannot join a room without a token, and it must never see the LiveKit secret. The
@@ -223,14 +235,56 @@ personavoice --token-server          # HTTP on PERSONAVOICE_HOST:PERSONAVOICE_PO
 
 | Route | Purpose |
 |-------|---------|
-| `GET /healthz` | liveness |
-| `GET /personas` | `{"personas": [{"id","name"}], "default": <id>}` |
-| `POST /token` | body `{"room"?, "identity"?, "persona"?}` → `{"url","token","room","identity","persona"}` |
+| `GET /healthz` | liveness; adds `sessions_active` / `sessions_max` when the worker is reporting load |
+| `GET /metrics` | Prometheus exposition (per-turn latency/outcome counters + session load); empty unless the `metrics` extra is installed |
+| `GET /personas[?user=]` | `{"personas": [{"id","name","description","voice","custom"}], "default": <id>}` — curated + the user's custom personas |
+| `POST /personas?user=` | create a custom persona (body = a persona draft) |
+| `POST /personas/draft?user=` | draft a persona from `{"description": ...}` via the cascade LLM — validated, **not** persisted (drop into the edit form) |
+| `PUT /personas/{id}?user=` / `DELETE /personas/{id}?user=` | edit / delete one of the user's own personas (curated are read-only) |
+| `GET /loras` | served LoRA adapters for a custom persona's `llm.lora` (`{"loras": [...], "supports_lora"}`) |
+| `GET /voices` | selectable voice catalog for the active backend (`{"voices": [...], "supports_cloning"}`) |
+| `POST /token` | body `{"room"?, "identity"?, "name"?, "persona"?, "voice"?, "cefr"?, "demeanor"?, "user"?}` → `{"url","token","room","identity","name","persona","voice","cefr","demeanor","user"}` |
+| `POST /voices/clone` | `?name=&authorized=1` + the wav as the raw body → enroll a clone |
+| `DELETE /voices/clone/{name}` | remove a cloned voice |
 
-`room`/`identity` are generated when omitted. The persona is validated against the registry,
-embedded in the token metadata, and echoed back, so the client can select it with a data message
-after connecting. If `PERSONAVOICE_API_TOKEN` is set, requests need `Authorization: Bearer …`.
-Tokens are standard HS256 JWTs in LiveKit's documented format (`server/tokens.py`).
+`room`/`identity` are generated when omitted. `identity` is the unique LiveKit participant id
+(`sub`); `name` is a cosmetic display-name claim that falls back to `identity`; `user` scopes a
+caller's custom personas and memory (see below). The persona and the per-session options (voice /
+CEFR / demeanor — see below) are validated, embedded in the token metadata, and echoed back, so
+the client can apply them with a data message after connecting. If `PERSONAVOICE_API_TOKEN` is
+set, requests need `Authorization: Bearer …`. Tokens are standard HS256 JWTs in LiveKit's
+documented format (`server/tokens.py`).
+
+### Session options (voice / CEFR / demeanor)
+
+Three per-conversation knobs, chosen before a call and swappable mid-call, layered on top of the
+persona (the client only *chooses*; the server *applies*):
+
+- **voice** — speak with any voice from the library (`GET /voices`) instead of the persona's
+  assigned voice, for this session only.
+- **cefr** — a CEFR level (`A1`…`C2`) that calibrates language difficulty for learners.
+- **demeanor** — `kind`, `natural` (the persona as authored), or `rude` (blunt but **bounded** —
+  brusque, never abusive).
+
+They ride the existing metadata/data-message rail: pass them to `POST /token` (validated +
+embedded in metadata) or send a `{"voice":…, "cefr":…, "demeanor":…}` data message to change them
+mid-call. The offline demos take `--voice/--cefr/--demeanor` so the behavior is testable without a
+client (e.g. `personavoice-stream-demo --wav q.wav --persona language_teacher --cefr a2`).
+
+**Moderation.** A pluggable input/output guard (`safety/`) wraps the LLM turn — off by default
+(no-op), enabled with `PERSONAVOICE_MODERATION=keyword`. The shipped rule guard short-circuits a
+crisis/self-harm utterance to a calm, resource-pointing reply and bounds abusive output, which is
+what *guarantees* the `rude` demeanor stays "brusque, not abusive". Recommended once `rude` is
+exposed to real users.
+
+**Dynamic emotion (per-utterance prosody).** Off by default; set `PERSONAVOICE_DYNAMIC_EMOTION=1`
+to have the persona color each reply individually. The model is asked to prefix a reply with one
+`[emotion]` tag (`neutral`, `happy`, `excited`, `calm`, `sad`, `serious`, `warm`, `curious`,
+`sympathetic`); the pipeline strips the tag before TTS, history, and the transcript, and applies it
+to the voice for that turn only. It's audible on a cloning backend (Chatterbox maps it to its
+`exaggeration` knob); a preset-only backend (Kokoro) ignores it gracefully, so the tag is a no-op
+there. Static per-persona `emotion` (in `config/voices.yaml` / a persona's `voice.emotion`) is
+unchanged and still the baseline when no tag is emitted.
 
 **Self-host the SFU.** `docker-compose.livekit.yml` brings up a LiveKit server (dev keys
 `devkey`/`secret`) plus the token server:
@@ -244,6 +298,38 @@ LIVEKIT_URL=ws://localhost:7880 LIVEKIT_API_KEY=devkey \
 `LIVEKIT_URL` is the address the **client** dials, so from a phone use the machine's LAN IP
 (`ws://192.168.x.y:7880`) and open UDP 7882. Use TLS (`wss://`) and a real key/secret in
 production.
+
+### Tool / function calling
+
+A persona can **call a tool mid-turn** instead of answering blind — the companion can check the
+wall clock, and the registry is the seam for a teacher's dictionary or an interviewer's question
+bank. A persona opts in by listing tool names in its YAML:
+
+```yaml
+# config/personas/companion.yaml
+tools:
+  - get_current_time
+```
+
+When a persona lists tools, the turn runs a bounded loop: the model is offered the tool schemas,
+and if it calls one the server executes it, feeds the result back, and lets the model answer.
+**Nothing is voiced during the tool round-trips** — TTS is deferred until the follow-up reply
+streams. A persona with no `tools:` is a pure conversationalist and is never sent any schema, so
+existing personas are unchanged.
+
+- **Backend support.** Routed on the OpenAI-compatible LLM backends (vLLM prod, LM Studio dev);
+  vLLM needs `--enable-auto-tool-choice --tool-call-parser <model-parser>` — the compose file
+  already passes these (`hermes` for Qwen2.5, overridable via `VLLM_TOOL_PARSER`). Other backends
+  (Ollama, mlx-lm) ignore the schemas and just answer — the capability degrades gracefully.
+- **Bounds.** `PERSONAVOICE_TOOL_MAX_ITERS` (default 4) caps the model↔tool round-trips before a
+  plain answer is forced; `PERSONAVOICE_TOOL_TIMEOUT` (default 10 s) bounds each tool call. A
+  hallucinated tool, bad arguments, a timeout, or a handler error become a short error string fed
+  back to the model rather than failing the turn.
+- **Built-ins.** Only safe, side-effect-free, offline tools ship (`get_current_time`); anything
+  networked or side-effecting (weather, web search) must be added behind explicit gating. New
+  tools are registered in `orchestrator/tools.py`. `personavoice.server --check` lists the
+  registry and warns when a persona references an unknown tool or one the active backend can't
+  route.
 
 ### Flutter client (iOS + Android)
 
@@ -273,12 +359,12 @@ sound distinct on whichever backend is active:
 # config/voices.yaml
 companion_soft:
   emotion: warm
-  presets: { kokoro: af_heart, orpheus: tara }   # Mac / CUDA
+  presets: { kokoro: af_heart }   # Mac preset
 pm_calm:
-  presets: { kokoro: am_michael, orpheus: leo }
+  presets: { kokoro: am_michael }
 ```
 
-A cloning backend (Chatterbox / F5) has no preset and falls back to its default voice, unless a
+A cloning backend like Chatterbox has no preset and falls back to its default voice, unless a
 **clone is assigned** to the persona (see below). `python -m personavoice.server --check` lists
 the loaded personas, voices, and clones, and warns if a persona will not sound distinct on the
 active backend.
@@ -291,17 +377,54 @@ client can also **switch persona mid-call** by publishing a data message — a b
 and the registry reloads from disk first, so editing a persona file takes effect without a
 restart.
 
+**Custom personas (multi-user).** Beyond the curated YAML, users can author their own personas at
+runtime over HTTP, scoped per `user_id` (the `?user=` query / `{"user": …}` token metadata): `POST
+/personas?user=`, `PUT`/`DELETE /personas/{id}?user=`, and `GET /personas?user=` (which merges the
+curated set with that user's own, each tagged `custom`). A draft is just a persona body — `name`
+and `system_prompt` are enough; the voice ref and LLM base model default to the curated default,
+and a `session_defaults` block bakes in CEFR/demeanor/voice the agent layers under any explicit
+session option. They persist to `PERSONAVOICE_USER_PERSONAS` (`<models>/user_personas.json`) and
+the agent resolves a `{"persona": <id>, "user": <uid>}` against this store — **curated always win
+on id clash**, so a user can't shadow or delete a built-in. A persona's `llm.lora` routes to a
+vLLM-served adapter; `GET /loras` lists the selectable ones (empty on Mac/LM Studio, where a LoRA
+is merged into the base model at train time).
+
+**Authoring helper (draft from a description).** Writing a persona from scratch is a blank-page
+problem, so an optional generator turns a one-line description into a validated draft. `POST
+/personas/draft?user=` with `{"description": "a patient French tutor who only speaks in B1"}` asks
+the configured cascade LLM (LM Studio on Mac — fully offline) to fill the persona shape, then
+validates it against the `Persona` model and **clamps** anything unservable: the prompt enumerates
+the legal `voice.ref` ids and served LoRA names, an invalid choice is repaired to a legal one, a
+bad draft gets one repair retry, the id is de-duped against the curated + the user's own, and
+`demeanor` is never authored to `rude`. The draft is **returned, not persisted** — the client drops
+it into the existing New/Edit form, the user tweaks and confirms, and `POST /personas` does the
+write (human in the loop). The same path is on the CLI:
+
+Option A — run as a module (no reinstall)
+
+```bash
+cd /Users/oleg/Dev/Common/persona-voice
+.venv/bin/python -m personavoice.persona.cli draft "a patient French tutor who only speaks in B1"   # validated YAML → stdout
+.venv/bin/python -m personavoice.persona.cli draft "a patient French tutor who only speaks in B1" --out config/personas/{take id from validated YAML}.yaml
+```
+
+Option B — register the short command, then use it
+
+```bash
+cd /Users/oleg/Dev/Common/persona-voice
+.venv/bin/pip install -e . --no-deps        # regenerates the console scripts
+.venv/bin/personavoice-persona draft "a patient French tutor who only speaks in B1"
+```
+
 ### Voice cloning (zero-shot)
 
 Clone a voice from a short sample and make a persona speak in it. Cloning needs a cloning TTS
-backend — `f5_mlx` on Mac or `chatterbox` on CUDA (Kokoro and Orpheus are preset-only):
+backend — `chatterbox` on CUDA (Kokoro is preset-only):
 
 ```bash
-# Install a cloning backend (one-time):
-pip install -e '.[clone-mac]'        # F5-TTS-mlx (Apple Silicon; CC-BY-NC weights)
-#   ...or, cross-platform / CUDA:  pip install -e '.[clone]'   # Chatterbox (MIT)
-# Then set the TTS adapter to the cloning backend in config/backends/<backend>.yaml
-# (mac: adapter: f5_mlx;  cuda: adapter: chatterbox).
+# Install the cloning backend (one-time):
+pip install -e '.[clone]'            # Chatterbox
+# Then set the CUDA TTS adapter to chatterbox in config/backends/cuda.yaml.
 
 # Clone from a wav (or --record 10 from the mic) and assign it to a persona:
 personavoice-clone --sample me.wav --name my_voice --assign companion
@@ -311,16 +434,33 @@ personavoice-clone --list             # cloned voices + their assignments
 personavoice-clone --unassign companion
 ```
 
-A clone is a stored reference sample plus, for reference-text models (F5), its transcript
-(auto-filled by the cascade's STT). It lands under the clones directory
+A clone is a stored reference sample plus its transcript (auto-filled by the cascade's STT).
+It lands under the clones directory
 (`PERSONAVOICE_CLONES_DIR`, default `<models>/clones`) with a `clones.json` manifest, so it
 **survives restarts** and the live agent picks it up at startup. Assigning a clone is
 non-destructive: it overlays the voice registry at resolve time and is only honored on a backend
-that can clone. Switching back to Kokoro/Orpheus simply restores the persona's preset voice.
+that can clone. Switching back to Kokoro simply restores the persona's preset voice.
 
-> **Licensing:** F5's default checkpoint has **CC-BY-NC** weights (non-commercial) — fine for Mac
-> dev. For anything you redistribute, clone with **Chatterbox** (MIT) on CUDA. See
-> **Models and licenses**.
+**Enroll from a client.** Besides the CLI, the token server exposes the library over HTTP:
+`GET /voices` lists every selectable voice (presets + clones + fine-tunes) with an `available`
+flag per the active backend, `POST /voices/clone` enrolls one from an uploaded wav (requires
+`authorized=1`, since cloning a real person's voice is sensitive), and `DELETE /voices/clone/{name}`
+removes it. A picked voice is then chosen per session via the **voice** session option above.
+Because clones/fine-tunes are only **audible on a cloning backend**, the catalog still lists them
+on Kokoro but marks them `available:false` with a reason. A "bring your own voice" session
+should run `chatterbox`.
+
+**Bundled voices.** The picker isn't empty on first run: `assets/seed_voices/` ships
+`Feminine.wav` + `Masculine.wav`, wired as **presets** in `config/voices.yaml` (their `sample`
+field). On a cloning backend (Chatterbox on CUDA) the backend zero-shot-clones the sample, so
+they're speakable out of the box with no enrollment step. They don't map onto Kokoro, so they
+don't appear on the Mac backend.
+
+To enroll **your own** wavs as clones, `personavoice-seed-voices`
+(`python scripts/seed_voices.py`) enrolls every wav in `assets/seed_voices/` as a clone named
+after its file stem. It goes through the same path a client upload uses and is **idempotent**
+(already-present clones are skipped; `--force` re-enrolls). On a preset-only backend the seeds
+still enroll but list `available:false`.
 
 ### Persona fine-tuning (LoRA)
 
@@ -364,6 +504,10 @@ for what was just said. It is **consent-gated** — nothing is stored or recalle
 in — and keyed per user (`{"user": "..."}` room/job metadata, or the LiveKit participant
 identity). The core memory (store, profile, keyword recall, distill) needs **no extra**.
 
+A user can set their own consent from the client: the app's **Settings → Privacy** toggle posts
+to the token server (`GET`/`POST /consent?user=<id>`), writing the same `consent.json` as the
+`personavoice-memory --grant`/`--revoke` CLI below — the CLI stays the operator backstop.
+
 ```bash
 # Try it offline (no LiveKit). --user opts that id in and keys their memory:
 personavoice-stream-demo --wav intro.wav --persona companion --user sam   # records + distills
@@ -401,9 +545,9 @@ pip install -e '.[voice-eval]'        # speaker-similarity A/B (Resemblyzer)
 # 1. Build the target-speaker dataset (metadata.csv of audio|text; auto-transcribe with the STT).
 personavoice-voice-train dataset --voice my_voice --audio-dir clips/ --probe-durations
 
-# 2. Fine-tune (F5-TTS by default; Chatterbox for the MIT path). Preview, then launch on the GPU.
-personavoice-voice-train run --voice my_voice --engine f5 --dry-run
-personavoice-voice-train run --voice my_voice --engine f5 --config training/voice/configs/my_voice.f5.yaml
+# 2. Fine-tune with Chatterbox. Preview, then launch on the GPU.
+personavoice-voice-train run --voice my_voice --dry-run
+personavoice-voice-train run --voice my_voice --config training/voice/configs/my_voice.chatterbox.yaml
 
 # 3. A/B vs the zero-shot clone — speaker similarity to held-out real target clips.
 personavoice-voice-train eval --voice my_voice --clone my_clone --target-dir held_out/ --margin 0.02 --register
@@ -415,18 +559,16 @@ personavoice-voice-train list
 
 A fine-tuned voice lands under `<models>/finetuned` with a `finetuned.json` manifest. Once
 assigned, it takes precedence in the registry — **fine-tuned ▶ clone ▶ preset** — and the cloning
-adapters (Chatterbox / F5) load the trained checkpoint via `VoiceRef.model_path`. For the
-engines, the dataset format, the verified F5 runner, and the licensing trade-off, see
+adapter loads the trained checkpoint via `VoiceRef.model_path`. For the dataset format and
+trainer config, see
 [training/voice/README.md](training/voice/README.md).
 
-> **Licensing:** a voice fine-tuned with F5 inherits **CC-BY-NC** weights — fine for dev /
-> personal personas, not commercial redistribution. Fine-tune **Chatterbox** (MIT) for anything
-> you ship, and only fine-tune voices you are authorized to use. See **Models and licenses**.
+Only fine-tune voices you are authorized to use.
 
 ### Run on CUDA (production)
 
 The `cuda` backend mirrors the Mac cascade: `faster_whisper`/`parakeet` (STT), `vllm` (LLM),
-`orpheus`/`chatterbox` (TTS). The LLM is served by a separate **vLLM** process so the app image
+`chatterbox` (TTS). The LLM is served by a separate **vLLM** process so the app image
 stays light; the STT and TTS models run in the persona-voice container.
 
 ```bash
@@ -438,9 +580,7 @@ docker compose up --build
 
 Both services share one GPU. The compose file documents the VRAM budget (about 10–12 GB: vLLM
 4-bit ~6–7 GB + STT ~2 GB + Chatterbox ~2–3 GB, within 16 GB) and caps vLLM's
-`--gpu-memory-utilization` so STT/TTS fit. Orpheus is more expressive but runs its own in-process
-vLLM (tight on one card) — prefer **Chatterbox** (MIT) for the single-GPU stack by setting
-`adapter: chatterbox` in `config/backends/cuda.yaml`.
+`--gpu-memory-utilization` so STT/TTS fit.
 
 Without Docker, run the pieces directly: `vllm serve Qwen/Qwen2.5-7B-Instruct-AWQ --quantization
 awq`, then `BACKEND=cuda personavoice-demo --wav question.wav` (needs the `cuda` extra plus
@@ -484,6 +624,42 @@ python scripts/run_eval.py --latency-json lat.json --wer-json wer.json \
 per-turn metrics record (STT / first-token / first-audio / total, plus barge-in and errors). A
 failed turn is logged and skipped — it never crashes the worker.
 
+The same per-turn record is also exported for **Prometheus**: the token server exposes
+`GET /metrics` (alongside `/healthz`, unauthenticated and un-throttled) with
+`personavoice_turns_total{persona,outcome}` and latency histograms
+(`personavoice_{stt,first_token,first_audio,turn}_seconds`). The exporter is the optional
+`metrics` extra (`pip install -e '.[metrics]'`, already in the CUDA server image); without it
+`/metrics` just serves an empty body. Because the agent worker (which records turns) and the token
+server (which serves `/metrics`) are usually separate processes, set the standard
+`PROMETHEUS_MULTIPROC_DIR` to a shared, writable directory on both so their metrics aggregate;
+otherwise each process exports only its own.
+
+**Concurrency / admission control.** A single GPU holds one conversation: a second concurrent
+caller runs in a second process that loads its own STT+TTS copy and OOMs a 16 GB card. The agent
+worker therefore admits **one session at a time** by default — set `PERSONAVOICE_MAX_SESSIONS` to
+change the cap, but scale out by running more workers (LiveKit balances across them) rather than
+raising it on one box. The worker reports its live load to LiveKit so the server stops dispatching
+once it's full, and is the backstop for an over-capacity job that still slips through. The count is
+visible on `GET /healthz` (`sessions_active` / `sessions_max`) and `GET /metrics`
+(`personavoice_sessions_active`, `personavoice_sessions_max`, `personavoice_sessions_rejected_total`).
+
+Rather than strand a turned-away caller in a silent room, an over-capacity job is briefly admitted
+to play a **"busy" clip** (a synthesized telephone busy tone by default, or your own WAV via
+`PERSONAVOICE_BUSY_CLIP`) plus a `{"event":"busy"}` data message, then disconnected — no models are
+loaded on that path. For a nicer UX you can also enable the **token-server early gate** with
+`PERSONAVOICE_ADMISSION_503=1`: `/token` then returns `503 + Retry-After` once the worker reports
+full, so the client backs off before connecting. It reads the worker's live count, so it needs a
+shared `PROMETHEUS_MULTIPROC_DIR` on both the worker and the token server, and is an optimization on
+top of the worker's load gate (it has a read→mint→connect race) — it fails open and mints when the
+count is unreadable.
+
+**Worker job executor (warm reuse).** On the Mac dev backend the worker runs each conversation in a
+**thread** (`PERSONAVOICE_JOB_EXECUTOR=thread`, the Mac default), so the models prewarmed at startup
+are reused across calls — a new call right after ending one is warm immediately. LiveKit's off-Windows
+default is a **process** per job, which reloads every model each conversation; on a single-session
+worker that makes every call pay the cold start (and back-to-back calls stall on the next prewarm).
+Set `PERSONAVOICE_JOB_EXECUTOR=process` to opt back into per-job isolation.
+
 **Load test and security.** Hammer the token server and confirm rate limiting kicks in:
 
 ```bash
@@ -509,11 +685,11 @@ src/personavoice/
   persona/                   # loader, prompt builder, registry
   voice/                     # registry + zero-shot clones + fine-tuned voices
   server/                    # settings, config, --check/--serve/--token-server; tokens.py
-  orchestrator/              # turn-based pipeline + chunker/streaming/turn/agent/endpointing
+  orchestrator/              # turn-based pipeline + chunker/streaming/turn/agent/endpointing/completion/tools
   training/                  # persona LoRA + voice/ fine-tuning: dataset/config/finetune/eval
   memory/                    # per-user store + profile + RAG + distill
   eval/                      # WER + MOS + dashboard gating
-  obs/                       # structured logging + per-turn latency metrics
+  obs/                       # structured logging + per-turn latency metrics + Prometheus exporter
 client/                      # Flutter app (iOS + Android), LiveKit SDK
 training/persona_lora/       # LoRA configs, seed datasets, workflow docs
 training/voice/              # voice fine-tune configs, sample dataset, workflow docs
@@ -537,18 +713,9 @@ tests/
 |-------|-----|------|---------|
 | STT | `mlx-community/whisper-large-v3-turbo` | `Systran/faster-whisper-large-v3` | MIT |
 | LLM | LM Studio / Ollama (any loaded model) | `Qwen/Qwen2.5-7B-Instruct` (vLLM) | model-dependent |
-| TTS | `hexgrad/Kokoro-82M` | `canopylabs/orpheus-3b-0.1-ft` | Apache-2.0 (see caveats) |
+| TTS | `hexgrad/Kokoro-82M` | `ResembleAI/chatterbox` | MIT |
 
-Licenses were verified against each model card (2026-06). Two caveats affect redistribution and
-commercial use:
-
-- **Orpheus-3b-0.1-ft** is tagged Apache-2.0, but its weights are fine-tuned from
-  **Llama-3.2-3B**, so Meta's Llama 3.2 Community License also applies. **Chatterbox**
-  (`ResembleAI/chatterbox`, MIT) is the clean-license CUDA alternative.
-- **F5-TTS** weights (the Mac cloning option and the default fine-tune engine) are **CC-BY-NC**
-  (non-commercial) because of the Emilia training set, even though the F5 *code* is MIT. So a
-  voice **fine-tuned** with F5 inherits CC-BY-NC too. For commercial cloning or fine-tuning, use
-  **Chatterbox** (MIT) on CUDA, or an Apache-licensed OpenF5 checkpoint.
+Licenses were verified against each model card (2026-06).
 
 > Licenses drift — **re-verify before any redistribution.**
 

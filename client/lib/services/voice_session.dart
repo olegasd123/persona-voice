@@ -2,8 +2,11 @@ import 'dart:async';
 import 'dart:convert';
 
 import 'package:flutter/foundation.dart';
-import 'package:livekit_client/livekit_client.dart';
+// livekit_client also exports a `SessionOptions` (for its agent API); hide it so the name
+// refers to our per-call overrides model.
+import 'package:livekit_client/livekit_client.dart' hide SessionOptions;
 
+import '../models/session_options.dart';
 import 'audio_session.dart';
 import 'telephony.dart';
 import 'token_client.dart';
@@ -84,6 +87,28 @@ class VoiceSession extends ChangeNotifier {
   Room? _room;
   EventsListener<RoomEvent>? _listener;
 
+  // --- Warm-up watchdog -------------------------------------------------------------------
+  // The agent only joins (and publishes its track, flipping [agentReady]) once the server
+  // worker is warm. If we join a room while the worker is still prewarming, automatic dispatch
+  // can miss us and isn't retried for an *existing* room — so the room would sit there with no
+  // assistant forever (the user's only recourse being to leave and re-enter). This watchdog
+  // closes that gap: if the assistant doesn't show within [_agentJoinGrace], we rejoin a *fresh*
+  // room (a new token = a new room, which re-triggers dispatch), up to [_maxAgentRetries] times.
+
+  /// How long after the room connects we wait for the assistant before assuming dispatch was
+  /// missed and rejoining. A warm agent joins in ~1 s; this tolerates a slow join without nagging.
+  static const _agentJoinGrace = Duration(seconds: 12);
+
+  /// How many automatic fresh-room rejoins to attempt before giving up and surfacing a note.
+  static const _maxAgentRetries = 2;
+
+  /// Re-mints a fresh grant (new room) for a rejoin; null disables the watchdog (e.g. unit
+  /// tests, or a caller that didn't supply one). Stored from [connect], survives a rejoin,
+  /// cleared on full teardown.
+  Future<JoinGrant> Function()? _regrant;
+  Timer? _agentWaitTimer;
+  int _agentRetries = 0;
+
   SessionStatus status = SessionStatus.idle;
   String? errorMessage;
   bool micEnabled = false;
@@ -95,6 +120,11 @@ class VoiceSession extends ChangeNotifier {
   /// "Connecting to assistant…" and the open mic is held muted until this flips true.
   bool agentReady = false;
   String persona = '';
+
+  /// The per-session overrides (voice / CEFR / demeanor) chosen for this call. Already applied
+  /// server-side from the token metadata; re-sent in the persona data message so a mid-call
+  /// persona switch keeps them.
+  SessionOptions options = const SessionOptions();
   MicMode micMode = MicMode.openMic;
   bool talking = false; // push-to-talk: true while the talk button is held
 
@@ -115,8 +145,25 @@ class VoiceSession extends ChangeNotifier {
 
   bool get isConnected => status == SessionStatus.connected;
 
-  Future<void> connect(JoinGrant grant) async {
+  /// Connect to the room described by [grant]. [regrant] (optional) re-mints a fresh grant so
+  /// the warm-up watchdog can rejoin a new room if the assistant never shows; omit it to keep
+  /// the old behaviour (wait indefinitely for the agent).
+  Future<void> connect(JoinGrant grant,
+      {SessionOptions options = const SessionOptions(),
+      Future<JoinGrant> Function()? regrant}) async {
     if (status == SessionStatus.connecting || status == SessionStatus.connected) return;
+    // A fresh user-initiated connect: reset the rejoin budget and remember how to re-mint.
+    _agentRetries = 0;
+    _regrant = regrant;
+    this.options = options;
+    await _openRoom(grant);
+  }
+
+  /// Open (or re-open) the LiveKit room for [grant] and bring the call to `connected`. Shared by
+  /// [connect] and the watchdog rejoin: the session-scoped pieces (the native system call and the
+  /// audio-interruption monitor) are started once and survive a rejoin, so swapping rooms doesn't
+  /// flicker the OS call UI — only the LiveKit room itself is replaced.
+  Future<void> _openRoom(JoinGrant grant) async {
     _setStatus(SessionStatus.connecting);
     persona = grant.persona;
     agentReady = false;
@@ -163,17 +210,20 @@ class VoiceSession extends ChangeNotifier {
 
       // Present this conversation as a native system call (CallKit / ConnectionService): it
       // appears in the OS call UI and its end/mute buttons drive the session via
-      // [onCallControlEvent]. Best-effort — a host without the native layer no-ops.
+      // [onCallControlEvent]. Best-effort — a host without the native layer no-ops. Started only
+      // on the first open; a watchdog rejoin swaps the room underneath the same system call.
       final systemCall = _systemCall ??= PlatformSystemCallController.instance;
       _callSub ??= systemCall.events.listen(onCallControlEvent);
-      _systemEndedCall = false;
-      final callId = _callId = generateCallId();
-      final callName = grant.persona.isEmpty ? 'Persona Voice' : grant.persona;
-      await systemCall.startCall(
-        callId: callId,
-        displayName: callName,
-        handle: grant.persona.isEmpty ? 'persona' : grant.persona,
-      );
+      final firstOpen = _callId == null;
+      if (firstOpen) {
+        _systemEndedCall = false;
+        final callName = grant.persona.isEmpty ? 'Persona Voice' : grant.persona;
+        await systemCall.startCall(
+          callId: _callId = generateCallId(),
+          displayName: callName,
+          handle: grant.persona.isEmpty ? 'persona' : grant.persona,
+        );
+      }
 
       await room.connect(grant.url, grant.token);
       // Hold the mic muted until the assistant is actually ready (see [setAgentReady]). Open-mic
@@ -183,8 +233,53 @@ class VoiceSession extends ChangeNotifier {
       await room.localParticipant?.setMicrophoneEnabled(false);
       // The agent selects its persona from a data message on connect.
       await _sendPersona(grant.persona);
-      await systemCall.reportConnected(callId);
+      if (firstOpen) await systemCall.reportConnected(_callId!);
       _setStatus(SessionStatus.connected);
+      // Start the warm-up watchdog: if the assistant doesn't join before the grace elapses, the
+      // dispatch was likely missed (worker still prewarming) — rejoin a fresh room. No-op once
+      // [agentReady] is already true (a warm agent that joined during connect) or without a regrant.
+      _armAgentWait();
+    } catch (e) {
+      errorMessage = e.toString();
+      _setStatus(SessionStatus.error);
+      await _teardown();
+    }
+  }
+
+  /// Arm the warm-up watchdog (idempotent — replaces any pending timer). A no-op when the
+  /// assistant is already present or no [_regrant] was supplied.
+  void _armAgentWait() {
+    _agentWaitTimer?.cancel();
+    _agentWaitTimer = null;
+    if (agentReady || _regrant == null) return;
+    _agentWaitTimer = Timer(_agentJoinGrace, () => unawaited(_onAgentWaitElapsed()));
+  }
+
+  /// The grace window elapsed with no assistant on the line. Rejoin a fresh room (which
+  /// re-triggers agent dispatch), up to [_maxAgentRetries]; after that, surface a gentle note and
+  /// stop — the call stays up so the user can keep waiting or hang up.
+  Future<void> _onAgentWaitElapsed() async {
+    _agentWaitTimer = null;
+    // Only act if we're still sitting connected with no assistant (it may have just joined, or
+    // the call may have moved to reconnecting/disconnected meanwhile).
+    if (status != SessionStatus.connected || agentReady) return;
+    final regrant = _regrant;
+    if (regrant == null) return;
+    if (_agentRetries >= _maxAgentRetries) {
+      errorMessage = "The assistant isn't responding. Try hanging up and calling again.";
+      notifyListeners();
+      return;
+    }
+    _agentRetries++;
+    errorMessage = null;
+    // Drop just the dead room (keep the OS call + audio monitor alive) and rejoin a fresh one.
+    await _teardownRoom();
+    _setStatus(SessionStatus.reconnecting);
+    try {
+      final grant = await regrant();
+      // The user may have hung up while we were re-minting; bail if we're no longer rejoining.
+      if (status != SessionStatus.reconnecting) return;
+      await _openRoom(grant);
     } catch (e) {
       errorMessage = e.toString();
       _setStatus(SessionStatus.error);
@@ -289,7 +384,10 @@ class VoiceSession extends ChangeNotifier {
   Future<void> _sendPersona(String personaId) async {
     final lp = _room?.localParticipant;
     if (lp == null || personaId.isEmpty) return;
-    final data = utf8.encode(jsonEncode({'persona': personaId}));
+    // Carry the session overrides alongside the persona so a mid-call persona switch keeps the
+    // chosen voice / CEFR / demeanor (the agent's data handler applies both — agent.py).
+    final payload = <String, dynamic>{'persona': personaId, ...options.toWireMap()};
+    final data = utf8.encode(jsonEncode(payload));
     await lp.publishData(data, reliable: true);
   }
 
@@ -324,6 +422,14 @@ class VoiceSession extends ChangeNotifier {
   void setAgentReady(bool ready) {
     if (ready == agentReady) return;
     agentReady = ready;
+    if (ready) {
+      // The assistant joined — stop the warm-up watchdog, reset the rejoin budget, and clear any
+      // "not responding" note left from a prior wait.
+      _agentWaitTimer?.cancel();
+      _agentWaitTimer = null;
+      _agentRetries = 0;
+      errorMessage = null;
+    }
     if (ready && micMode == MicMode.openMic && !interrupted && !micEnabled) {
       unawaited(_setMicEnabled(true));
     }
@@ -344,7 +450,32 @@ class VoiceSession extends ChangeNotifier {
     _setStatus(SessionStatus.disconnected);
   }
 
+  /// Tear down only the LiveKit room (listener + room), leaving the native system call and the
+  /// audio-interruption monitor intact. Used by the watchdog rejoin so swapping rooms doesn't end
+  /// and restart the OS call. The full [_teardown] is for ending the whole session.
+  Future<void> _teardownRoom() async {
+    _agentWaitTimer?.cancel();
+    _agentWaitTimer = null;
+    try {
+      await _listener?.dispose();
+      await _room?.disconnect();
+      await _room?.dispose();
+    } catch (e) {
+      debugPrint('voice session room teardown error: $e');
+    } finally {
+      _listener = null;
+      _room = null;
+      micEnabled = false;
+      agentSpeaking = false;
+      agentReady = false;
+    }
+  }
+
   Future<void> _teardown() async {
+    _agentWaitTimer?.cancel();
+    _agentWaitTimer = null;
+    _regrant = null;
+    _agentRetries = 0;
     try {
       // End the system call — unless its own UI already ended it (no redundant report).
       if (_callId != null && !_systemEndedCall) {

@@ -5,7 +5,7 @@ clone."""
 
 from .clone import ClonedVoice, CloneError, ClonesStore, VoiceCloner, validate_sample
 from .finetuned import FinetunedVoice, FinetunedVoiceError, FinetunedVoicesStore
-from .registry import VoiceError, VoiceRegistry
+from .registry import VoiceError, VoiceOption, VoiceRegistry
 
 __all__ = [
     "CloneError",
@@ -16,6 +16,7 @@ __all__ = [
     "FinetunedVoicesStore",
     "VoiceCloner",
     "VoiceError",
+    "VoiceOption",
     "VoiceRegistry",
     "validate_sample",
 ]

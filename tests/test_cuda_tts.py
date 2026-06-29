@@ -1,21 +1,15 @@
-"""CUDA TTS adapters (Orpheus, Chatterbox): voice resolution + PCM/waveform wrapping."""
+"""CUDA TTS adapter helpers."""
 
 from __future__ import annotations
 
 import pytest
 
-from personavoice.adapters.tts.chatterbox import ChatterboxTTS, _waveform_to_wav
-from personavoice.adapters.tts.orpheus import OrpheusTTS, _pcm16_to_wav, _resolve_voice
-from personavoice.models import VoiceRef
-
-
-def test_orpheus_flags() -> None:
-    adapter = OrpheusTTS(model="canopylabs/orpheus-3b-0.1-ft")
-    assert adapter.name == "orpheus"
-    assert adapter.implemented is True
-    # Orpheus exposes preset voices only (no reference-sample input); cloning is Chatterbox.
-    assert adapter.supports_cloning is False
-    assert adapter.sample_rate == 24000
+from personavoice.adapters.tts.chatterbox import (
+    _DEFAULT_EXAGGERATION,
+    ChatterboxTTS,
+    _resolve_exaggeration,
+    _waveform_to_wav,
+)
 
 
 def test_chatterbox_flags() -> None:
@@ -25,28 +19,24 @@ def test_chatterbox_flags() -> None:
     assert adapter.supports_cloning is True
 
 
-def test_resolve_voice_preset_vs_clone_ref() -> None:
-    # A bare preset name is honored as-is.
-    assert _resolve_voice(VoiceRef(id="leo"), default="tara") == "leo"
-    # A clone-style ref falls back to the default preset (cloning is a separate feature).
-    assert _resolve_voice(VoiceRef(id="voices/hr_warm"), default="tara") == "tara"
-    assert _resolve_voice(VoiceRef(id=""), default="tara") == "tara"
+def test_resolve_exaggeration_maps_emotion_words() -> None:
+    # Known descriptive words map to their configured intensity; case/space-insensitive.
+    assert _resolve_exaggeration("neutral", _DEFAULT_EXAGGERATION) == 0.5
+    assert _resolve_exaggeration("  Excited ", _DEFAULT_EXAGGERATION) == 0.8
+    # The dynamic-emotion vocabulary is covered too.
+    assert _resolve_exaggeration("sad", _DEFAULT_EXAGGERATION) == 0.4
+    assert _resolve_exaggeration("happy", _DEFAULT_EXAGGERATION) == 0.7
 
 
-def test_pcm16_to_wav_roundtrips_through_decode() -> None:
-    np = pytest.importorskip("numpy")
-    pytest.importorskip("soundfile")
-    from personavoice.audio import decode_wav
+def test_resolve_exaggeration_accepts_literal_number_and_clamps() -> None:
+    assert _resolve_exaggeration("0.7", _DEFAULT_EXAGGERATION) == 0.7
+    assert _resolve_exaggeration("9.0", _DEFAULT_EXAGGERATION) == 2.0  # clamped to range max
 
-    # Two full-scale samples (max positive, max negative) at 24 kHz.
-    raw = b"\xff\x7f\x00\x80"  # int16 LE: 32767, -32768
-    wav = _pcm16_to_wav(raw, 24000)
-    samples, sr = decode_wav(wav)
-    assert sr == 24000
-    assert samples.shape == (2,)
-    assert samples[0] == pytest.approx(1.0, abs=1e-3)
-    assert samples[1] == pytest.approx(-1.0, abs=1e-3)
-    assert np.issubdtype(samples.dtype, np.floating)
+
+def test_resolve_exaggeration_falls_back_to_default() -> None:
+    # None and unknown words both fall back to the supplied default, never raise.
+    assert _resolve_exaggeration(None, 0.55) == 0.55
+    assert _resolve_exaggeration("sproingy", 0.55) == 0.55
 
 
 def test_waveform_to_wav_flattens_2d() -> None:

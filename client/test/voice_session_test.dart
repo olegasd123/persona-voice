@@ -210,6 +210,15 @@ void main() {
       s.setAgentReady(false);
       expect(s.agentReady, false);
     });
+
+    test('becoming ready clears a stale "not responding" note from a prior wait', () {
+      final s = VoiceSession();
+      // The warm-up watchdog leaves this note once it has exhausted its rejoins; a late agent
+      // join should wipe it so the user isn't told the assistant is absent while it's talking.
+      s.errorMessage = "The assistant isn't responding. Try hanging up and calling again.";
+      s.setAgentReady(true);
+      expect(s.errorMessage, isNull);
+    });
   });
 
   group('VoiceSession mic modes (no room)', () {

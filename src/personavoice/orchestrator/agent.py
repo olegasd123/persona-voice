@@ -35,19 +35,42 @@ from typing import Any
 from ..adapters.factory import Backend, build_backend
 from ..audio import pcm16_to_wav, wav_to_pcm16
 from ..memory import ConversationMemory
-from ..models import Persona
-from ..obs import configure_logging, turn_metrics_from_stream
+from ..models import Persona, SessionOptions
+from ..obs import (
+    configure_logging,
+    record_rejected_session,
+    record_turn,
+    set_sessions,
+    turn_metrics_from_stream,
+)
 from ..persona.registry import PersonaRegistry
+from ..persona.store import UserPersonaStore
+from ..safety import Moderator, moderator_from_env
 from ..server.config import (
     Settings,
     build_conversation_memory,
     load_backend_config,
+    load_user_persona_store,
     load_voice_registry,
+    max_sessions,
 )
 from ..voice.registry import VoiceRegistry
+from .busy import (
+    busy_accept_metadata,
+    busy_clip_wav,
+    busy_data_message,
+    is_busy_metadata,
+)
+from .completion import (
+    assess_completion,
+    endpointing_grace_s,
+    join_fragments,
+    semantic_endpointing_enabled,
+)
 from .endpointing import vad_load_kwargs
 from .pipeline import voice_ref_for
 from .streaming import StreamingPipeline, StreamMetrics
+from .tools import ToolRegistry, default_tool_registry
 from .turn import TurnController
 
 # LiveKit's runtime types (`rtc.AudioSource`, `rtc.Track`, ...) are only present when the
@@ -55,7 +78,7 @@ from .turn import TurnController
 # (and type-checkable) without it.
 logger = logging.getLogger("personavoice.agent")
 
-# Output track format. 24 kHz mono matches Kokoro/Orpheus output and is a common WebRTC
+# Output track format. 24 kHz mono matches Kokoro/Chatterbox output and is a common WebRTC
 # rate; per-sentence TTS wavs are resampled to this before being captured as frames.
 _OUT_SAMPLE_RATE = 24000
 _FRAME_MS = 20  # frame size pushed to the AudioSource (WebRTC-typical)
@@ -91,6 +114,28 @@ def _vad_event_type(agents: Any, rtc: Any) -> Any:
     return event_type
 
 
+async def _push_wav_to_source(source: Any, wav: bytes) -> None:
+    """Push one WAV's audio onto a WebRTC source as 20 ms PCM frames, paced to realtime.
+
+    Shared by the per-sentence TTS sink (`PersonaAgent._capture_wav`) and the admission-control
+    busy clip (`_serve_busy_clip`). `capture_frame` paces to realtime, so a barge-in cancellation
+    lands inside the loop.
+    """
+    _, rtc, _ = _require_livekit()
+    pcm = wav_to_pcm16(wav, _OUT_SAMPLE_RATE)
+    frame_samples = max(1, _OUT_SAMPLE_RATE * _FRAME_MS // 1000)
+    stride = frame_samples * 2  # 2 bytes per int16 sample
+    for off in range(0, len(pcm), stride):
+        data = pcm[off : off + stride]
+        frame = rtc.AudioFrame(
+            data=data,
+            sample_rate=_OUT_SAMPLE_RATE,
+            num_channels=1,
+            samples_per_channel=len(data) // 2,
+        )
+        await source.capture_frame(frame)
+
+
 class PersonaAgent:
     """Drives one participant's conversation: VAD → STT → streaming reply, with barge-in.
 
@@ -106,21 +151,61 @@ class PersonaAgent:
         source: Any,
         voices: VoiceRegistry | None = None,
         *,
+        options: SessionOptions | None = None,
+        moderator: Moderator | None = None,
+        tools: ToolRegistry | None = None,
         publish_transcript: TranscriptPublisher | None = None,
         memory: ConversationMemory | None = None,
         user_id: str | None = None,
+        semantic_endpointing: bool | None = None,
+        grace_s: float | None = None,
     ) -> None:
         self._backend = backend
         self._persona = persona
         self._source = source
         self._memory = memory
-        self._pipeline = StreamingPipeline(backend, persona, voices, memory=memory, user_id=user_id)
+        # Semantic endpointing: when on, an utterance that reads as a mid-thought
+        # pause (`completion.assess_completion`) is *held* and merged with the next one rather
+        # than answered immediately, and a grace timer flushes it if the user doesn't continue.
+        # Both default to the env toggles (off) so pure-VAD behavior is unchanged by default.
+        self._semantic_endpointing = (
+            semantic_endpointing
+            if semantic_endpointing is not None
+            else semantic_endpointing_enabled()
+        )
+        self._grace_s = grace_s if grace_s is not None else endpointing_grace_s()
+        # The unfinished utterance awaiting a continuation (with the STT time of its last
+        # segment, for the turn metric), and the pending grace-flush timer.
+        self._held: str | None = None
+        self._held_stt_s: float | None = None
+        self._flush_handle: asyncio.TimerHandle | None = None
+        # `_explicit_options` are the per-session overrides the client set (metadata / data
+        # message); `_options` is them merged over the persona's `session_defaults`, so a custom
+        # persona's authored defaults (e.g. a tutor that defaults to CEFR A1) apply unless the
+        # client overrides them. Recomputed on a persona switch.
+        self._explicit_options = options or SessionOptions()
+        self._options = self._effective_options(persona)
+        self._pipeline = StreamingPipeline(
+            backend,
+            persona,
+            voices,
+            options=self._options,
+            moderator=moderator,
+            tools=tools,
+            memory=memory,
+            user_id=user_id,
+        )
         self._turn = TurnController(self._capture_wav)
-        self._frame_samples = max(1, _OUT_SAMPLE_RATE * _FRAME_MS // 1000)
         # Publishes the assistant's spoken words back as a live transcript (the client renders
         # LiveKit `TranscriptionEvent`s). `None` (no transport, e.g. unit tests) skips it.
         self._publish_transcript = publish_transcript
-        # Strong refs to in-flight best-effort "final transcript" publishes (see `_speak`).
+        # Publishes the *user's* transcribed turns, attributed to their own participant/track so
+        # the client tags them as the user (not the assistant). Installed once the user's audio
+        # track is subscribed (its sid is unknown at construction); see
+        # `set_user_transcript_publisher`. `None` until then / in tests skips it.
+        self._publish_user_transcript: TranscriptPublisher | None = None
+        # Strong refs to in-flight best-effort "final transcript" publishes (see `_speak` and
+        # `_publish_user_line`).
         self._pending: set[asyncio.Task[None]] = set()
 
     @property
@@ -132,33 +217,66 @@ class PersonaAgent:
 
         Interrupts any in-flight reply so the next user turn is answered (and voiced) by the
         new persona; the shared `StreamingPipeline.history` carries over so the conversation
-        continues rather than resetting.
+        continues rather than resetting. The effective options are recomputed over the new
+        persona's `session_defaults` (the client's explicit overrides still win).
         """
         if persona.id == self._persona.id:
             return
         self._turn.interrupt()
         self._persona = persona
         self._pipeline.persona = persona
+        new_options = self._effective_options(persona)
+        if new_options != self._options:
+            self._options = new_options
+            self._pipeline.options = new_options
         logger.info("persona switched to %s mid-session", persona.id)
+
+    @property
+    def options(self) -> SessionOptions:
+        return self._options
+
+    def _effective_options(self, persona: Persona) -> SessionOptions:
+        """Explicit session overrides layered over the persona's authored option defaults."""
+        return self._explicit_options.merged_over(persona.session_defaults)
+
+    def set_options(self, options: SessionOptions) -> None:
+        """Apply per-session option changes mid-call (voice / CEFR / demeanor).
+
+        The given options are *merged over* the current explicit overrides, so a data message
+        that only sets `demeanor` keeps the existing voice/CEFR; the result is then layered over
+        the persona's `session_defaults`. The in-flight reply is interrupted so the next user
+        turn is answered under the new options (the pipeline reads them per turn).
+        """
+        new_explicit = options.merged_over(self._explicit_options)
+        new_effective = new_explicit.merged_over(self._persona.session_defaults)
+        if new_explicit == self._explicit_options and new_effective == self._options:
+            return
+        self._turn.interrupt()
+        self._explicit_options = new_explicit
+        self._options = new_effective
+        self._pipeline.options = new_effective
+        logger.info(
+            "session options updated mid-session: %s", new_effective.model_dump(exclude_none=True)
+        )
+
+    def set_user_transcript_publisher(self, publisher: TranscriptPublisher) -> None:
+        """Install the publisher for the user's transcribed turns (see `_publish_user_line`).
+
+        Done from the entrypoint once the user's audio track is subscribed — its track sid,
+        needed to attribute the transcription to the user, isn't known when the agent is built.
+        """
+        self._publish_user_transcript = publisher
 
     async def _capture_wav(self, wav: bytes) -> None:
         """Sink: push one sentence's WAV onto the WebRTC track as 20 ms PCM frames."""
-        _, rtc, _ = _require_livekit()
-        pcm = wav_to_pcm16(wav, _OUT_SAMPLE_RATE)
-        stride = self._frame_samples * 2  # 2 bytes per int16 sample
-        for off in range(0, len(pcm), stride):
-            data = pcm[off : off + stride]
-            frame = rtc.AudioFrame(
-                data=data,
-                sample_rate=_OUT_SAMPLE_RATE,
-                num_channels=1,
-                samples_per_channel=len(data) // 2,
-            )
-            # capture_frame paces to realtime, so cancellation (barge-in) lands here.
-            await self._source.capture_frame(frame)
+        await _push_wav_to_source(self._source, wav)
 
     def on_user_speech_started(self) -> None:
         """Barge-in: the user started talking — stop the assistant immediately."""
+        # The user resumed: if we're holding an unfinished utterance, don't let the grace timer
+        # flush it — the utterance they're now speaking will be merged onto it instead. No-op
+        # when nothing is held.
+        self._cancel_flush()
         if self._turn.interrupt():
             logger.info("barge-in: interrupted assistant mid-response")
             # Drop audio already queued in the source so playback stops now, not later.
@@ -184,8 +302,80 @@ class PersonaAgent:
         text = transcript.text.strip()
         if not text:
             return
+        self._begin_user_turn(text, stt_s)
+
+    def _begin_user_turn(self, text: str, stt_s: float | None) -> None:
+        """Answer a user turn now, or — with semantic endpointing — hold an unfinished one.
+
+        With semantic endpointing off (the default), every VAD utterance is answered
+        immediately. With it on, a fragment that reads as a mid-thought pause (a trailing
+        conjunction / preposition / determiner, or a filler) is merged onto any held fragment
+        and *held* again instead of triggering its own reply; a grace timer (`_schedule_flush`)
+        answers the held text if the user doesn't continue. So "I think… *pause* …it's fine"
+        becomes one turn, and a misjudged hold costs only the grace delay, never a lost turn.
+        """
+        if not self._semantic_endpointing:
+            self._speak_user_turn(text, stt_s)
+            return
+        self._cancel_flush()
+        combined = join_fragments(self._held, text)
+        verdict = assess_completion(combined)
+        if verdict.complete:
+            self._held = None
+            self._held_stt_s = None
+            self._speak_user_turn(combined, stt_s)
+        else:
+            self._held = combined
+            self._held_stt_s = stt_s
+            logger.info(
+                "endpointing: holding unfinished utterance (%s): %r", verdict.reason, combined
+            )
+            self._schedule_flush()
+
+    def _speak_user_turn(self, text: str, stt_s: float | None) -> None:
+        """Log and stream the persona's reply to a (possibly merged) user turn."""
         logger.info("user: %s", text)
+        self._publish_user_line(text)
         self._turn.begin(self._speak(text, stt_s))
+
+    def _publish_user_line(self, text: str) -> None:
+        """Publish the user's transcribed turn as one final transcript segment (fire-and-forget).
+
+        Emitted just before the assistant reply starts streaming, so the user's bubble lands
+        ahead of the answer. STT here is one-shot per VAD utterance, so the segment is published
+        `final` straight away — there's no interim→final growth like the assistant side. With
+        semantic endpointing this runs on the *merged* turn, so a held-then-continued utterance
+        shows as one line. Best-effort: scheduled as a task (this runs from sync turn code) whose
+        ref is held in `_pending`; a publish failure must never break the turn. No-op until the
+        user publisher is installed (`set_user_transcript_publisher`) or in tests without one.
+        """
+        publish = self._publish_user_transcript
+        if publish is None:
+            return
+        task = asyncio.create_task(publish(uuid.uuid4().hex, text, True))
+        self._pending.add(task)
+        task.add_done_callback(self._pending.discard)
+
+    def _schedule_flush(self) -> None:
+        """Arm the grace timer that answers a held utterance if no continuation arrives."""
+        loop = asyncio.get_running_loop()
+        self._flush_handle = loop.call_later(self._grace_s, self._flush_held)
+
+    def _cancel_flush(self) -> None:
+        """Cancel a pending grace-flush timer (the user continued, or we're tearing down)."""
+        if self._flush_handle is not None:
+            self._flush_handle.cancel()
+            self._flush_handle = None
+
+    def _flush_held(self) -> None:
+        """Grace window elapsed with no continuation — answer the held fragment as-is."""
+        self._flush_handle = None
+        held, stt_s = self._held, self._held_stt_s
+        self._held = None
+        self._held_stt_s = None
+        if held:
+            logger.info("endpointing: grace elapsed, answering held utterance")
+            self._speak_user_turn(held, stt_s)
 
     async def _speak(self, user_text: str, stt_s: float | None = None) -> Any:
         """Stream the reply audio while publishing the assistant transcript in step with it.
@@ -230,14 +420,16 @@ class PersonaAgent:
             error = repr(exc)
             logger.exception("turn failed during streaming")
         finally:
-            turn_metrics_from_stream(
+            tm = turn_metrics_from_stream(
                 self._persona.id,
                 user_text,
                 metrics,
                 stt_s=stt_s,
                 interrupted=interrupted,
                 error=error,
-            ).log(logger)
+            )
+            tm.log(logger)
+            record_turn(tm)  # optional Prometheus export; no-op without prometheus_client
             if publish is not None and parts:
                 # Fire-and-forget: on barge-in this generator is being cancelled, so awaiting
                 # here would just re-raise — schedule the final marker as its own task.
@@ -246,6 +438,7 @@ class PersonaAgent:
                 task.add_done_callback(self._pending.discard)
 
     async def aclose(self) -> None:
+        self._cancel_flush()
         self._turn.interrupt()
         await self._turn.join()
         for task in list(self._pending):
@@ -307,13 +500,23 @@ async def _consume_track(
         await vad_stream.aclose()
 
 
-def make_transcript_publisher(local_participant: Any, track_sid: str | None) -> TranscriptPublisher:
-    """Build the `TranscriptPublisher` that pushes assistant transcripts over WebRTC.
+def make_transcript_publisher(
+    local_participant: Any,
+    track_sid: str | None,
+    participant_identity: str | None = None,
+) -> TranscriptPublisher:
+    """Build a `TranscriptPublisher` that pushes transcripts over WebRTC.
 
     Lives here (not in `PersonaAgent`) so the LiveKit-specific `rtc.Transcription` construction
     stays out of the testable turn logic. Each call publishes one segment (growing `text`,
     flipped to `final` at the end); failures are swallowed so a transcript hiccup never breaks
     the turn. If the track sid is unknown, returns a no-op.
+
+    `participant_identity` is whom the segment is attributed to; it defaults to the publishing
+    (local) participant — the assistant. For the *user's* transcript we publish on the user's
+    behalf, so pass their identity + their audio track sid: the agent may publish a
+    transcription for any participant's track, and the client tags it by that identity (so the
+    user's words render as the user, not the assistant).
     """
 
     async def _noop(_seg_id: str, _text: str, _is_final: bool) -> None:
@@ -321,6 +524,7 @@ def make_transcript_publisher(local_participant: Any, track_sid: str | None) -> 
 
     if local_participant is None or not track_sid:
         return _noop
+    identity = participant_identity or local_participant.identity
 
     async def _publish(seg_id: str, text: str, is_final: bool) -> None:
         _, rtc, _ = _require_livekit()
@@ -335,13 +539,13 @@ def make_transcript_publisher(local_participant: Any, track_sid: str | None) -> 
             )
             await local_participant.publish_transcription(
                 rtc.Transcription(
-                    participant_identity=local_participant.identity,
+                    participant_identity=identity,
                     track_sid=track_sid,
                     segments=[segment],
                 )
             )
         except Exception:  # transcript publishing must never break the turn
-            logger.debug("failed to publish assistant transcript", exc_info=True)
+            logger.debug("failed to publish transcript for %s", identity, exc_info=True)
 
     return _publish
 
@@ -415,6 +619,96 @@ def resolve_user_id(sources: list[str | None]) -> str | None:
     return None
 
 
+def resolve_session_options(sources: list[str | None]) -> SessionOptions:
+    """Merge `SessionOptions` across metadata sources (highest priority first).
+
+    Each source can set a different subset of fields (voice / cefr / demeanor); they're
+    merged so a higher-priority source's set fields win, matching how the client may put some
+    options on the job and others on the room. The analog of `persona_id_from_metadata` for
+    the session-options rail.
+    """
+    merged = SessionOptions()
+    for src in reversed(sources):  # apply lowest priority first so the highest wins
+        merged = SessionOptions.from_metadata(src).merged_over(merged)
+    return merged
+
+
+# How long to wait for the caller to appear so we can read its token metadata. The agent is
+# dispatched *because* a participant joined, so it's normally already present; this just closes
+# the brief window before the initial room state syncs. Override with PERSONAVOICE_PARTICIPANT_WAIT.
+_PARTICIPANT_WAIT_S = float(os.getenv("PERSONAVOICE_PARTICIPANT_WAIT", "10") or "10")
+
+
+def _participant_metadata(room: Any) -> str | None:
+    """The first remote participant's token metadata, or None.
+
+    The token server embeds the per-call selection (persona / voice / cefr / demeanor / user) in
+    the caller's LiveKit access-token metadata (see `server/token_server.py`), which surfaces
+    here as the participant's `metadata` once it has joined the room. This is the *reliable*
+    selection channel: room/job metadata are empty under automatic dispatch, and the client's
+    on-connect data message can race the agent joining and be dropped. Tolerant of a room with
+    no participants (returns None) so the callers fall through to room/job metadata.
+    """
+    participants = getattr(room, "remote_participants", None) or {}
+    for participant in participants.values():
+        meta = getattr(participant, "metadata", None)
+        if isinstance(meta, str) and meta.strip():
+            return meta
+    return None
+
+
+def _local_metadata(ctx: Any) -> str | None:
+    """The agent's own participant metadata (the channel `_request_fnc` stamps a busy job on).
+
+    LiveKit bakes a job's accept metadata into the agent's join token, so it surfaces here as the
+    local participant's metadata once connected. Tolerant of a context without a room/participant.
+    """
+    part = getattr(getattr(ctx, "room", None), "local_participant", None)
+    meta = getattr(part, "metadata", None)
+    return meta if isinstance(meta, str) else None
+
+
+async def _serve_busy_clip(ctx: Any) -> None:
+    """Play the pre-rendered "all lines busy" clip to an over-capacity caller, then end the job.
+
+    Runs only for a job `_request_fnc` admitted on the over-cap path (tagged via accept metadata).
+    Deliberately builds no backend or `PersonaAgent`: the clip is a static WAV (see `busy.py`), so a
+    caller who slips past the load gate hears why instead of sitting in a silent room — with zero
+    model load or inference. Every step is best-effort (a failure to publish/play must still let the
+    job tear down) and the job is shut down at the end so the slot frees immediately.
+    """
+    _, rtc, _ = _require_livekit()
+    logger.info("at capacity: serving the busy clip to an over-capacity caller")
+    source = rtc.AudioSource(_OUT_SAMPLE_RATE, 1)
+    track = rtc.LocalAudioTrack.create_audio_track("assistant-voice", source)
+    with contextlib.suppress(Exception):
+        await ctx.room.local_participant.publish_track(
+            track, rtc.TrackPublishOptions(source=rtc.TrackSource.SOURCE_MICROPHONE)
+        )
+    # A data message first so a client can show a "busy" banner even if it isn't playing audio.
+    with contextlib.suppress(Exception):
+        await ctx.room.local_participant.publish_data(
+            busy_data_message(), reliable=True, topic="admission"
+        )
+    with contextlib.suppress(Exception):
+        await _push_wav_to_source(source, busy_clip_wav())
+    ctx.shutdown(reason="at capacity")
+
+
+async def _await_participant(ctx: Any) -> None:
+    """Best-effort wait for the caller to join so its token metadata is readable.
+
+    Uses `JobContext.wait_for_participant` when present, bounded by a timeout so a caller that
+    never appears can't hang the job. Tolerates SDKs without the method (and any wait error):
+    we then just read whatever room state has already synced after `connect`.
+    """
+    waiter = getattr(ctx, "wait_for_participant", None)
+    if waiter is None:
+        return
+    with contextlib.suppress(Exception):
+        await asyncio.wait_for(waiter(), timeout=_PARTICIPANT_WAIT_S)
+
+
 def _default_persona_id(registry: PersonaRegistry) -> str:
     """The fallback persona: `PERSONAVOICE_PERSONA` if it's known, else the first registered."""
     env = os.getenv("PERSONAVOICE_PERSONA")
@@ -423,16 +717,49 @@ def _default_persona_id(registry: PersonaRegistry) -> str:
     return registry.ids()[0] if len(registry) else "companion"
 
 
-def _select_persona(ctx: Any, registry: PersonaRegistry, override: str | None) -> Persona:
-    """Pick the persona for a job: explicit override → job/room metadata → default."""
+def _lookup_persona(
+    registry: PersonaRegistry,
+    user_store: UserPersonaStore | None,
+    user_id: str | None,
+    persona_id: str,
+) -> Persona | None:
+    """Resolve a persona id to a `Persona`, or None if unknown.
+
+    Curated personas win on id clash (so a user can't shadow a built-in); failing that, the
+    caller's own custom persona (from the multi-user store) is consulted when a user id is known.
+    """
+    if persona_id in registry:
+        return registry.get(persona_id)
+    if user_store is not None and user_id:
+        return user_store.get(user_id, persona_id)
+    return None
+
+
+def _select_persona(
+    ctx: Any,
+    registry: PersonaRegistry,
+    override: str | None,
+    *,
+    user_store: UserPersonaStore | None = None,
+    user_id: str | None = None,
+) -> Persona:
+    """Pick the persona for a job: explicit override → job/room metadata → default.
+
+    A custom persona (resolved against the caller's `user_id` in the user store) is honored
+    alongside the curated registry; an unknown id falls back to the default curated persona.
+    Priority: explicit override → the caller's token metadata → job/room metadata → default.
+    """
     default = _default_persona_id(registry)
+    room = getattr(ctx, "room", None)
     job_meta = getattr(getattr(ctx, "job", None), "metadata", None)
-    room_meta = getattr(getattr(ctx, "room", None), "metadata", None)
-    persona_id = resolve_persona_id([override, job_meta, room_meta], default)
-    if persona_id not in registry:
+    room_meta = getattr(room, "metadata", None)
+    part_meta = _participant_metadata(room)
+    persona_id = resolve_persona_id([override, part_meta, job_meta, room_meta], default)
+    persona = _lookup_persona(registry, user_store, user_id, persona_id)
+    if persona is None:
         logger.warning("requested persona %r is unknown; using %r", persona_id, default)
-        persona_id = default
-    return registry.get(persona_id)
+        persona = registry.get(default)
+    return persona
 
 
 # Process-global cache of the warmed backend + registries. On Windows the LiveKit worker uses a
@@ -471,11 +798,18 @@ def _ensure_warm() -> dict[str, Any]:
         backend = build_backend(load_backend_config(settings))
         voices = load_voice_registry(settings)
         registry = PersonaRegistry(settings.personas_dir)
+        user_personas = load_user_persona_store(settings)
         vad = _load_vad(silero)
         logger.info("prewarm: loading models (backend=%s)…", backend.name)
         # No event loop is running during prewarm, so drive the async warm-ups with asyncio.run.
         asyncio.run(_warmup_backend(backend, voices, registry))
-        _WARMED.update(backend=backend, voices=voices, registry=registry, vad=vad)
+        _WARMED.update(
+            backend=backend,
+            voices=voices,
+            registry=registry,
+            user_personas=user_personas,
+            vad=vad,
+        )
         return _WARMED
 
 
@@ -512,10 +846,11 @@ async def _warmup_backend(
 async def entrypoint(ctx: Any, *, persona_id: str | None = None) -> None:
     """LiveKit Agents job entrypoint: connect, publish a track, converse until disconnect.
 
-    The persona is selected per job: an explicit `persona_id` wins, then the job/room
-    metadata (`{"persona": "..."}`) the client set, then `PERSONAVOICE_PERSONA`/the first
-    registered persona. A client can also switch persona mid-call by sending a data message
-    (see `_data_text`); the registry hot-reloads so edited persona files take effect too.
+    The persona and session options (voice / CEFR / demeanor) are selected per job: an explicit
+    `persona_id` wins, then the caller's token metadata (`{"persona": "...", "voice": ...}` the
+    token server embedded), then job/room metadata, then `PERSONAVOICE_PERSONA`/the first
+    registered persona. A client can also switch persona or options mid-call by sending a data
+    message (see `_data_text`); the registry hot-reloads so edited persona files take effect too.
     """
     agents, rtc, silero = _require_livekit()
 
@@ -530,24 +865,62 @@ async def entrypoint(ctx: Any, *, persona_id: str | None = None) -> None:
     registry = proc_data.get("registry")
     if registry is None:
         registry = PersonaRegistry(settings.personas_dir)
+    user_personas = proc_data.get("user_personas")
+    if user_personas is None:
+        user_personas = load_user_persona_store(settings)
     vad = proc_data.get("vad")
-    persona = _select_persona(ctx, registry, persona_id)
-    logger.info("agent starting (backend=%s persona=%s)", backend.name, persona.id)
 
+    # Connect first, then read the caller's *token* metadata. The token server embeds the
+    # per-call selection (`{"persona","voice","cefr","demeanor","user"}`) in the client's
+    # LiveKit access token (see `server/token_server.py`), which surfaces as the participant's
+    # metadata once it's in the room. Under automatic dispatch the room/job metadata are empty
+    # and the client's on-connect data message races the agent joining, so this is the reliable
+    # channel; room/job metadata stay as a lower-priority fallback (explicit dispatch).
     await ctx.connect(auto_subscribe=agents.AutoSubscribe.AUDIO_ONLY)
 
-    # Cross-session memory: keyed by a stable user id from the room/job metadata
-    # (`{"user": "..."}`) or the remote participant's identity. Without one we run stateless;
-    # the facade is also dormant until that user grants consent (see `personavoice-memory`).
-    remote_ids = [p.identity for p in getattr(ctx.room, "remote_participants", {}).values()]
+    # Admission control: a job admitted only because it slipped past the load
+    # gate is tagged busy in `_request_fnc` (via the agent's accept metadata). Play the pre-rendered
+    # "all lines busy" clip and disconnect — no backend/PersonaAgent is built, so this path loads no
+    # models. Done right after connect, before any heavy work.
+    if is_busy_metadata(_local_metadata(ctx)):
+        await _serve_busy_clip(ctx)
+        return
+
+    await _await_participant(ctx)
+
     job_meta = getattr(getattr(ctx, "job", None), "metadata", None)
     room_meta = getattr(getattr(ctx, "room", None), "metadata", None)
-    user_id = resolve_user_id([job_meta, room_meta]) or (remote_ids[0] if remote_ids else None)
+    part_meta = _participant_metadata(getattr(ctx, "room", None))
+    # Highest priority first: the caller's own token, then explicit-dispatch job/room metadata.
+    meta_sources = [part_meta, job_meta, room_meta]
+
+    # The user id (`{"user": "..."}`) scopes custom-persona resolution and keys memory.
+    meta_user_id = resolve_user_id(meta_sources)
+    persona = _select_persona(
+        ctx, registry, persona_id, user_store=user_personas, user_id=meta_user_id
+    )
+    logger.info("agent starting (backend=%s persona=%s)", backend.name, persona.id)
+
+    # Cross-session memory: keyed by that stable user id, or the remote participant's identity.
+    # Without one we run stateless; the facade is also dormant until that user grants consent
+    # (see `personavoice-memory`).
+    remote_ids = [p.identity for p in getattr(ctx.room, "remote_participants", {}).values()]
+    user_id = meta_user_id or (remote_ids[0] if remote_ids else None)
     memory = build_conversation_memory(settings, backend, persona) if user_id else None
     if memory is not None:
         logger.info(
             "memory enabled for user %r (persona memory=%s)", user_id, persona.memory.enabled
         )
+
+    # Per-session overrides (voice / CEFR / demeanor) the caller chose, plus the moderation
+    # guard (no-op unless PERSONAVOICE_MODERATION is set).
+    options = resolve_session_options(meta_sources)
+    if options.any_set():
+        logger.info("session options: %s", options.model_dump(exclude_none=True))
+    moderator = moderator_from_env()
+    # Tool / function calling: the bundled safe tools. A persona only calls the tools
+    # it lists in `persona.tools`, so this is inert for the tool-free personas.
+    tools = default_tool_registry()
 
     source = rtc.AudioSource(_OUT_SAMPLE_RATE, 1)
     track = rtc.LocalAudioTrack.create_audio_track("assistant-voice", source)
@@ -563,6 +936,9 @@ async def entrypoint(ctx: Any, *, persona_id: str | None = None) -> None:
         persona,
         source,
         voices,
+        options=options,
+        moderator=moderator,
+        tools=tools,
         publish_transcript=publisher,
         memory=memory,
         user_id=user_id,
@@ -570,28 +946,159 @@ async def entrypoint(ctx: Any, *, persona_id: str | None = None) -> None:
     consumers: set[asyncio.Task[None]] = set()  # keep strong refs so tasks aren't GC'd
 
     @ctx.room.on("track_subscribed")
-    def _on_track(track: Any, *_: Any) -> None:
+    def _on_track(track: Any, publication: Any = None, participant: Any = None, *_: Any) -> None:
         if track.kind == rtc.TrackKind.KIND_AUDIO:
+            # Attribute the user's transcript to their own participant + audio track so the client
+            # tags it as the user; the agent publishes the transcription on their behalf. The sid
+            # is only knowable now (track subscribed), which is why this is wired here, not at
+            # PersonaAgent construction. Falls back gracefully if the SDK omits publication/sender.
+            user_sid = getattr(publication, "sid", None) or getattr(track, "sid", None)
+            user_identity = getattr(participant, "identity", None)
+            if user_identity:
+                agent.set_user_transcript_publisher(
+                    make_transcript_publisher(
+                        ctx.room.local_participant, user_sid, participant_identity=user_identity
+                    )
+                )
             task = asyncio.create_task(_consume_track(agent, track, silero, vad))
             consumers.add(task)
             task.add_done_callback(consumers.discard)
 
     @ctx.room.on("data_received")
     def _on_data(data: Any, *_: Any) -> None:
-        pid = persona_id_from_metadata(_data_text(data))
-        if not pid:
-            return
-        if pid in registry:
-            registry.reload()  # pick up any edits to the persona file before swapping
-            agent.set_persona(registry.get(pid))
-        else:
-            logger.warning("ignoring data request to switch to unknown persona %r", pid)
+        text = _data_text(data)
+        pid = persona_id_from_metadata(text)
+        if pid:
+            registry.reload()  # pick up any edits to a curated persona file before swapping
+            if user_personas is not None:
+                user_personas.reload()  # and any custom persona created since the call began
+            target = _lookup_persona(registry, user_personas, user_id, pid)
+            if target is not None:
+                agent.set_persona(target)
+            else:
+                logger.warning("ignoring data request to switch to unknown persona %r", pid)
+        # A data message can also change session options (voice / CEFR / demeanor) mid-call.
+        options = SessionOptions.from_metadata(text)
+        if options.any_set():
+            agent.set_options(options)
 
     # Stay alive until the job is cancelled (participant leaves / worker shuts down).
     try:
         await asyncio.Event().wait()
     finally:
         await agent.aclose()
+
+
+# --- Concurrency / admission control ----------------------------------------------------------
+# The VRAM budget assumes one conversation. On non-Windows each job runs in its own process that
+# loads its own STT+TTS copy, so a second concurrent caller doubles audio-model VRAM and OOMs a
+# 16 GB card. One session per worker is therefore the safe default (`config.max_sessions`); scale
+# out by running more workers (LiveKit balances across them), not by raising this.
+# `num_idle_processes=1` alone does *not* cap concurrency (it only caps the warm pool) — these
+# hooks do.
+# The main worker process owns the live count; `load_fnc` runs there (every 0.5 s and right before
+# each availability check) and stashes the worker so `request_fnc` — which only receives a
+# JobRequest — can read the same authoritative `active_jobs`.
+_LIVE_WORKER: dict[str, Any] = {}
+
+
+def _session_load(active: int, capacity: int) -> float:
+    """Load LiveKit gates dispatch on: 0.0 idle … 1.0 at/over capacity (capacity assumed ≥ 1)."""
+    if capacity <= 0:
+        return 1.0
+    return min(1.0, active / capacity)
+
+
+def _load_threshold(capacity: int) -> float:
+    """`load_threshold` for `WorkerOptions`: the worker reports unavailable once load reaches it.
+
+    `_session_load` is `active/capacity`, so a threshold just under the "all slots full" boundary
+    keeps `capacity-1` slots open and refuses the capacity-th. Must be < 1 (the framework rejects
+    `>= 1` in prod); `(capacity - 0.5)/capacity` gives 0.5 at capacity 1, rising toward 1.
+    """
+    capacity = max(1, capacity)
+    return (capacity - 0.5) / capacity
+
+
+def _active_job_count(worker: Any) -> int:
+    """Live LiveKit job count, defensively (assume 0 if the API ever drifts — fail open)."""
+    if worker is None:
+        return 0
+    try:
+        return len(worker.active_jobs)
+    except Exception:  # pragma: no cover - guards against LiveKit API drift
+        logger.debug("could not read worker.active_jobs; assuming 0", exc_info=True)
+        return 0
+
+
+def _worker_load_fnc(worker: Any) -> float:
+    """LiveKit `load_fnc`: report current load so the server stops dispatching at capacity.
+
+    This is the real OOM rail. It runs in the main worker process — every 0.5 s and, crucially,
+    immediately before each availability check — so reporting `active/capacity` here (combined
+    with `load_threshold` and the framework's reserved-slot accounting) is what prevents a second
+    job being dispatched, race-free. It doubles as the publish point for the session gauges:
+    one cheap place that already runs on every load refresh and on job end.
+    """
+    _LIVE_WORKER["worker"] = worker
+    capacity = max_sessions()
+    active = _active_job_count(worker)
+    set_sessions(active, capacity)
+    return _session_load(active, capacity)
+
+
+async def _request_fnc(req: Any) -> None:
+    """LiveKit `request_fnc`: admit a job only while under the per-worker session cap.
+
+    The load gate above already stops the server dispatching once we report full, so under
+    automatic dispatch this rarely fires; it's the authoritative backstop for an explicitly
+    dispatched job. An over-capacity job is *counted* as rejected and then admitted on the **busy
+    path**: rather than a bare `reject()` that strands the caller in a silent
+    room, we accept with the busy marker (`busy_accept_metadata`) so the entrypoint plays the
+    pre-rendered "all lines busy" clip and disconnects — no models loaded. A still-under-cap job is
+    accepted normally.
+    """
+    capacity = max_sessions()
+    active = _active_job_count(_LIVE_WORKER.get("worker"))
+    if active >= capacity:
+        logger.warning(
+            "at capacity (%d/%d active); admitting job %s on the busy path",
+            active,
+            capacity,
+            getattr(req, "id", "?"),
+        )
+        record_rejected_session()
+        await req.accept(metadata=busy_accept_metadata())
+        return
+    await req.accept()
+
+
+def _job_executor_type(agents: Any, backend: str) -> Any:
+    """Pick the LiveKit job executor: THREAD (reuse the warm process) vs PROCESS (isolate).
+
+    LiveKit's default off Windows is **PROCESS** — every job runs in its own subprocess that
+    re-runs `prewarm` and reloads STT/LLM/TTS from scratch. With one session per worker that means
+    *every* conversation pays the full model-load cold start, and ending a call then immediately
+    starting another stalls the new one behind a fresh prewarm (the warm spare hasn't reloaded yet).
+
+    **THREAD** keeps every job in the worker process, so the process-global `_WARMED` cache (see
+    `prewarm`/`_ensure_warm`) is reused across conversations: models load **once** at startup and
+    every later call — back-to-back included — reuses them with no reload. That's the right shape
+    for the 1-session-per-worker design (and it also removes the second-process OOM that admission
+    control guards against, since there's only ever one copy of the audio models). The trade-off is
+    no per-job process isolation, which is fine for a serialized single session.
+
+    Default: THREAD on the Mac dev backend; LiveKit's platform default (PROCESS on Linux/CUDA, where
+    isolation is validated) elsewhere. Override with `PERSONAVOICE_JOB_EXECUTOR=thread|process`.
+    """
+    choice = (os.getenv("PERSONAVOICE_JOB_EXECUTOR") or "").strip().lower()
+    if not choice:
+        choice = "thread" if backend == "mac" else "process"
+    if choice == "thread":
+        return agents.JobExecutorType.THREAD
+    if choice != "process":
+        logger.warning("PERSONAVOICE_JOB_EXECUTOR=%r is not thread|process; using process", choice)
+    return agents.JobExecutorType.PROCESS
 
 
 def run() -> None:
@@ -606,10 +1113,27 @@ def run() -> None:
     agents, _, _ = _require_livekit()
     if len(sys.argv) < 2 or sys.argv[1].startswith("-"):
         sys.argv = [sys.argv[0], "start"]
+    capacity = max_sessions()
+    executor = _job_executor_type(agents, Settings.load().backend)
+    logger.info(
+        "admission control: max %d concurrent session(s) per worker; job executor=%s",
+        capacity,
+        executor.name.lower(),
+    )
     agents.cli.run_app(
         agents.WorkerOptions(
             entrypoint_fnc=entrypoint,
             prewarm_fnc=prewarm,
+            # Concurrency / admission control: report load from the live job count so
+            # the server stops dispatching at capacity (the OOM rail), with an explicit reject as
+            # the backstop. See `_worker_load_fnc` / `_request_fnc`.
+            load_fnc=_worker_load_fnc,
+            load_threshold=_load_threshold(capacity),
+            request_fnc=_request_fnc,
+            # THREAD on Mac (default) keeps all jobs in one process so the prewarmed models are
+            # reused across conversations — no per-call model reload / cold-start stall on the next
+            # caller. See `_job_executor_type`. PROCESS elsewhere unless overridden.
+            job_executor_type=executor,
             # Single shared GPU: keep exactly one warm runner so the models load once. The prod
             # default (one per CPU, up to 4) would prewarm several runners and multiply VRAM —
             # an OOM on a 16 GB card (each runner holds its own STT+TTS copy).

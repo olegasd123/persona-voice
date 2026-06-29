@@ -1,6 +1,6 @@
 """TTS adapter base class.
 
-Concrete backends (f5_mlx, orpheus, chatterbox, kokoro) subclass this and override
+Concrete backends (chatterbox, kokoro) subclass this and override
 `stream_tts`, `synthesize`, and (where supported) `clone_voice`. `supports_cloning`
 lets the orchestrator/persona layer know whether a backend can do zero-shot voices.
 """
@@ -64,10 +64,10 @@ class TTSAdapter:
     async def clone_voice(self, sample_wav: bytes, name: str) -> VoiceRef:
         """Create a zero-shot voice clone from a short sample.
 
-        The cloning backends (Chatterbox, F5) synthesize directly from a reference WAV, so a
+        Cloning backends synthesize directly from a reference WAV, so a
         clone is the persisted sample itself: store it and return a `VoiceRef` pointing at it.
         `synthesize` then passes `voice.sample_path` to the model as the reference. Backends
-        that can't clone (Kokoro, Orpheus presets) leave `supports_cloning=False` and reject.
+        that can't clone leave `supports_cloning=False` and reject.
         """
         if not self.supports_cloning:
             raise NotImplementedError(f"{self.name} does not support voice cloning")

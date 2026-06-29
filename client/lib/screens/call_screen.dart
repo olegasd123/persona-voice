@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import '../models/persona.dart';
+import '../models/session_options.dart';
 import '../services/audio_session.dart';
 import '../services/token_client.dart';
 import '../services/voice_session.dart';
@@ -13,11 +14,26 @@ class CallScreen extends StatefulWidget {
     required this.session,
     required this.grant,
     required this.personas,
+    this.options = const SessionOptions(),
+    this.initialMicMode = MicMode.openMic,
+    this.regrant,
   });
 
   final VoiceSession session;
   final JoinGrant grant;
   final List<Persona> personas;
+
+  /// Per-session overrides (voice / CEFR / demeanor) for this call.
+  final SessionOptions options;
+
+  /// Re-mints a fresh grant (a new room) so the session can rejoin if the assistant never
+  /// joins this room (the worker was still prewarming when we connected). Null disables that
+  /// auto-rejoin — the call just waits for the agent indefinitely.
+  final Future<JoinGrant> Function()? regrant;
+
+  /// The mic mode the call opens in (the user's default from Settings). Applied before
+  /// connecting so push-to-talk stays muted through warm-up rather than auto-going-live.
+  final MicMode initialMicMode;
 
   @override
   State<CallScreen> createState() => _CallScreenState();
@@ -30,7 +46,16 @@ class _CallScreenState extends State<CallScreen> {
   void initState() {
     super.initState();
     _session.addListener(_onChange);
-    _session.connect(widget.grant);
+    _start();
+  }
+
+  Future<void> _start() async {
+    // Apply the preferred mic mode first (no-op for the default open-mic) so warm-up honours
+    // push-to-talk and doesn't bring the mic live before the user holds the talk button.
+    if (widget.initialMicMode != _session.micMode) {
+      await _session.setMicMode(widget.initialMicMode);
+    }
+    await _session.connect(widget.grant, options: widget.options, regrant: widget.regrant);
   }
 
   void _onChange() {
@@ -56,6 +81,16 @@ class _CallScreenState extends State<CallScreen> {
         agentReady: _session.agentReady,
       );
 
+  // Resolve the live persona id to its human display name; fall back to the id, then 'Call'.
+  String get _title {
+    final id = _session.persona;
+    if (id.isEmpty) return 'Call';
+    for (final p in widget.personas) {
+      if (p.id == id) return p.name;
+    }
+    return id;
+  }
+
   // The room is connected but the assistant hasn't joined yet — the server is still warming up.
   bool get _waitingForAgent =>
       _session.status == SessionStatus.connected && !_session.agentReady;
@@ -65,7 +100,7 @@ class _CallScreenState extends State<CallScreen> {
     final transcript = _session.transcript;
     return Scaffold(
       appBar: AppBar(
-        title: Text(_session.persona.isEmpty ? 'Call' : _session.persona),
+        title: Text(_title),
         actions: [
           if (widget.personas.length > 1)
             PopupMenuButton<String>(
@@ -178,16 +213,17 @@ class _WarmingUpBanner extends StatelessWidget {
     final scheme = Theme.of(context).colorScheme;
     return Container(
       width: double.infinity,
-      color: scheme.tertiaryContainer,
+      // Neutral gray — warming up is an informational state, not an error.
+      color: scheme.surfaceContainerHighest,
       padding: const EdgeInsets.symmetric(vertical: 10, horizontal: 16),
       child: Row(
         children: [
-          Icon(Icons.hourglass_top, size: 16, color: scheme.onTertiaryContainer),
+          Icon(Icons.hourglass_top, size: 16, color: scheme.onSurfaceVariant),
           const SizedBox(width: 8),
           Expanded(
             child: Text(
               'The assistant is warming up — one moment before you speak.',
-              style: TextStyle(color: scheme.onTertiaryContainer),
+              style: TextStyle(color: scheme.onSurfaceVariant),
             ),
           ),
         ],
@@ -248,6 +284,10 @@ class _Controls extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    // The light-theme error red reads well, but in dark mode it's a pale salmon — use the
+    // deeper errorContainer red there instead so hang-up stays clearly "red".
+    final isDark = scheme.brightness == Brightness.dark;
     return SafeArea(
       child: Padding(
         padding: const EdgeInsets.all(16),
@@ -290,7 +330,8 @@ class _Controls extends StatelessWidget {
                   ),
                 FloatingActionButton(
                   heroTag: 'hangup',
-                  backgroundColor: Theme.of(context).colorScheme.error,
+                  backgroundColor: isDark ? scheme.errorContainer : scheme.error,
+                  foregroundColor: isDark ? scheme.onErrorContainer : scheme.onError,
                   onPressed: () => onHangUp(),
                   child: const Icon(Icons.call_end),
                 ),

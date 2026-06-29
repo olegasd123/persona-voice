@@ -9,8 +9,6 @@ import pytest
 
 from personavoice.adapters.factory import Backend
 from personavoice.adapters.tts.base import TTSAdapter
-from personavoice.adapters.tts.f5_mlx import _f5_kwargs
-from personavoice.models import VoiceRef
 from personavoice.persona import load_personas
 from personavoice.voice import (
     ClonedVoice,
@@ -47,6 +45,34 @@ def _wav(seconds: float, sr: int = 16000) -> bytes:
     from personavoice.audio import encode_wav
 
     return encode_wav(np.zeros(int(seconds * sr), dtype=np.float32), sr)
+
+
+def test_trim_wav_caps_length_and_passes_through() -> None:
+    from personavoice.voice.clone import trim_wav
+
+    # A 9 s clip is capped near 5 s (cut point in the last ~1.2 s + a short trailing silence);
+    # a clip already under the cap is returned unchanged (same bytes object).
+    capped = validate_sample(trim_wav(_wav(9.0), 5.0))
+    assert 3.8 <= capped <= 5.6
+    short = _wav(3.0)
+    assert trim_wav(short, 5.0) is short
+    # Undecodable bytes are best-effort passed through, not raised on.
+    assert trim_wav(b"not a wav", 5.0) == b"not a wav"
+
+
+def test_trim_wav_ends_on_silence() -> None:
+    """The trimmed reference ends in a silent pause."""
+    np = pytest.importorskip("numpy")
+    pytest.importorskip("soundfile")
+    from personavoice.audio import decode_wav
+    from personavoice.voice.clone import trim_wav
+
+    sr = 16000
+    tone = 0.5 * np.sin(np.linspace(0, 1000.0, 9 * sr, dtype=np.float32))  # 9 s of non-silence
+    from personavoice.audio import encode_wav
+
+    samples, _ = decode_wav(trim_wav(encode_wav(tone, sr), 5.0))
+    assert float(np.abs(samples[-int(0.1 * sr) :]).max()) < 1e-3  # last 100 ms is silent
 
 
 def test_validate_sample_returns_duration() -> None:
@@ -99,16 +125,13 @@ def test_store_record_assign_and_reload(tmp_path: Path) -> None:
     assert reloaded.assignments == {"companion": "my_voice"}
 
 
-def test_store_voice_ref_carries_sample_and_ref_text(tmp_path: Path) -> None:
+def test_store_voice_ref_carries_sample(tmp_path: Path) -> None:
     store = ClonesStore.load(tmp_path)
-    store.record(
-        ClonedVoice(name="v", sample_path="/s/v.wav", ref_text="hello", backend="chatterbox")
-    )
+    store.record(ClonedVoice(name="v", sample_path="/s/v.wav", backend="chatterbox"))
     ref = store.voice_ref("v", "chatterbox", emotion="warm")
     assert ref is not None
     assert ref.id == "v"
     assert ref.sample_path == "/s/v.wav"
-    assert ref.ref_text == "hello"
     assert ref.emotion == "warm"
     assert ref.backend == "chatterbox"
 
@@ -135,7 +158,7 @@ def test_store_corrupt_manifest_raises(tmp_path: Path) -> None:
 
 
 # --------------------------------------------------------------------------------------
-# TTSAdapter.clone_voice (base) + F5 kwargs
+# TTSAdapter.clone_voice (base)
 # --------------------------------------------------------------------------------------
 
 
@@ -158,38 +181,6 @@ async def test_base_clone_voice_rejected_when_not_supported() -> None:
         await NoClone().clone_voice(b"x", "v")
 
 
-def test_f5_kwargs_with_and_without_sample() -> None:
-    bare = _f5_kwargs("hi", VoiceRef(id="x"), model="m")
-    assert bare == {"generation_text": "hi", "model_name": "m"}  # F5's built-in default voice
-
-    cloned = _f5_kwargs("hi", VoiceRef(id="v", sample_path="/s/v.wav", ref_text="ref"), model="m")
-    assert cloned["ref_audio_path"] == "/s/v.wav"
-    assert cloned["ref_audio_text"] == "ref"  # f5_tts_mlx names it ref_audio_text
-
-
-def test_f5_ref_at_24k_resamples_when_needed(tmp_path: Path) -> None:
-    np = pytest.importorskip("numpy")
-    pytest.importorskip("soundfile")
-    from personavoice.adapters.tts.f5_mlx import _F5_REF_RATE, F5MLXTTS
-    from personavoice.audio import decode_wav, encode_wav
-
-    adapter = F5MLXTTS()
-    # 44.1 kHz reference → resampled to a 24 kHz temp file f5 will accept.
-    ref = tmp_path / "ref.wav"
-    ref.write_bytes(encode_wav(np.zeros(44100, dtype=np.float32), 44100))
-    out, tmp = adapter._ref_at_24k(str(ref))
-    assert tmp is not None and out == tmp
-    _, sr = decode_wav(Path(out).read_bytes())
-    assert sr == _F5_REF_RATE
-
-    # Already 24 kHz → passed through unchanged (no temp file to clean up).
-    ref24 = tmp_path / "ref24.wav"
-    ref24.write_bytes(encode_wav(np.zeros(24000, dtype=np.float32), 24000))
-    assert adapter._ref_at_24k(str(ref24)) == (str(ref24), None)
-    # No sample → nothing to do.
-    assert adapter._ref_at_24k(None) == (None, None)
-
-
 # --------------------------------------------------------------------------------------
 # VoiceCloner
 # --------------------------------------------------------------------------------------
@@ -197,7 +188,7 @@ def test_f5_ref_at_24k_resamples_when_needed(tmp_path: Path) -> None:
 
 async def test_cloner_clones_records_and_assigns(tmp_path: Path) -> None:
     store = ClonesStore.load(tmp_path)
-    cloner = VoiceCloner(_cloning_backend(stt_text="this is my voice"), store)
+    cloner = VoiceCloner(_cloning_backend(), store)
 
     # Skip audio-decode validation: the fake sample isn't a real wav.
     voice = await cloner.clone(
@@ -205,10 +196,9 @@ async def test_cloner_clones_records_and_assigns(tmp_path: Path) -> None:
     )
 
     assert voice.sample_path == str(tmp_path / "my_voice.wav")
-    assert voice.ref_text == "this is my voice"  # filled by the cascade's STT
     # Recorded + assigned, and it survives a reload.
     reloaded = ClonesStore.load(tmp_path)
-    assert reloaded.get("my_voice").ref_text == "this is my voice"
+    assert reloaded.get("my_voice").sample_path == str(tmp_path / "my_voice.wav")
     assert reloaded.assignment_for("companion") == "my_voice"
 
 
@@ -225,12 +215,6 @@ async def test_cloner_rejects_bad_name(tmp_path: Path) -> None:
         await cloner.clone(b"x", "bad name!", min_seconds=None, max_seconds=None)
 
 
-async def test_cloner_explicit_ref_text_skips_transcription(tmp_path: Path) -> None:
-    cloner = VoiceCloner(_cloning_backend(stt_text="WRONG"), ClonesStore.load(tmp_path))
-    voice = await cloner.clone(b"x", "v", ref_text="given text", min_seconds=None, max_seconds=None)
-    assert voice.ref_text == "given text"
-
-
 # --------------------------------------------------------------------------------------
 # Registry / pipeline resolution
 # --------------------------------------------------------------------------------------
@@ -238,7 +222,7 @@ async def test_cloner_explicit_ref_text_skips_transcription(tmp_path: Path) -> N
 
 def _assigned_registry(config_dir: Path, tmp_path: Path) -> VoiceRegistry:
     store = ClonesStore.load(tmp_path)
-    store.record(ClonedVoice(name="my_voice", sample_path="/s/my_voice.wav", ref_text="hi"))
+    store.record(ClonedVoice(name="my_voice", sample_path="/s/my_voice.wav"))
     store.assign("companion", "my_voice")
     return VoiceRegistry.load(config_dir / "voices.yaml", clones=store)
 
@@ -248,7 +232,6 @@ def test_assigned_clone_wins_on_cloning_backend(config_dir: Path, tmp_path: Path
     companion = load_personas(config_dir / "personas")["companion"]
     ref = registry.resolve_for_persona(companion, "chatterbox", supports_cloning=True)
     assert ref.sample_path == "/s/my_voice.wav"
-    assert ref.ref_text == "hi"
     assert ref.emotion == companion.voice.emotion  # carried from the persona
 
 

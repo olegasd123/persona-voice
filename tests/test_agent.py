@@ -20,6 +20,8 @@ from personavoice.models import Msg, Persona, Transcript
 from personavoice.orchestrator import agent
 from personavoice.orchestrator.turn import TurnController
 from personavoice.persona import load_persona
+from personavoice.persona.registry import PersonaRegistry
+from personavoice.persona.store import UserPersonaStore
 
 from .fakes import FakeLLM, FakeSTT, FakeTTS, make_backend
 
@@ -289,6 +291,78 @@ def test_make_transcript_publisher_builds_and_publishes(monkeypatch: pytest.Monk
     assert (seg.id, seg.text, seg.final, seg.language) == ("seg-1", "Hello there.", True, "en")
 
 
+def test_make_transcript_publisher_attributes_explicit_identity(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # The user's transcript is published by the agent (local participant) but attributed to the
+    # user's identity + their audio track, so the client renders it as the user, not the agent.
+    sent: list[object] = []
+
+    class FakeLP:
+        identity = "assistant-1"
+
+        async def publish_transcription(self, transcription: object) -> None:
+            sent.append(transcription)
+
+    fake_rtc = SimpleNamespace(
+        TranscriptionSegment=lambda **kw: SimpleNamespace(**kw),
+        Transcription=lambda **kw: SimpleNamespace(**kw),
+    )
+    monkeypatch.setattr(agent, "_require_livekit", lambda: (None, fake_rtc, None))
+
+    pub = agent.make_transcript_publisher(FakeLP(), "TR_user_track", participant_identity="user-7")
+    asyncio.run(pub("seg-1", "hello there", True))
+
+    assert len(sent) == 1
+    assert sent[0].participant_identity == "user-7"  # the user, not "assistant-1"
+    assert sent[0].track_sid == "TR_user_track"
+
+
+async def test_user_turn_publishes_final_user_line(config_dir: Path) -> None:
+    pytest.importorskip("numpy")
+    pytest.importorskip("soundfile")
+
+    backend = make_backend(stt_text="hello there", llm_reply="Hi back.")
+    user_lines: list[tuple[str, str, bool]] = []
+
+    async def publish_user(seg_id: str, text: str, is_final: bool) -> None:
+        user_lines.append((seg_id, text, is_final))
+
+    ag = agent.PersonaAgent(backend, _companion(config_dir), FakeSource())
+    ag.set_user_transcript_publisher(publish_user)
+
+    async def sink(_wav: bytes) -> None:
+        pass
+
+    ag._turn = TurnController(sink)
+    await ag.on_user_utterance(b"\x00\x00" * 1600, 16000)
+    await ag._turn.join()
+    # The user line is published fire-and-forget from the (sync) turn path; let it drain.
+    await asyncio.gather(*list(ag._pending))
+
+    # One final segment carrying the STT'd turn (STT is one-shot per utterance — no interim
+    # growth like the assistant side has).
+    assert [(text, is_final) for _id, text, is_final in user_lines] == [("hello there", True)]
+
+
+async def test_no_user_publisher_means_no_user_line(config_dir: Path) -> None:
+    pytest.importorskip("numpy")
+    pytest.importorskip("soundfile")
+
+    # Without a user publisher installed, a turn still proceeds and nothing is scheduled for it.
+    backend = make_backend(stt_text="hello there", llm_reply="Hi.")
+    ag = agent.PersonaAgent(backend, _companion(config_dir), FakeSource())  # no user publisher
+
+    async def sink(_wav: bytes) -> None:
+        pass
+
+    ag._turn = TurnController(sink)
+    await ag.on_user_utterance(b"\x00\x00" * 1600, 16000)
+    await ag._turn.join()
+
+    assert ag._pending == set()  # no assistant publisher either → nothing scheduled
+
+
 # --- persona selection (switch via API) -----------------------------------------------
 
 
@@ -374,3 +448,340 @@ def test_set_same_persona_is_a_noop(config_dir: Path) -> None:
     ag = agent.PersonaAgent(make_backend(), companion, FakeSource())
     ag.set_persona(_companion(config_dir))  # same id, different instance
     assert ag.persona is companion  # unchanged
+
+
+# --- session options (mid-session) ----------------------------------------------------
+
+
+def test_resolve_session_options_merges_across_sources() -> None:
+    from personavoice.models import CEFRLevel, Demeanor
+
+    # Highest priority (first) source wins per field; fields combine across sources.
+    opts = agent.resolve_session_options(
+        ['{"demeanor": "rude"}', '{"cefr": "B1", "demeanor": "kind"}']
+    )
+    assert opts.demeanor is Demeanor.rude  # first source wins for demeanor
+    assert opts.cefr is CEFRLevel.b1  # only the second source set cefr
+
+
+def test_resolve_session_options_empty() -> None:
+    from personavoice.models import SessionOptions
+
+    assert agent.resolve_session_options([None, "", "not json"]) == SessionOptions()
+
+
+def test_set_options_merges_and_propagates(config_dir: Path) -> None:
+    from personavoice.models import CEFRLevel, Demeanor, SessionOptions
+
+    ag = agent.PersonaAgent(
+        make_backend(),
+        _companion(config_dir),
+        FakeSource(),
+        options=SessionOptions(cefr=CEFRLevel.b1),
+    )
+    ag.set_options(SessionOptions(demeanor=Demeanor.rude))
+    # The new field is applied; the prior field is kept; the pipeline sees the merged options.
+    assert ag.options.demeanor is Demeanor.rude
+    assert ag.options.cefr is CEFRLevel.b1
+    assert ag._pipeline.options == ag.options
+
+
+async def test_set_options_interrupts_in_flight_reply(config_dir: Path) -> None:
+    from personavoice.models import Demeanor, SessionOptions
+
+    ag = agent.PersonaAgent(make_backend(), _companion(config_dir), FakeSource())
+
+    async def slow():  # type: ignore[no-untyped-def]
+        await asyncio.sleep(10)
+        yield b"x"
+
+    ag._turn.begin(slow())
+    await asyncio.sleep(0)
+    assert ag._turn.speaking is True
+
+    ag.set_options(SessionOptions(demeanor=Demeanor.rude))
+    await ag._turn.join()
+    assert ag._turn.speaking is False
+
+
+def test_set_options_noop_when_unchanged(config_dir: Path) -> None:
+    from personavoice.models import Demeanor, SessionOptions
+
+    ag = agent.PersonaAgent(
+        make_backend(),
+        _companion(config_dir),
+        FakeSource(),
+        options=SessionOptions(demeanor=Demeanor.rude),
+    )
+    before = ag.options
+    ag.set_options(SessionOptions(demeanor=Demeanor.rude))  # same value
+    assert ag.options == before
+
+
+# --- custom personas (multi-user store) -----------------------------------------------
+
+
+def _custom_persona(persona_id: str, *, name: str = "Custom", **session_defaults: str) -> Persona:
+    body: dict[str, object] = {
+        "id": persona_id,
+        "name": name,
+        "system_prompt": "You are a custom persona.",
+        "llm": {"base_model": "qwen2.5-7b-instruct"},
+        "voice": {"ref": "voices/companion_soft"},
+    }
+    if session_defaults:
+        body["session_defaults"] = session_defaults
+    return Persona.model_validate(body)
+
+
+def _store(tmp_path: Path, users: dict[str, dict[str, Persona]]) -> UserPersonaStore:
+    # In-memory (constructor users=) so no file is written during the test.
+    return UserPersonaStore(tmp_path / "u.json", users=users)
+
+
+def test_lookup_persona_resolves_custom(config_dir: Path, tmp_path: Path) -> None:
+    reg = PersonaRegistry(config_dir / "personas")
+    store = _store(tmp_path, {"alice": {"french-tutor": _custom_persona("french-tutor")}})
+    assert agent._lookup_persona(reg, store, "alice", "french-tutor").id == "french-tutor"
+    assert agent._lookup_persona(reg, store, "bob", "french-tutor") is None  # other user
+    assert agent._lookup_persona(reg, store, "alice", "companion").id == "companion"  # curated
+    assert agent._lookup_persona(reg, store, "alice", "ghost") is None
+
+
+def test_lookup_persona_curated_wins_on_clash(config_dir: Path, tmp_path: Path) -> None:
+    reg = PersonaRegistry(config_dir / "personas")
+    store = _store(tmp_path, {"alice": {"companion": _custom_persona("companion", name="Evil")}})
+    # The built-in companion wins; the user's same-id persona can't shadow it.
+    assert agent._lookup_persona(reg, store, "alice", "companion").name != "Evil"
+
+
+def test_select_persona_picks_custom_from_metadata(config_dir: Path, tmp_path: Path) -> None:
+    reg = PersonaRegistry(config_dir / "personas")
+    store = _store(tmp_path, {"alice": {"french-tutor": _custom_persona("french-tutor")}})
+    ctx = SimpleNamespace(
+        job=SimpleNamespace(metadata='{"persona": "french-tutor", "user": "alice"}'),
+        room=SimpleNamespace(metadata=None),
+    )
+    persona = agent._select_persona(ctx, reg, None, user_store=store, user_id="alice")
+    assert persona.id == "french-tutor"
+
+
+def test_select_persona_unknown_custom_falls_back(config_dir: Path, tmp_path: Path) -> None:
+    reg = PersonaRegistry(config_dir / "personas")
+    store = _store(tmp_path, {})
+    ctx = SimpleNamespace(
+        job=SimpleNamespace(metadata='{"persona": "ghost", "user": "alice"}'),
+        room=SimpleNamespace(metadata=None),
+    )
+    persona = agent._select_persona(ctx, reg, None, user_store=store, user_id="alice")
+    assert persona.id == agent._default_persona_id(reg)
+
+
+# --- caller token metadata (the reliable selection channel) ---------------------------
+
+
+def _room_with_participants(*metas: str | None) -> SimpleNamespace:
+    """A fake `ctx.room` whose remote participants carry the given token metadata strings."""
+    parts = {f"p{i}": SimpleNamespace(identity=f"p{i}", metadata=m) for i, m in enumerate(metas)}
+    return SimpleNamespace(metadata=None, remote_participants=parts)
+
+
+def test_participant_metadata_picks_first_nonempty() -> None:
+    room = _room_with_participants("", '{"persona": "hr_interviewer", "voice": "hr_warm"}')
+    assert agent._participant_metadata(room) == '{"persona": "hr_interviewer", "voice": "hr_warm"}'
+
+
+def test_participant_metadata_none_without_participants() -> None:
+    assert agent._participant_metadata(SimpleNamespace()) is None  # no remote_participants attr
+    assert agent._participant_metadata(SimpleNamespace(remote_participants={})) is None
+    assert agent._participant_metadata(_room_with_participants(None, "")) is None
+
+
+def test_select_persona_prefers_caller_token_metadata(config_dir: Path, tmp_path: Path) -> None:
+    # Persona rides the caller's token metadata (room/job empty under automatic dispatch).
+    reg = PersonaRegistry(config_dir / "personas")
+    store = _store(tmp_path, {})
+    ctx = SimpleNamespace(
+        job=SimpleNamespace(metadata=None),
+        room=_room_with_participants('{"persona": "hr_interviewer"}'),
+    )
+    persona = agent._select_persona(ctx, reg, None, user_store=store, user_id=None)
+    assert persona.id == "hr_interviewer"
+
+
+def test_session_options_resolve_from_caller_token_metadata() -> None:
+    from personavoice.models import CEFRLevel
+
+    # The voice / cefr the user "Applied" arrive in the token metadata and must be honored.
+    room = _room_with_participants('{"voice": "hr_warm", "cefr": "B1"}')
+    opts = agent.resolve_session_options([agent._participant_metadata(room), None, None])
+    assert opts.voice == "hr_warm"
+    assert opts.cefr is CEFRLevel.b1
+
+
+# --- persona-authored session defaults ------------------------------------------------
+
+
+def test_persona_session_defaults_apply(config_dir: Path) -> None:
+    from personavoice.models import CEFRLevel
+
+    persona = _custom_persona("tutor", cefr="a1")  # baked-in default
+    ag = agent.PersonaAgent(make_backend(), persona, FakeSource())
+    assert ag.options.cefr is CEFRLevel.a1
+    assert ag._pipeline.options.cefr is CEFRLevel.a1
+
+
+def test_explicit_options_override_persona_defaults(config_dir: Path) -> None:
+    from personavoice.models import CEFRLevel, Demeanor, SessionOptions
+
+    persona = _custom_persona("tutor", cefr="a1", demeanor="kind")
+    ag = agent.PersonaAgent(
+        make_backend(), persona, FakeSource(), options=SessionOptions(cefr=CEFRLevel.c2)
+    )
+    assert ag.options.cefr is CEFRLevel.c2  # explicit wins
+    assert ag.options.demeanor is Demeanor.kind  # persona default fills the gap
+
+
+def test_set_persona_recomputes_session_defaults(config_dir: Path) -> None:
+    from personavoice.models import CEFRLevel
+
+    ag = agent.PersonaAgent(make_backend(), _companion(config_dir), FakeSource())
+    assert ag.options.cefr is None  # companion has no session defaults
+    ag.set_persona(_custom_persona("tutor", cefr="a1"))
+    assert ag.options.cefr is CEFRLevel.a1  # the new persona's default now applies
+
+
+def test_explicit_options_survive_persona_switch(config_dir: Path) -> None:
+    from personavoice.models import CEFRLevel, Demeanor, SessionOptions
+
+    ag = agent.PersonaAgent(
+        make_backend(),
+        _companion(config_dir),
+        FakeSource(),
+        options=SessionOptions(demeanor=Demeanor.rude),
+    )
+    ag.set_persona(_custom_persona("tutor", cefr="a1"))
+    assert ag.options.demeanor is Demeanor.rude  # explicit override preserved across the switch
+    assert ag.options.cefr is CEFRLevel.a1  # new persona's default added underneath
+
+
+# --- semantic endpointing -------------------------------------------------
+
+
+class QueueSTT(FakeSTT):
+    """Returns successive transcripts, one per utterance, so a turn can be fed in fragments."""
+
+    def __init__(self, texts: list[str]) -> None:
+        super().__init__()
+        self._texts = list(texts)
+
+    async def transcribe(self, audio: bytes) -> Transcript:
+        text = self._texts.pop(0) if self._texts else ""
+        return Transcript(text=text, is_final=True, language="en")
+
+
+def _endpointing_agent(
+    config_dir: Path, texts: list[str], *, grace_s: float
+) -> tuple[agent.PersonaAgent, list[bytes]]:
+    backend = Backend(name="fake", stt=QueueSTT(texts), llm=FakeLLM("Okay."), tts=FakeTTS())
+    ag = agent.PersonaAgent(
+        backend, _companion(config_dir), FakeSource(), semantic_endpointing=True, grace_s=grace_s
+    )
+    spoken: list[bytes] = []
+
+    async def sink(wav: bytes) -> None:
+        spoken.append(wav)
+
+    ag._turn = TurnController(sink)  # bypass the livekit AudioSource sink
+    return ag, spoken
+
+
+async def _utterance(ag: agent.PersonaAgent) -> None:
+    await ag.on_user_utterance(b"\x00\x00" * 1600, 16000)
+
+
+async def test_unfinished_utterance_is_held_then_merged(config_dir: Path) -> None:
+    pytest.importorskip("numpy")
+    pytest.importorskip("soundfile")
+
+    # Big grace so the timer never fires — the continuation arrives first.
+    ag, spoken = _endpointing_agent(
+        config_dir, ["I went to the store and", "bought milk."], grace_s=60.0
+    )
+
+    await _utterance(ag)  # ends on "and" → held, nothing answered yet
+    assert spoken == []
+    assert ag._held == "I went to the store and"
+    assert ag._pipeline.history == []
+
+    await _utterance(ag)  # completes the thought → one merged turn
+    await ag._turn.join()
+    assert spoken == [b"RIFF" + b"Okay."]
+    assert ag._held is None
+    assert ag._pipeline.history[0].content == "I went to the store and bought milk."
+
+
+async def test_complete_utterance_answers_immediately(config_dir: Path) -> None:
+    pytest.importorskip("numpy")
+    pytest.importorskip("soundfile")
+
+    ag, spoken = _endpointing_agent(config_dir, ["What time is it?"], grace_s=60.0)
+    await _utterance(ag)
+    await ag._turn.join()
+    assert spoken == [b"RIFF" + b"Okay."]
+    assert ag._held is None
+    assert ag._flush_handle is None  # nothing held, no timer armed
+
+
+async def test_grace_window_flushes_held_utterance(config_dir: Path) -> None:
+    pytest.importorskip("numpy")
+    pytest.importorskip("soundfile")
+
+    # Tiny grace: with no continuation, the held fragment is answered as-is once it elapses.
+    ag, spoken = _endpointing_agent(config_dir, ["I'm thinking of"], grace_s=0.01)
+    await _utterance(ag)
+    assert spoken == []  # held, not yet answered
+    await asyncio.sleep(0.05)  # let the grace timer fire
+    await ag._turn.join()
+    assert spoken == [b"RIFF" + b"Okay."]
+    assert ag._held is None
+    assert ag._pipeline.history[0].content == "I'm thinking of"
+
+
+async def test_resume_cancels_pending_flush_then_merges(config_dir: Path) -> None:
+    pytest.importorskip("numpy")
+    pytest.importorskip("soundfile")
+
+    ag, spoken = _endpointing_agent(config_dir, ["I'm thinking of", "the blue one."], grace_s=60.0)
+    await _utterance(ag)
+    assert ag._flush_handle is not None  # a flush is armed while holding
+
+    ag.on_user_speech_started()  # the user resumed before the grace elapsed
+    assert ag._flush_handle is None  # so the flush is cancelled, not fired
+    assert spoken == []
+
+    await _utterance(ag)  # their continuation completes the thought
+    await ag._turn.join()
+    assert spoken == [b"RIFF" + b"Okay."]
+    assert ag._pipeline.history[0].content == "I'm thinking of the blue one."
+
+
+async def test_endpointing_off_answers_each_utterance(config_dir: Path) -> None:
+    pytest.importorskip("numpy")
+    pytest.importorskip("soundfile")
+
+    # Default (off): an utterance that *looks* unfinished is still answered immediately.
+    backend = Backend(name="fake", stt=FakeSTT("I went and"), llm=FakeLLM("Okay."), tts=FakeTTS())
+    ag = agent.PersonaAgent(
+        backend, _companion(config_dir), FakeSource(), semantic_endpointing=False
+    )
+    spoken: list[bytes] = []
+
+    async def sink(wav: bytes) -> None:
+        spoken.append(wav)
+
+    ag._turn = TurnController(sink)
+    await _utterance(ag)
+    await ag._turn.join()
+    assert spoken == [b"RIFF" + b"Okay."]
+    assert ag._held is None

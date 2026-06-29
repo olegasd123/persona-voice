@@ -7,10 +7,14 @@ in one place lets every adapter depend on the contract without importing each ot
 
 from __future__ import annotations
 
+import json
+import logging
 from enum import StrEnum
 from typing import Any
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
+
+logger = logging.getLogger("personavoice.models")
 
 # --------------------------------------------------------------------------------------
 # Conversation values (flow between stages)
@@ -49,12 +53,8 @@ class VoiceRef(BaseModel):
     name: str | None = None
     # Source sample used to create a clone (~10 s wav), if any.
     sample_path: str | None = None
-    # Cached speaker embedding / conditioning produced by `clone_voice`.
-    embedding_path: str | None = None
-    # Transcript of `sample_path`, for reference-text cloning backends (e.g. F5).
-    ref_text: str | None = None
     emotion: str | None = None
-    # Backend that produced/owns this voice (e.g. "kokoro", "orpheus").
+    # Backend that produced/owns this voice (e.g. "kokoro", "chatterbox").
     backend: str | None = None
     # Fine-tuned checkpoint a cloning backend should load instead of its base weights
     # (voice fine-tuning). None → use the backend's base model.
@@ -66,15 +66,15 @@ class VoiceDef(BaseModel):
 
     A *logical* voice (e.g. `companion_soft`) that personas reference, mapped to a
     backend-native preset per TTS adapter so the personas sound distinct on each backend.
-    `sample` is a clone source used by cloning-capable backends (Chatterbox/F5); until
-    then a backend with no `presets` entry falls back to its own default voice.
+    `sample` is a clone source used by cloning-capable backends; until then a backend with
+    no `presets` entry falls back to its own default voice.
     """
 
     model_config = ConfigDict(extra="forbid")
 
     description: str = ""
     emotion: str | None = None
-    # tts adapter name ("kokoro" | "orpheus" | ...) -> that backend's preset id.
+    # tts adapter name ("kokoro" | "chatterbox" | ...) -> that backend's preset id.
     presets: dict[str, str] = Field(default_factory=dict)
     # Path to a ~10 s clone sample, resolved by cloning backends.
     sample: str | None = None
@@ -125,11 +125,120 @@ class Persona(BaseModel):
 
     id: str
     name: str
+    # One-line blurb for client persona pickers (the system prompt is too long to show).
+    description: str = ""
     system_prompt: str
     llm: LLMSettings
     voice: VoiceSettings
     behavior: BehaviorSettings = BehaviorSettings()
     memory: MemorySettings = MemorySettings()
+    # Tool / function calling: names of registry tools this persona may call. Empty
+    # (the default) = a pure conversationalist — the LLM is never sent any tool schema, so an
+    # unchanged persona is unaffected. Names resolve against the active tool registry at call
+    # time; an unknown name is skipped with a warning (see `orchestrator/tools.ToolRegistry`).
+    tools: list[str] = Field(default_factory=list)
+    # Per-session option defaults baked into the persona (custom personas set these via N3's
+    # authoring routes). The agent layers an explicit `SessionOptions` over these; an unset
+    # field falls through to the persona's authored behavior. Empty for the curated personas.
+    # Forward ref + `Persona.model_rebuild()` below, since `SessionOptions` is defined later.
+    session_defaults: SessionOptions = Field(default_factory=lambda: SessionOptions())
+
+
+# --------------------------------------------------------------------------------------
+# Session options (per-conversation overrides on top of a persona)
+# --------------------------------------------------------------------------------------
+
+
+class CEFRLevel(StrEnum):
+    """Common European Framework of Reference language-proficiency levels."""
+
+    a1 = "A1"
+    a2 = "A2"
+    b1 = "B1"
+    b2 = "B2"
+    c1 = "C1"
+    c2 = "C2"
+
+
+class Demeanor(StrEnum):
+    """How the persona carries itself for this session. `natural` = persona as authored."""
+
+    kind = "kind"
+    natural = "natural"
+    rude = "rude"
+
+
+class SessionOptions(BaseModel):
+    """Per-conversation overrides layered on top of a persona.
+
+    All fields are optional; `None` means "use the persona's default". These are decided
+    before a call (carried in room/job metadata) and can be swapped mid-call. They reuse the
+    persona-selection rail: token metadata → agent → optional data message.
+    """
+
+    model_config = ConfigDict(extra="ignore")
+
+    voice: str | None = None  # voice-library id (preset | clone | finetuned)
+    cefr: CEFRLevel | None = None
+    demeanor: Demeanor | None = None
+
+    # Case-insensitive enums: clients/CLI flags send "b1"/"KIND"; the enum values are
+    # canonical ("B1"/"kind"). Normalize before validation so casing never drops a value.
+    @field_validator("cefr", mode="before")
+    @classmethod
+    def _normalize_cefr(cls, value: Any) -> Any:
+        return value.upper() if isinstance(value, str) else value
+
+    @field_validator("demeanor", mode="before")
+    @classmethod
+    def _normalize_demeanor(cls, value: Any) -> Any:
+        return value.lower() if isinstance(value, str) else value
+
+    @classmethod
+    def from_metadata(cls, meta: str | None) -> SessionOptions:
+        """Parse session options from a JSON metadata string, tolerating junk.
+
+        The client tags the room/job with
+        `{"persona": "...", "voice": "...", "cefr": "B1", "demeanor": "kind"}`. Missing keys
+        are fine (the field stays None); an unknown enum value is dropped (logged once) rather
+        than raising, so a stray value never blocks a session. Anything that isn't a JSON
+        object yields empty options.
+        """
+        if not meta or not meta.strip() or not meta.strip().startswith("{"):
+            return cls()
+        try:
+            obj = json.loads(meta.strip())
+        except json.JSONDecodeError:
+            return cls()
+        if not isinstance(obj, dict):
+            return cls()
+        # Validate each field on its own so one bad value (e.g. cefr="Z9") drops only that
+        # field instead of discarding the whole options object.
+        kept: dict[str, Any] = {}
+        for key in ("voice", "cefr", "demeanor"):
+            value = obj.get(key)
+            if value is None:
+                continue
+            try:
+                cls.model_validate({key: value})
+            except ValidationError:
+                logger.warning("dropping invalid session option %s=%r", key, value)
+                continue
+            kept[key] = value
+        return cls.model_validate(kept)
+
+    def merged_over(self, base: SessionOptions) -> SessionOptions:
+        """Return `base` with this object's set (non-None) fields taking precedence."""
+        return base.model_copy(update={k: v for k, v in self.model_dump().items() if v is not None})
+
+    def any_set(self) -> bool:
+        """True when at least one override is set (vs. an all-None "use the defaults")."""
+        return any(v is not None for v in self.model_dump().values())
+
+
+# `Persona.session_defaults` forward-references `SessionOptions` (defined just above); finish
+# building the deferred Persona schema now that the name resolves.
+Persona.model_rebuild()
 
 
 # --------------------------------------------------------------------------------------

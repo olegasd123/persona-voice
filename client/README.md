@@ -64,7 +64,7 @@ lib/
 ├── main.dart                       # app + theme
 ├── models/
 │   ├── persona.dart                # {id, name} from /personas
-│   └── connection_settings.dart    # token-server URL / api token / identity (persisted)
+│   └── connection_settings.dart    # URL / api token / account id / display name / participant id (persisted)
 ├── services/
 │   ├── token_client.dart           # HTTP client for /personas and /token
 │   ├── audio_session.dart          # native interruption/route events (platform channel)
