@@ -50,6 +50,72 @@ class ConsentState {
       );
 }
 
+/// One durable fact the assistant has learned about the user, with when it was first recorded.
+class MemoryFact {
+  const MemoryFact({required this.text, this.ts});
+
+  final String text;
+  final String? ts;
+
+  factory MemoryFact.fromJson(Map<String, dynamic> json) =>
+      MemoryFact(text: (json['text'] as String?) ?? '', ts: json['ts'] as String?);
+}
+
+/// One stored conversation turn shown in the "what I remember" view.
+class RememberedTurn {
+  const RememberedTurn({required this.role, required this.content, this.personaId, this.ts});
+
+  /// `'user'` or `'assistant'`.
+  final String role;
+  final String content;
+  final String? personaId;
+  final String? ts;
+
+  bool get isUser => role == 'user';
+
+  factory RememberedTurn.fromJson(Map<String, dynamic> json) => RememberedTurn(
+        role: (json['role'] as String?) ?? '',
+        content: (json['content'] as String?) ?? '',
+        personaId: json['persona_id'] as String?,
+        ts: json['ts'] as String?,
+      );
+}
+
+/// Everything the server has stored about an account (`GET /memory`): the distilled profile
+/// ([summary] + [facts]) plus a window of recent [turns]. [granted] is the current recording
+/// consent — stored data is returned even when it's off (revoking gates new recording but keeps
+/// existing data), so the UI can caption that and still offer to forget it.
+class MemorySnapshot {
+  const MemorySnapshot({
+    required this.granted,
+    required this.summary,
+    required this.facts,
+    required this.turns,
+    this.updatedAt,
+  });
+
+  final bool granted;
+  final String summary;
+  final List<MemoryFact> facts;
+  final List<RememberedTurn> turns;
+  final String? updatedAt;
+
+  /// True when nothing has been stored yet (a fresh account, or just-forgotten).
+  bool get isEmpty => summary.trim().isEmpty && facts.isEmpty && turns.isEmpty;
+
+  factory MemorySnapshot.fromJson(Map<String, dynamic> json) => MemorySnapshot(
+        granted: (json['granted'] as bool?) ?? false,
+        summary: (json['summary'] as String?) ?? '',
+        facts: ((json['facts'] as List<dynamic>?) ?? const [])
+            .map((e) => MemoryFact.fromJson((e as Map).cast<String, dynamic>()))
+            .toList(),
+        turns: ((json['turns'] as List<dynamic>?) ?? const [])
+            .map((e) => RememberedTurn.fromJson((e as Map).cast<String, dynamic>()))
+            .toList(),
+        updatedAt: json['updated_at'] as String?,
+      );
+}
+
 class TokenClientException implements Exception {
   TokenClientException(this.message, {this.statusCode, this.retryAfter});
 
@@ -235,6 +301,29 @@ class TokenClient {
       body: jsonEncode({'granted': granted, 'allow_training': allowTraining}),
     );
     return ConsentState.fromJson(_decode(resp));
+  }
+
+  /// Fetch what the server has stored about this account (`GET /memory`) for the
+  /// "what do you remember about me?" screen — the distilled profile + recent [limit] turns.
+  /// Scoped by [ConnectionSettings.effectiveUser]; returns stored data even when consent is off.
+  Future<MemorySnapshot> fetchMemory({int? limit}) async {
+    final query = {
+      'user': settings.effectiveUser,
+      if (limit != null) 'limit': '$limit',
+    };
+    final resp = await _http.get(_uri('/memory', query), headers: _jsonHeaders);
+    return MemorySnapshot.fromJson(_decode(resp));
+  }
+
+  /// Erase everything stored for this account (`DELETE /memory`) — the "forget me" control.
+  /// Idempotent: deleting with nothing stored simply reports back `false`. Distinct from
+  /// withdrawing consent, which only stops future recording and keeps existing data.
+  Future<bool> deleteMemory() async {
+    final resp = await _http.delete(
+      _uri('/memory', {'user': settings.effectiveUser}),
+      headers: _authHeaders,
+    );
+    return (_decode(resp)['deleted'] as bool?) ?? false;
   }
 
   /// Mint a join token for [persona], optionally with per-session [options]

@@ -27,6 +27,8 @@ Endpoints (all JSON, permissive CORS so a browser client / Playground can call t
     GET    /voices           -> {"voices": [VoiceOption...], "tts", "supports_cloning"}
     GET    /consent?user=    -> {"user","granted","allow_training","updated_at"}
     POST   /consent?user=    -> set it; body: {"granted": bool, "allow_training"?: bool}
+    GET    /memory?user=[&limit=] -> {"user","granted","summary","facts","turns","updated_at"}
+    DELETE /memory?user=     -> wipe a user's stored memory; {"user","deleted": bool}
     POST   /token            -> mint a token; body: {"room"?, "identity"?, "name"?, "persona"?,
                                 "voice"?, "cefr"?, "demeanor"?, "user"?}
     GET    /token?room=&identity=&name=&persona=&voice=&cefr=&demeanor=&user=  (manual testing)
@@ -62,7 +64,7 @@ from urllib.parse import parse_qs, urlparse
 
 from pydantic import ValidationError
 
-from ..memory import MemoryStore
+from ..memory import MemoryStore, UserProfile
 from ..models import CEFRLevel, Demeanor, Persona, SessionOptions
 from ..obs import read_sessions, render_metrics
 from ..orchestrator.busy import busy_retry_after
@@ -101,6 +103,9 @@ _DEFAULT_MAX_USER_PERSONAS = 50
 _DEFAULT_MAX_CLONE_BYTES = 10 * 1024 * 1024
 # Cap clones per deployment (abuse surface); override with PERSONAVOICE_MAX_CLONES.
 _DEFAULT_MAX_CLONES = 50
+# How many recent raw turns `GET /memory` returns by default (overridable per-request via ?limit=).
+# The distilled profile is the durable view; the turns are a recent-context window, not the archive.
+_MEMORY_TURNS_LIMIT = 20
 
 # Lazily builds a `VoiceCloner` bound to the active backend + the shared clones store.
 ClonerFactory = Callable[[], VoiceCloner]
@@ -821,6 +826,48 @@ class TokenService:
         )
         return self._consent_payload(user)
 
+    # -- memory introspection (Feature L) ----------------------------------------------
+
+    def get_memory(self, user: str | None, *, limit: int = _MEMORY_TURNS_LIMIT) -> dict[str, Any]:
+        """What we've stored about a user: the distilled profile + recent raw turns.
+
+        The read half of the consent story (the write gate is `/consent`): it lets a client render
+        a "what do you remember about me?" screen over the same per-user store, next to the erase
+        control below. Mirrors `MemoryStore.export_user`, trimmed to the last `limit` turns.
+
+        Stored data is returned regardless of the *current* consent state: revoking consent gates
+        future recording/recall but keeps existing data, so surfacing it (with `granted` captioning
+        the UI) is what makes the paired delete meaningful — hiding data that still sits on disk
+        would be the privacy anti-pattern. Same client-asserted `?user=` trust model as `/consent`
+        (see `set_consent`): a caller with the API token can read any id.
+        """
+        user = self._require_user(user)
+        store = self._require_memory()
+        consent = store.get_consent(user)
+        raw = store.load_profile_raw(user)
+        profile = UserProfile(user_id=user) if raw is None else UserProfile.model_validate(raw)
+        turns = store.read_turns(user, limit=max(0, limit))
+        return {
+            "user": user,
+            "granted": consent.granted,
+            "summary": profile.summary,
+            "facts": [f.model_dump() for f in profile.facts],
+            "turns": [t.model_dump() for t in turns],
+            # None (not the model's default-now) when nothing has ever been distilled.
+            "updated_at": None if profile.is_empty() else profile.updated_at,
+        }
+
+    def delete_memory(self, user: str | None) -> dict[str, Any]:
+        """Privacy: wipe everything stored for a user — the HTTP analog of `--delete`.
+
+        Idempotent: deleting a user with nothing stored returns `deleted: false` rather than an
+        error, so the client's "forget me" button is safe to press twice. Withdrawing consent
+        (`/consent`) only gates recording; this is the erase.
+        """
+        user = self._require_user(user)
+        deleted = self._require_memory().delete_user(user)
+        return {"user": user, "deleted": deleted}
+
     # -- LoRA catalog ------------------------------------------------------------------
 
     def loras(self) -> dict[str, Any]:
@@ -1115,6 +1162,15 @@ def _make_handler(
                             allow_training=bool(body.get("allow_training", False)),
                         ),
                     )
+                elif path == "/memory" and method == "GET":
+                    raw_limit = query.get("limit")
+                    try:
+                        limit = int(raw_limit) if raw_limit is not None else _MEMORY_TURNS_LIMIT
+                    except ValueError as exc:
+                        raise BadRequest(f"'limit' must be an integer, got {raw_limit!r}") from exc
+                    self._send_json(200, service.get_memory(query.get("user"), limit=limit))
+                elif path == "/memory" and method == "DELETE":
+                    self._send_json(200, service.delete_memory(query.get("user")))
                 elif path == "/voices/clone" and method == "POST":
                     self._handle_clone(query)
                 elif path.startswith("/voices/clone/") and method == "DELETE":

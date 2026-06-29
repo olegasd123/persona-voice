@@ -109,7 +109,8 @@ device + LiveKit call run still pending.
 
 **Backlog (capabilities / ops / DX — independent, land any time).** Features **A/B/C** are the
 *server* substrate the NOW block builds on (already done & tested); **D** (tool calling),
-**F** (dynamic emotion), and **G** (semantic endpointing) have since landed; H–L are unchanged.
+**F** (dynamic emotion), and **G** (semantic endpointing) have since landed; **L** (memory
+introspection) is now done; H–K are unchanged.
 
 | # | Feature | Theme | Effort | Risk | Depends on |
 |---|---------|-------|--------|------|------------|
@@ -123,7 +124,7 @@ device + LiveKit call run still pending.
 | I | **Concurrency / admission control** `[Partial]` (steps 1–5 done; server-FIFO queue optional) | Ops | M | Med | H (visibility, soft) |
 | J | **Web client** | Reach | L | Low | token server |
 | K | **Persona authoring helper** `[Done]` (add-on to **N3**) | DX | S | Low | persona loader |
-| L | **Memory introspection (client)** | Trust | S | Low | memory facade |
+| L | **Memory introspection (client)** `[Done]` | Trust | S | Low | memory facade |
 
 ---
 
@@ -885,11 +886,50 @@ legal value; id-clash case → no curated/own shadowing. Plus `ruff` + `mypy`.
 
 ---
 
-## 12. Feature L — Memory introspection (client)
+## 12. Feature L — Memory introspection (client) `[Done]`
 
 A "what do you remember about me?" surface over the existing per-user store
-(`memory/profile.py`, `memory/facade`), exposed as a data message / route and shown in the client.
-Strengthens the consent story already built (`personavoice-memory --show/--export/--delete`).
+(`memory/store.py`, `memory/profile.py`), so the consent toggle the client already has is paired
+with a way to *see and erase* what consent produced. It's the read/erase half of the privacy story
+the `personavoice-memory --show/--export/--delete` CLI gives operators, brought to the end user.
+
+Everything it needs already exists server-side (`MemoryStore.load_profile_raw` / `read_turns` /
+`delete_user`, `UserProfile`), so this is wiring, not new mechanism — hence the **S / Low** rating.
+
+**Server — two routes on the token server, mirroring `/consent`** (`server/token_server.py`):
+
+- `GET /memory?user=[&limit=]` → `TokenService.get_memory`: the distilled profile (rolling
+  `summary` + timestamped `facts`) plus the last `limit` raw turns (default 20), and the current
+  `granted` flag so the UI can caption the screen. Trimmed analog of `MemoryStore.export_user`.
+- `DELETE /memory?user=` → `TokenService.delete_memory`: the HTTP analog of `--delete`. Idempotent
+  — wiping a user with nothing stored returns `{"deleted": false}` rather than erroring, so the
+  client's "Forget me" button is safe to press twice.
+
+**Decision — read is *not* gated on current consent.** Unlike `recall` (which returns "" without
+consent), `get_memory` shows whatever is *stored* regardless of the live consent flag, because
+revoking consent **keeps** existing data (it only gates future recording/recall). Hiding retained
+data while it still sits on disk would be the privacy anti-pattern; surfacing it — captioned by
+`granted` — is what makes the paired Delete meaningful. This matches `export_user`, which also
+dumps regardless of consent. Same client-asserted `?user=` trust model as every route here (a
+caller with the shared API token can act as any id; documented on `set_consent`).
+
+**Why a route, not a data message.** Introspection is a request/response *pull* from a settings
+screen, needed when no call is active, and can be large (40 facts + recent turns). The
+data-message channel (`orchestrator/agent.py`) is for mid-call persona/option swaps — the wrong
+shape. `/consent` is the precedent: same `?user=` scoping, same `_require_memory()` backing.
+
+**Client (`client/lib`):** `TokenClient.fetchMemory` / `deleteMemory` + a `MemorySnapshot` model,
+and a read-only **"What I remember"** screen (summary + facts + recent turns, with Forget/refresh)
+reached from the existing **Privacy** section in `settings_screen.dart`, next to the consent toggle.
+
+**Scope boundary.** Show + wipe-all only. Editing individual facts from the client is deliberately
+out of scope: it would turn a read surface into a write surface with its own consistency questions
+against the background consolidation in `ConversationMemory` — a possible follow-up, not part of L.
+
+**Tests (offline, per §13):** service-level (seeded store → facts/summary/turns; empty user →
+empty payload + `granted:false`; delete idempotency; disabled-without-store raises) and HTTP-level
+(round-trip GET/DELETE, auth required, bad `limit` → 400), mirroring the `/consent` suite. Plus
+`ruff` + `mypy`. Client unit test for `MemorySnapshot.fromJson`.
 
 ---
 

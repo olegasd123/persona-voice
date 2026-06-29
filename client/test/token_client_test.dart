@@ -493,6 +493,85 @@ void main() {
     }
   });
 
+  test('fetchMemory scopes by user and parses the profile + turns', () async {
+    late Uri seen;
+    final mock = MockClient((req) async {
+      seen = req.url;
+      return http.Response(
+        jsonEncode({
+          'user': 'oleg',
+          'granted': true,
+          'summary': 'Sam, a returning user.',
+          'facts': [
+            {'text': 'Prefers to be called Sam', 'ts': '2026-06-29T10:00:00+00:00'},
+          ],
+          'turns': [
+            {'role': 'user', 'content': "I'm Sam.", 'persona_id': 'companion'},
+            {'role': 'assistant', 'content': 'Hi Sam!', 'persona_id': 'companion'},
+          ],
+          'updated_at': '2026-06-29T10:00:00+00:00',
+        }),
+        200,
+      );
+    });
+    final memory = await TokenClient(_settings(), httpClient: mock).fetchMemory();
+    expect(seen.path, '/memory');
+    expect(seen.queryParameters['user'], 'oleg');
+    expect(memory.granted, isTrue);
+    expect(memory.isEmpty, isFalse);
+    expect(memory.summary, 'Sam, a returning user.');
+    expect(memory.facts.single.text, 'Prefers to be called Sam');
+    expect(memory.turns.map((t) => t.content), ["I'm Sam.", 'Hi Sam!']);
+    expect(memory.turns.first.isUser, isTrue);
+    expect(memory.turns.last.isUser, isFalse);
+  });
+
+  test('fetchMemory treats a blank server payload as empty', () async {
+    final mock = MockClient((req) async {
+      return http.Response(
+        jsonEncode({
+          'user': 'oleg',
+          'granted': false,
+          'summary': '',
+          'facts': [],
+          'turns': [],
+          'updated_at': null,
+        }),
+        200,
+      );
+    });
+    final memory = await TokenClient(_settings(), httpClient: mock).fetchMemory();
+    expect(memory.isEmpty, isTrue);
+    expect(memory.granted, isFalse);
+    expect(memory.updatedAt, isNull);
+  });
+
+  test('fetchMemory passes the limit through as a query param', () async {
+    late Uri seen;
+    final mock = MockClient((req) async {
+      seen = req.url;
+      return http.Response(
+        jsonEncode({'granted': true, 'summary': '', 'facts': [], 'turns': []}),
+        200,
+      );
+    });
+    await TokenClient(_settings(), httpClient: mock).fetchMemory(limit: 5);
+    expect(seen.queryParameters['limit'], '5');
+  });
+
+  test('deleteMemory DELETEs and returns the deleted flag', () async {
+    late http.Request seen;
+    final mock = MockClient((req) async {
+      seen = req;
+      return http.Response(jsonEncode({'user': 'oleg', 'deleted': true}), 200);
+    });
+    final deleted = await TokenClient(_settings(), httpClient: mock).deleteMemory();
+    expect(seen.method, 'DELETE');
+    expect(seen.url.path, '/memory');
+    expect(seen.url.queryParameters['user'], 'oleg');
+    expect(deleted, isTrue);
+  });
+
   test('friendlyTokenError maps statuses to user-facing copy', () {
     expect(friendlyTokenError(TokenClientException('x', statusCode: 503)), contains('busy'));
     expect(friendlyTokenError(TokenClientException('x', statusCode: 401)),

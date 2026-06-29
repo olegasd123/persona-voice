@@ -4,6 +4,7 @@ import '../models/app_preferences.dart';
 import '../models/connection_settings.dart';
 import '../services/token_client.dart';
 import '../services/voice_session.dart' show MicMode;
+import 'memory_screen.dart';
 import 'voice_library_screen.dart';
 
 /// Connection details (server URL, API token, account id, display name) + app defaults
@@ -305,6 +306,19 @@ class _SettingsScreenState extends State<SettingsScreen> {
             const SizedBox(height: 8),
             _TestResultBanner(ok: false, message: _consentError!),
           ],
+          const SizedBox(height: 12),
+          Card(
+            margin: EdgeInsets.zero,
+            child: ListTile(
+              leading: const Icon(Icons.psychology_outlined),
+              title: const Text('What I remember'),
+              subtitle: const Text('See and erase what the assistant has stored about you'),
+              trailing: const Icon(Icons.chevron_right),
+              onTap: () => Navigator.of(context).push(MaterialPageRoute(
+                builder: (_) => MemoryScreen(settings: _settings),
+              )),
+            ),
+          ),
           const SizedBox(height: 24),
           _SectionLabel('Voices'),
           Card(

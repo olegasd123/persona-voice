@@ -11,8 +11,8 @@ from pathlib import Path
 
 import pytest
 
-from personavoice.memory import MemoryStore
-from personavoice.models import Persona, VoiceDef, VoiceRef
+from personavoice.memory import MemoryStore, MemoryTurn, ProfileFact, UserProfile
+from personavoice.models import Persona, Role, VoiceDef, VoiceRef
 from personavoice.persona.registry import PersonaRegistry
 from personavoice.persona.store import UserPersonaStore
 from personavoice.server.config import Settings
@@ -866,6 +866,98 @@ def test_consent_disabled_without_store(registry: PersonaRegistry) -> None:
         svc.set_consent("alice", granted=True)
 
 
+# --- memory introspection (Feature L) -------------------------------------------------
+
+
+def _seed_memory(store: MemoryStore, user: str) -> None:
+    """Grant consent, record two turns, and stash a distilled profile for `user`."""
+    store.set_consent(user, granted=True)
+    sid = "sess-1"
+    store.record_turn(
+        user,
+        MemoryTurn(session_id=sid, persona_id="companion", role=Role.user, content="I'm Sam."),
+    )
+    store.record_turn(
+        user,
+        MemoryTurn(session_id=sid, persona_id="companion", role=Role.assistant, content="Hi Sam!"),
+    )
+    store.save_profile_raw(
+        user,
+        UserProfile(
+            user_id=user,
+            summary="Sam, a returning user.",
+            facts=[ProfileFact(text="Prefers to be called Sam")],
+        ).model_dump(),
+    )
+
+
+def test_get_memory_returns_profile_and_turns(registry: PersonaRegistry, tmp_path: Path) -> None:
+    svc, store = make_consent_service(registry, tmp_path)
+    _seed_memory(store, "alice")
+    out = svc.get_memory("alice")
+    assert out["user"] == "alice" and out["granted"] is True
+    assert out["summary"] == "Sam, a returning user."
+    assert [f["text"] for f in out["facts"]] == ["Prefers to be called Sam"]
+    assert [t["content"] for t in out["turns"]] == ["I'm Sam.", "Hi Sam!"]
+    assert out["updated_at"] is not None
+
+
+def test_get_memory_empty_user_is_blank(registry: PersonaRegistry, tmp_path: Path) -> None:
+    svc, _ = make_consent_service(registry, tmp_path)
+    out = svc.get_memory("newcomer")  # nothing ever stored
+    assert out["granted"] is False
+    assert out["summary"] == "" and out["facts"] == [] and out["turns"] == []
+    assert out["updated_at"] is None
+
+
+def test_get_memory_shows_stored_data_after_revoke(
+    registry: PersonaRegistry, tmp_path: Path
+) -> None:
+    # Revoking consent gates future recording but keeps existing data — introspection must still
+    # surface it (captioned by granted=False) so the paired delete is meaningful.
+    svc, store = make_consent_service(registry, tmp_path)
+    _seed_memory(store, "alice")
+    store.set_consent("alice", granted=False)
+    out = svc.get_memory("alice")
+    assert out["granted"] is False
+    assert len(out["turns"]) == 2 and out["facts"]  # data retained, just gated off
+
+
+def test_get_memory_limit_trims_to_most_recent(registry: PersonaRegistry, tmp_path: Path) -> None:
+    svc, store = make_consent_service(registry, tmp_path)
+    _seed_memory(store, "alice")  # two turns
+    out = svc.get_memory("alice", limit=1)
+    assert [t["content"] for t in out["turns"]] == ["Hi Sam!"]  # the latest only
+
+
+def test_get_memory_requires_user(registry: PersonaRegistry, tmp_path: Path) -> None:
+    svc, _ = make_consent_service(registry, tmp_path)
+    with pytest.raises(BadRequest, match="user id is required"):
+        svc.get_memory(None)
+
+
+def test_get_memory_disabled_without_store(registry: PersonaRegistry) -> None:
+    svc = make_service(registry)  # no memory store wired
+    with pytest.raises(ServerMisconfigured, match="memory is not enabled"):
+        svc.get_memory("alice")
+
+
+def test_delete_memory_wipes_everything(registry: PersonaRegistry, tmp_path: Path) -> None:
+    svc, store = make_consent_service(registry, tmp_path)
+    _seed_memory(store, "alice")
+    out = svc.delete_memory("alice")
+    assert out == {"user": "alice", "deleted": True}
+    assert store.has_user("alice") is False
+    # And a follow-up read comes back blank rather than erroring.
+    assert svc.get_memory("alice")["turns"] == []
+
+
+def test_delete_memory_idempotent(registry: PersonaRegistry, tmp_path: Path) -> None:
+    svc, _ = make_consent_service(registry, tmp_path)
+    out = svc.delete_memory("ghost")  # never stored
+    assert out == {"user": "ghost", "deleted": False}
+
+
 # --- config + build_service -----------------------------------------------------------
 
 
@@ -1380,3 +1472,40 @@ def test_http_consent_missing_granted_400(
     status, body = _post(f"{base}/consent?user=alice", {"allow_training": True}, auth)
     assert status == 400
     assert "granted" in body["error"]
+
+
+# --- HTTP: memory introspection routes (Feature L) ------------------------------------
+
+
+def test_http_memory_round_trip(consent_server: tuple[str, TokenService, MemoryStore]) -> None:
+    base, _, store = consent_server
+    auth = {"Authorization": "Bearer sekret"}
+    _seed_memory(store, "alice")
+
+    status, body = _get(f"{base}/memory?user=alice", auth)
+    assert status == 200 and body["granted"] is True
+    assert [f["text"] for f in body["facts"]] == ["Prefers to be called Sam"]
+    assert len(body["turns"]) == 2
+
+    # Forget-me: wipes the user, then a re-read comes back blank.
+    status, body = _delete(f"{base}/memory?user=alice", auth)
+    assert status == 200 and body == {"user": "alice", "deleted": True}
+    assert store.has_user("alice") is False
+    status, body = _get(f"{base}/memory?user=alice", auth)
+    assert status == 200 and body["turns"] == [] and body["facts"] == []
+
+
+def test_http_memory_requires_auth(consent_server: tuple[str, TokenService, MemoryStore]) -> None:
+    base, _, _ = consent_server
+    status, _ = _get(f"{base}/memory?user=alice")
+    assert status == 401
+
+
+def test_http_memory_bad_limit_400(
+    consent_server: tuple[str, TokenService, MemoryStore],
+) -> None:
+    base, _, _ = consent_server
+    auth = {"Authorization": "Bearer sekret"}
+    status, body = _get(f"{base}/memory?user=alice&limit=abc", auth)
+    assert status == 400
+    assert "limit" in body["error"]
