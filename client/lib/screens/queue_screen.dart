@@ -77,6 +77,19 @@ class _QueueScreenState extends State<QueueScreen> {
           personas: widget.personas,
           options: widget.options,
           initialMicMode: widget.initialMicMode,
+          // Lets the call rejoin a fresh room if the assistant never joins this one. Uses its own
+          // short-lived client — this screen's `_client` is closed when we `pushReplacement` away.
+          regrant: () async {
+            final client = TokenClient(widget.settings);
+            try {
+              return await client.requestToken(
+                persona: widget.persona.id,
+                options: widget.options,
+              );
+            } finally {
+              client.close();
+            }
+          },
         ),
       ));
     } catch (e) {

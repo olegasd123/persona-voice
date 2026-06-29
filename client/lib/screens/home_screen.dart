@@ -205,8 +205,23 @@ class _HomeScreenState extends State<HomeScreen> {
         personas: _personas,
         options: options,
         initialMicMode: widget.prefs.defaultMicMode,
+        // Lets the call rejoin a fresh room if the assistant never joins this one (the worker
+        // was still warming up when we connected). Mints a new token the same way as the initial
+        // connect — a new room re-triggers agent dispatch.
+        regrant: () => _mintGrant(grant.persona, options),
       ),
     ));
+  }
+
+  /// Mint a fresh join grant for [persona] (a new room each call). Shared by the initial connect
+  /// and the call's warm-up rejoin; owns the short-lived [TokenClient] it uses.
+  Future<JoinGrant> _mintGrant(String persona, SessionOptions options) async {
+    final client = TokenClient(_settings);
+    try {
+      return await client.requestToken(persona: persona, options: options);
+    } finally {
+      client.close();
+    }
   }
 
   /// All sessions busy: open the queue page, which waits for a slot and then enters the call.
