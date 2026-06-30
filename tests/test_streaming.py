@@ -10,7 +10,7 @@ from personavoice.persona import load_persona
 from personavoice.safety import KeywordModerator
 from personavoice.voice import VoiceRegistry
 
-from .fakes import make_backend
+from .fakes import FakeLLM, FakeSTT, FakeTTS, make_backend
 
 
 def _companion(config_dir: Path):
@@ -194,3 +194,55 @@ async def test_moderation_input_short_circuits(config_dir: Path) -> None:
     # The canned reply is committed to history like a normal turn.
     assert [m.role for m in pipe.history] == [Role.user, Role.assistant]
     assert "988" in pipe.history[-1].content
+
+
+async def test_moderation_bounds_abusive_output(config_dir: Path) -> None:
+    from personavoice.adapters.factory import Backend
+    from personavoice.models import Demeanor
+
+    # A clean opening sentence, then an abusive one, then more the user must never hear.
+    backend = Backend(
+        name="fake",
+        stt=FakeSTT("hi"),
+        llm=FakeLLM(
+            "ignored",
+            tokens=["Fine, here it is. ", "You're an idiot. ", "Anything else? "],
+        ),
+        tts=FakeTTS(),
+    )
+    pipe = StreamingPipeline(
+        backend,
+        _companion(config_dir),
+        options=SessionOptions(demeanor=Demeanor.rude),
+        moderator=KeywordModerator(),
+    )
+
+    chunks = [c async for c in pipe.stream_response("go on then")]
+    spoken = b"".join(chunks).decode()
+
+    # The clean sentence is voiced; the abuse is replaced in place and the rest never reached.
+    assert backend.tts.chunks[0] == "Fine, here it is."  # type: ignore[attr-defined]
+    assert "idiot" not in spoken
+    assert "Anything else" not in spoken
+    assert "respectful" in spoken  # the softened line was voiced in place of the abuse
+    # Generation was torn down at the breach rather than running to the end.
+    assert backend.llm.completed is False  # type: ignore[attr-defined]
+    # History commits the safe text the user actually heard, not the raw tokens.
+    assert "idiot" not in pipe.history[-1].content
+    assert pipe.history[-1].content.startswith("Fine, here it is.")
+
+
+async def test_moderation_clean_output_passes_through(config_dir: Path) -> None:
+    # With a guard configured but a clean reply, output is identical to no moderation.
+    reply = "Hello there. How are you?"
+    guarded = make_backend(llm_reply=reply)
+    pipe = StreamingPipeline(guarded, _companion(config_dir), moderator=KeywordModerator())
+    chunks = [c async for c in pipe.stream_response("hi")]
+
+    plain = make_backend(llm_reply=reply)
+    plain_pipe = StreamingPipeline(plain, _companion(config_dir))
+    plain_chunks = [c async for c in plain_pipe.stream_response("hi")]
+
+    assert guarded.tts.chunks == plain.tts.chunks  # type: ignore[attr-defined]
+    assert chunks == plain_chunks
+    assert pipe.history[-1].content == plain_pipe.history[-1].content == reply

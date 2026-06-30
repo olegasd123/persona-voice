@@ -919,7 +919,7 @@ async def entrypoint(ctx: Any, *, persona_id: str | None = None) -> None:
         )
 
     # Per-session overrides (voice / CEFR / demeanor) the caller chose, plus the moderation
-    # guard (no-op unless PERSONAVOICE_MODERATION is set).
+    # guard (the rule guard by default; PERSONAVOICE_MODERATION=none disables it).
     options = resolve_session_options(meta_sources)
     if options.any_set():
         logger.info("session options: %s", options.model_dump(exclude_none=True))
