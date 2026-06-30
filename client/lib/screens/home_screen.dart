@@ -589,43 +589,57 @@ class _PersonaCard extends StatelessWidget {
                   ),
                 ),
                 const SizedBox(width: 4),
-                // The two trailing controls default to a 48×48 tap box each, which opens a wide
-                // gap between them and steals width from the name. Pin both to a compact 36px box
-                // (padding dropped) so they sit close and the name column gets the reclaimed space.
-                if (onEdit != null || onDelete != null)
-                  SizedBox(
-                    width: 36,
-                    child: PopupMenuButton<String>(
+                // Stack the controls into a single narrow column so the content (name,
+                // description, attributes) gets the full remaining width. Each control sits in a
+                // compact 36px box with padding dropped to keep the stack tight.
+                Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    if (onEdit != null || onDelete != null)
+                      SizedBox(
+                        width: 36,
+                        height: 36,
+                        child: PopupMenuButton<String>(
+                          padding: EdgeInsets.zero,
+                          tooltip: 'Edit or delete',
+                          enabled: !disabled && !connecting,
+                          onSelected: (v) {
+                            if (v == 'edit') onEdit?.call();
+                            if (v == 'delete') onDelete?.call();
+                          },
+                          itemBuilder: (_) => [
+                            if (onEdit != null)
+                              const PopupMenuItem(value: 'edit', child: Text('Edit')),
+                            if (onDelete != null)
+                              const PopupMenuItem(value: 'delete', child: Text('Delete')),
+                          ],
+                        ),
+                      ),
+                    IconButton(
                       padding: EdgeInsets.zero,
-                      tooltip: 'Edit or delete',
-                      enabled: !disabled && !connecting,
-                      onSelected: (v) {
-                        if (v == 'edit') onEdit?.call();
-                        if (v == 'delete') onDelete?.call();
-                      },
-                      itemBuilder: (_) => [
-                        if (onEdit != null)
-                          const PopupMenuItem(value: 'edit', child: Text('Edit')),
-                        if (onDelete != null)
-                          const PopupMenuItem(value: 'delete', child: Text('Delete')),
-                      ],
+                      constraints: const BoxConstraints(minWidth: 36, minHeight: 36),
+                      icon: Icon(
+                        hasOptions ? Icons.tune : Icons.tune_outlined,
+                        color: hasOptions ? scheme.primary : scheme.outline,
+                      ),
+                      tooltip: 'Customize',
+                      onPressed: disabled || connecting ? null : onCustomize,
                     ),
-                  ),
-                IconButton(
-                  padding: EdgeInsets.zero,
-                  constraints: const BoxConstraints(minWidth: 36, minHeight: 36),
-                  icon: Icon(
-                    hasOptions ? Icons.tune : Icons.tune_outlined,
-                    color: hasOptions ? scheme.primary : scheme.outline,
-                  ),
-                  tooltip: 'Customize',
-                  onPressed: disabled || connecting ? null : onCustomize,
+                    SizedBox(
+                      width: 36,
+                      height: 36,
+                      child: Center(
+                        child: connecting
+                            ? const SizedBox(
+                                width: 22,
+                                height: 22,
+                                child: CircularProgressIndicator(strokeWidth: 2),
+                              )
+                            : Icon(Icons.call, color: scheme.primary),
+                      ),
+                    ),
+                  ],
                 ),
-                const SizedBox(width: 4),
-                connecting
-                    ? const SizedBox(
-                        width: 22, height: 22, child: CircularProgressIndicator(strokeWidth: 2))
-                    : Icon(Icons.call, color: scheme.primary),
               ],
             ),
           ),
