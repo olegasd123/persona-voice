@@ -79,10 +79,11 @@ class StreamingPipeline:
         self.dynamic_emotion = (
             dynamic_emotion if dynamic_emotion is not None else dynamic_emotion_enabled()
         )
-        # Optional input guard. None = no moderation (behavior unchanged). On the streaming
-        # path the guard runs on *input* (a flagged/crisis utterance short-circuits to a safe
-        # spoken reply); the bounded `rude` prompt and the turn-based output guard cover the
-        # output side (full-reply output moderation pre-TTS would defeat streaming).
+        # Optional input/output guard. None = no moderation (behavior unchanged). On the
+        # streaming path the guard runs on *input* (a flagged/crisis utterance short-circuits
+        # to a safe spoken reply) and on *output* per sentence (`_guard` below): each chunked
+        # sentence is checked just before it is voiced, so the `rude` cap / abuse bound applies
+        # live without buffering the whole reply (which would defeat streaming).
         self.moderator = moderator
         self.history: list[Msg] = []
         # TTS chunk-sizing knobs (latency); resolved from the environment by default so
@@ -137,6 +138,11 @@ class StreamingPipeline:
             self.persona, self.backend, self.voices, voice_choice=self._voice_choice
         )
         collected: list[str] = []
+        # `spoken` records the sentences actually voiced once the output guard is engaged; on a
+        # breach it lets the turn commit the safe text (not the raw tokens) to history/memory.
+        spoken: list[str] = []
+        moderated = False
+        demeanor = self.options.demeanor if self.options else None
         t0 = time.perf_counter()
 
         tool_specs = self._tool_specs()
@@ -178,6 +184,34 @@ class StreamingPipeline:
                         await on_sentence(sentence)
                 yield sentence
 
+        async def _guard(it: AsyncIterator[str]) -> AsyncIterator[str]:
+            """Output bound (streaming): moderate each sentence just before it is voiced.
+
+            Clean sentences pass straight through; the first sentence that breaches the bound
+            (the `rude` cap, harassment, threats) is replaced with the safe line and the stream
+            stops — the streaming analogue of the turn-based `_bound_output`, run per sentence so
+            it never buffers the whole reply. Runs ahead of `_tap` so the published transcript
+            shows the safe line, not the breaching sentence.
+            """
+            nonlocal moderated
+            moderator = self.moderator
+            assert moderator is not None  # only wired in when a guard is configured
+            async for sentence in it:
+                verdict = await moderator.check_output(sentence, demeanor=demeanor)
+                if verdict.flagged and verdict.replacement is not None:
+                    moderated = True
+                    spoken.append(verdict.replacement)
+                    # Tear down the in-flight LLM/TTS source stream so we stop generating the
+                    # rest of the reply (mirrors TurnController's teardown on barge-in).
+                    aclose = getattr(it, "aclose", None)
+                    if aclose is not None:
+                        with contextlib.suppress(Exception):
+                            await aclose()
+                    yield verdict.replacement
+                    return
+                spoken.append(sentence)
+                yield sentence
+
         try:
             # Per-utterance emotion: peel a leading `[emotion]` tag off the reply
             # (buffering only its leading window) and apply it to this turn's voice — before TTS
@@ -189,13 +223,16 @@ class StreamingPipeline:
                 emotion, body = await split_leading_emotion(body)
                 if emotion is not None:
                     voice = voice.model_copy(update={"emotion": emotion})
-            sentences = _tap(
-                stream_sentences(
-                    _collect(body),
-                    max_chunk_chars=self.chunk_kwargs.get("max_chunk_chars") or 240,
-                    first_chunk_chars=self.chunk_kwargs.get("first_chunk_chars"),
-                )
+            sentence_stream: AsyncIterator[str] = stream_sentences(
+                _collect(body),
+                max_chunk_chars=self.chunk_kwargs.get("max_chunk_chars") or 240,
+                first_chunk_chars=self.chunk_kwargs.get("first_chunk_chars"),
             )
+            # Output moderation runs per sentence, before TTS — skipped for our own canned safe
+            # reply and when no guard is configured, so the default path is unchanged.
+            if self.moderator is not None and canned is None:
+                sentence_stream = _guard(sentence_stream)
+            sentences = _tap(sentence_stream)
             async for audio in self.backend.tts.stream_tts(sentences, voice):
                 if metrics is not None and metrics.first_audio is None:
                     metrics.first_audio = time.perf_counter() - t0
@@ -204,7 +241,10 @@ class StreamingPipeline:
             # Runs on normal completion *and* on cancellation (barge-in): record what we
             # produced and commit the (possibly partial) reply to history so context stays
             # consistent with what the user actually heard.
-            reply = "".join(collected).strip()
+            # A breached turn voiced the safe replacement, not the raw tokens — commit what the
+            # user actually heard (clean sentences + the safe line) so history, memory, and the
+            # metrics record stay consistent with the audio.
+            reply = " ".join(spoken).strip() if moderated else "".join(collected).strip()
             if metrics is not None:
                 metrics.total = time.perf_counter() - t0
                 metrics.reply = reply
