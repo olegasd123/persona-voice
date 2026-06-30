@@ -80,6 +80,16 @@ void _draftTests() {
       expect(d.isEditing, isTrue);
     });
 
+    test('fromBody strips the voices/ prefix so the ref matches the bare catalog ids', () {
+      // The drafter / curated personas reference `voices/<id>`; the voice catalog lists `<id>`.
+      final d = PersonaDraft.fromBody({
+        'name': 'Drafted',
+        'system_prompt': 'hi',
+        'voice': {'ref': 'voices/companion_soft', 'emotion': 'warm'},
+      });
+      expect(d.voiceRef, 'companion_soft');
+    });
+
     test('toJson round-trips advanced fields it does not surface', () {
       final d = PersonaDraft.fromBody(fullBody);
       d.turnStyle = TurnStyle.balanced; // edit one field

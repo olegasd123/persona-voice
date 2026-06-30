@@ -68,6 +68,15 @@ TurnStyle turnStyleFromWire(String? value) {
   return TurnStyle.balanced;
 }
 
+/// Personas reference voices as `voices/<id>`, but the voice catalog (`GET /voices`) lists bare
+/// `<id>`s. Strip the prefix when ingesting a persona body so a drafted/edited persona's voice
+/// matches a dropdown entry instead of appearing as a raw extra item. The server resolves either
+/// form identically (it strips the prefix on lookup), and manually-picked voices are already bare.
+String _bareVoiceRef(String? ref) {
+  final r = (ref ?? '').trim();
+  return r.startsWith('voices/') ? r.substring('voices/'.length) : r;
+}
+
 /// An editable custom-persona draft — the fields the New/Edit form exposes, plus a snapshot of
 /// the original server body so advanced fields we don't surface (temperature, memory.top_k, …)
 /// round-trip on edit instead of resetting to defaults. Mirrors the server's `Persona`
@@ -123,7 +132,7 @@ class PersonaDraft {
       name: (body['name'] as String?) ?? '',
       description: (body['description'] as String?) ?? '',
       systemPrompt: (body['system_prompt'] as String?) ?? '',
-      voiceRef: (voice['ref'] as String?) ?? '',
+      voiceRef: _bareVoiceRef(voice['ref'] as String?),
       voiceEmotion: (voice['emotion'] as String?) ?? 'neutral',
       lora: llm['lora'] as String?,
       turnStyle: turnStyleFromWire(behavior['turn_style'] as String?),

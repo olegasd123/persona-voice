@@ -281,7 +281,8 @@ void main() {
     expect(seen.url.queryParameters['user'], 'oleg');
     expect(draft.name, 'Patient French Tutor');
     expect(draft.systemPrompt, 'You are a patient French tutor.');
-    expect(draft.voiceRef, 'voices/companion_soft');
+    // The `voices/` prefix is stripped so the ref matches a bare voice-catalog id.
+    expect(draft.voiceRef, 'companion_soft');
     expect(draft.sessionDefaults.cefr, CefrLevel.b1);
   });
 
