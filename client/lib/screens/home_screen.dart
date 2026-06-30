@@ -509,33 +509,40 @@ class _PersonaCard extends StatelessWidget {
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      Row(
-                        children: [
-                          Flexible(
-                            child: Text(
-                              persona.name,
-                              style: const TextStyle(
-                                  fontSize: 16, fontWeight: FontWeight.w600),
-                              overflow: TextOverflow.ellipsis,
-                            ),
-                          ),
-                          if (isLastUsed)
-                            _MiniTag(
-                              'Last used',
-                              isDark ? Colors.green.shade800 : Colors.green.shade100,
-                              isDark ? Colors.green.shade100 : Colors.green.shade800,
-                            )
-                          else if (isDefault) _MiniTag('Default',
-                              scheme.secondaryContainer, scheme.onSecondaryContainer),
-                          if (persona.custom)
-                            _MiniTag('Custom', scheme.tertiaryContainer,
-                                scheme.onTertiaryContainer),
-                          if (hasOptions)
-                            _MiniTag('Tuned', scheme.primaryContainer,
-                                scheme.onPrimaryContainer),
-                        ],
+                      // Name owns its own line so it's never squeezed by the tags; the tags
+                      // wrap onto extra lines below instead of crowding it out.
+                      Text(
+                        persona.name,
+                        style: const TextStyle(
+                            fontSize: 16, fontWeight: FontWeight.w600),
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
                       ),
-                      const SizedBox(height: 2),
+                      if (isLastUsed || isDefault || persona.custom || hasOptions) ...[
+                        const SizedBox(height: 6),
+                        Wrap(
+                          spacing: 6,
+                          runSpacing: 6,
+                          children: [
+                            if (isLastUsed)
+                              _MiniTag(
+                                'Last used',
+                                isDark ? Colors.green.shade800 : Colors.green.shade100,
+                                isDark ? Colors.green.shade100 : Colors.green.shade800,
+                              )
+                            else if (isDefault)
+                              _MiniTag('Default', scheme.secondaryContainer,
+                                  scheme.onSecondaryContainer),
+                            if (persona.custom)
+                              _MiniTag('Custom', scheme.tertiaryContainer,
+                                  scheme.onTertiaryContainer),
+                            if (hasOptions)
+                              _MiniTag('Tuned', scheme.primaryContainer,
+                                  scheme.onPrimaryContainer),
+                          ],
+                        ),
+                      ],
+                      const SizedBox(height: 4),
                       Text(
                         subtitle,
                         style: TextStyle(fontSize: 13, color: scheme.onSurfaceVariant),
@@ -582,22 +589,31 @@ class _PersonaCard extends StatelessWidget {
                   ),
                 ),
                 const SizedBox(width: 4),
+                // The two trailing controls default to a 48×48 tap box each, which opens a wide
+                // gap between them and steals width from the name. Pin both to a compact 36px box
+                // (padding dropped) so they sit close and the name column gets the reclaimed space.
                 if (onEdit != null || onDelete != null)
-                  PopupMenuButton<String>(
-                    tooltip: 'Edit or delete',
-                    enabled: !disabled && !connecting,
-                    onSelected: (v) {
-                      if (v == 'edit') onEdit?.call();
-                      if (v == 'delete') onDelete?.call();
-                    },
-                    itemBuilder: (_) => [
-                      if (onEdit != null)
-                        const PopupMenuItem(value: 'edit', child: Text('Edit')),
-                      if (onDelete != null)
-                        const PopupMenuItem(value: 'delete', child: Text('Delete')),
-                    ],
+                  SizedBox(
+                    width: 36,
+                    child: PopupMenuButton<String>(
+                      padding: EdgeInsets.zero,
+                      tooltip: 'Edit or delete',
+                      enabled: !disabled && !connecting,
+                      onSelected: (v) {
+                        if (v == 'edit') onEdit?.call();
+                        if (v == 'delete') onDelete?.call();
+                      },
+                      itemBuilder: (_) => [
+                        if (onEdit != null)
+                          const PopupMenuItem(value: 'edit', child: Text('Edit')),
+                        if (onDelete != null)
+                          const PopupMenuItem(value: 'delete', child: Text('Delete')),
+                      ],
+                    ),
                   ),
                 IconButton(
+                  padding: EdgeInsets.zero,
+                  constraints: const BoxConstraints(minWidth: 36, minHeight: 36),
                   icon: Icon(
                     hasOptions ? Icons.tune : Icons.tune_outlined,
                     color: hasOptions ? scheme.primary : scheme.outline,
@@ -605,6 +621,7 @@ class _PersonaCard extends StatelessWidget {
                   tooltip: 'Customize',
                   onPressed: disabled || connecting ? null : onCustomize,
                 ),
+                const SizedBox(width: 4),
                 connecting
                     ? const SizedBox(
                         width: 22, height: 22, child: CircularProgressIndicator(strokeWidth: 2))
@@ -627,7 +644,6 @@ class _MiniTag extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Container(
-      margin: const EdgeInsets.only(left: 6),
       padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
       decoration: BoxDecoration(color: bg, borderRadius: BorderRadius.circular(999)),
       child: Text(label, style: TextStyle(fontSize: 10, color: fg, fontWeight: FontWeight.w500)),
