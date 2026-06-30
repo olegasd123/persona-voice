@@ -48,8 +48,21 @@ services:
       dockerfile: Dockerfile
     depends_on:
       - livekit
+    # `host.docker.internal` lets the container reach a service on the host (LM Studio). Built in
+    # on Docker Desktop (Mac/Windows); the explicit host-gateway mapping makes it work on a Linux
+    # engine too. Used by LMSTUDIO_BASE_URL below.
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     environment:
       - BACKEND=${BACKEND:-mac}
+      # LM Studio runs on the HOST, not in this container, so `localhost` points at the container
+      # and fails. `/personas/draft` is the only token-server route that calls the LLM, so it's the
+      # first to need this. The container's URL is a SEPARATE knob from the host's: the project
+      # `.env` sets LMSTUDIO_BASE_URL=localhost for the native agent worker (which runs on the
+      # host), so the container can't reuse it — it reads LMSTUDIO_BASE_URL_DOCKER instead,
+      # defaulting to host.docker.internal. On the CUDA/prod stack BACKEND=cuda, so the LLM is vLLM
+      # and this is ignored.
+      - LMSTUDIO_BASE_URL=${LMSTUDIO_BASE_URL_DOCKER:-http://host.docker.internal:1234/v1}
       # The URL handed to clients — override with the LAN IP for phones (see header).
       - LIVEKIT_URL=${LIVEKIT_URL:-ws://localhost:7880}
       - LIVEKIT_API_KEY=${LIVEKIT_API_KEY:-devkey}
@@ -130,6 +143,19 @@ services:
       - type: bind
         source: ${PERSONAVOICE_MEMORY_DIR:-./models/memory}
         target: /app/models/memory
+        bind:
+          create_host_path: true
+      # Custom personas (N3) the user authors at runtime. The token-server WRITES this manifest
+      # (POST/PUT/DELETE /personas) and the native agent worker READS it to resolve a custom
+      # persona at call time — the /token metadata carries only the persona *id*, not its body.
+      # Without this mount the two drift: the container writes to its own ephemeral copy and the
+      # host worker reads an absent file, so every custom persona silently falls back to the
+      # default. Unlike the dirs above this is a single FILE; `save()` writes it in place (no
+      # atomic rename), so a file bind mount propagates. run-mac.sh seeds an empty manifest first
+      # so Docker mounts a file, not an auto-created directory.
+      - type: bind
+        source: ${PERSONAVOICE_USER_PERSONAS:-./models/user_personas.json}
+        target: /app/models/user_personas.json
         bind:
           create_host_path: true
       # Prometheus multi-process metrics dir, shared with the native agent worker. The worker

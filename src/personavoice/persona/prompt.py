@@ -7,8 +7,15 @@ assembles system + prior history + the new user turn.
 
 from __future__ import annotations
 
+import re
+
 from ..emotion import EMOTION_DIRECTIVE
 from ..models import CEFRLevel, Demeanor, Msg, Persona, Role, SessionOptions, TurnStyle
+
+# Collapse any run of whitespace (including the hard line wraps a YAML block-scalar system_prompt
+# carries, and the blank lines between assembled segments) to a single space. A spoken assistant's
+# system prompt needs no formatting, and the embedded newlines only clutter the request logs.
+_WHITESPACE_RE = re.compile(r"\s+")
 
 _TURN_STYLE_DIRECTIVE = {
     TurnStyle.concise: "Keep replies short and to the point — usually one to three sentences.",
@@ -97,7 +104,9 @@ def render_system_prompt(
         "You are speaking out loud in a live voice conversation. "
         "Respond in natural spoken language without markdown, lists, or emoji."
     )
-    return "\n\n".join(parts)
+    # Join on a space and flatten to a single line — the authored prompt may carry hard line
+    # wraps and the segments above are separate sentences, but the final prompt should be newline-free.
+    return _WHITESPACE_RE.sub(" ", " ".join(parts)).strip()
 
 
 def build_messages(

@@ -248,6 +248,58 @@ void main() {
     expect(stored.sessionDefaults.cefr, CefrLevel.a1);
   });
 
+  test('draftPersona posts the description and parses the drafted body', () async {
+    late http.Request seen;
+    final mock = MockClient((req) async {
+      seen = req;
+      final body = jsonDecode(req.body) as Map<String, dynamic>;
+      expect(body['description'], 'a patient French tutor who only speaks in B1');
+      return http.Response(
+        jsonEncode({
+          'id': 'patient-french-tutor',
+          'name': 'Patient French Tutor',
+          'custom': true,
+          // Same shape as create/edit so the New form can prefill straight from it.
+          'persona': {
+            'id': 'patient-french-tutor',
+            'name': 'Patient French Tutor',
+            'system_prompt': 'You are a patient French tutor.',
+            'llm': {'base_model': 'qwen', 'lora': null},
+            'voice': {'ref': 'voices/companion_soft', 'emotion': 'warm'},
+            'behavior': {'turn_style': 'balanced'},
+            'memory': {'enabled': false},
+            'session_defaults': {'cefr': 'B1'},
+          },
+        }),
+        200,
+      );
+    });
+    final draft = await TokenClient(_settings(), httpClient: mock)
+        .draftPersona('a patient French tutor who only speaks in B1');
+    expect(seen.method, 'POST');
+    expect(seen.url.path, '/personas/draft');
+    expect(seen.url.queryParameters['user'], 'oleg');
+    expect(draft.name, 'Patient French Tutor');
+    expect(draft.systemPrompt, 'You are a patient French tutor.');
+    // The `voices/` prefix is stripped so the ref matches a bare voice-catalog id.
+    expect(draft.voiceRef, 'companion_soft');
+    expect(draft.sessionDefaults.cefr, CefrLevel.b1);
+  });
+
+  test('draftPersona surfaces the server reason on a bad draft', () async {
+    final mock = MockClient((req) async {
+      return http.Response(
+        jsonEncode({'error': 'could not draft a persona: the draft is missing a \'name\''}),
+        400,
+      );
+    });
+    expect(
+      () => TokenClient(_settings(), httpClient: mock).draftPersona('???'),
+      throwsA(isA<TokenClientException>()
+          .having((e) => e.message, 'message', contains('could not draft a persona'))),
+    );
+  });
+
   test('updatePersona PUTs to the persona id', () async {
     late http.Request seen;
     final mock = MockClient((req) async {

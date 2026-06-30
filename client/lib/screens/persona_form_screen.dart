@@ -29,17 +29,33 @@ class PersonaFormScreen extends StatefulWidget {
 
 enum _Load { loading, ready, error }
 
+/// How a *new* persona is being authored: by hand, or generated from a one-line description that
+/// then prefills the manual form. Irrelevant when editing (an existing persona is always manual).
+enum _Mode { manual, fromDraft }
+
 class _PersonaFormScreenState extends State<PersonaFormScreen> {
+  /// A few starter descriptions to make the draft mode discoverable (tap to fill the field).
+  static const _examples = [
+    'a patient French tutor who only speaks in B1',
+    'a blunt product manager running a mock interview',
+    'a calm bedtime storyteller for young kids',
+  ];
+
   final _formKey = GlobalKey<FormState>();
   final _nameCtrl = TextEditingController();
   final _descCtrl = TextEditingController();
   final _promptCtrl = TextEditingController();
+  final _draftDescCtrl = TextEditingController();
 
   PersonaDraft _draft = PersonaDraft();
   LoraCatalog _loras = LoraCatalog.empty;
   _Load _state = _Load.loading;
   String? _error;
   bool _saving = false;
+
+  _Mode _mode = _Mode.manual;
+  bool _drafting = false;
+  String? _draftError;
 
   @override
   void initState() {
@@ -52,7 +68,60 @@ class _PersonaFormScreenState extends State<PersonaFormScreen> {
     _nameCtrl.dispose();
     _descCtrl.dispose();
     _promptCtrl.dispose();
+    _draftDescCtrl.dispose();
     super.dispose();
+  }
+
+  /// Draft a persona from [_draftDescCtrl] on the server, then prefill the manual form so the
+  /// user reviews and saves. The draft is never persisted here — the existing Save (`createPersona`)
+  /// does the write, exactly as for a hand-filled persona.
+  Future<void> _generate() async {
+    final description = _draftDescCtrl.text.trim();
+    if (description.isEmpty) {
+      setState(() => _draftError = 'Describe the persona you want.');
+      return;
+    }
+    setState(() {
+      _drafting = true;
+      _draftError = null;
+    });
+    final client = TokenClient(widget.settings);
+    try {
+      final draft = await client.draftPersona(description);
+      if (!mounted) return;
+      _nameCtrl.text = draft.name;
+      _descCtrl.text = draft.description;
+      _promptCtrl.text = draft.systemPrompt;
+      setState(() {
+        _draft = draft;
+        _mode = _Mode.manual;
+        _drafting = false;
+      });
+      ScaffoldMessenger.of(context)
+        ..clearSnackBars()
+        ..showSnackBar(const SnackBar(content: Text('Draft ready — review and save.')));
+    } catch (e) {
+      if (mounted) {
+        setState(() {
+          _drafting = false;
+          _draftError = _draftMessage(e);
+        });
+      }
+    } finally {
+      client.close();
+    }
+  }
+
+  /// A user-facing line for a failed draft. A 4xx carries the server's reason (e.g. "could not
+  /// draft a persona: …"); a transport failure hides the raw socket noise.
+  String _draftMessage(Object e) {
+    if (e is TokenClientException) {
+      if (e.statusCode == null) {
+        return 'Could not reach the server. Check your connection and try again.';
+      }
+      return e.message;
+    }
+    return 'Something went wrong drafting the persona. Try again.';
   }
 
   Future<void> _bootstrap() async {
@@ -122,7 +191,9 @@ class _PersonaFormScreenState extends State<PersonaFormScreen> {
       appBar: AppBar(
         title: Text(widget.isEditing ? 'Edit persona' : 'New persona'),
         actions: [
-          if (_state == _Load.ready)
+          // No Save while drafting from a description: there's nothing to save until the draft
+          // lands in (and flips back to) the manual form. Generate lives in the body instead.
+          if (_state == _Load.ready && _mode == _Mode.manual)
             TextButton(
               onPressed: _saving ? null : _save,
               child: _saving
@@ -135,8 +206,97 @@ class _PersonaFormScreenState extends State<PersonaFormScreen> {
       body: switch (_state) {
         _Load.loading => const Center(child: CircularProgressIndicator()),
         _Load.error => _ErrorBody(message: _error ?? 'Failed to load', onRetry: _bootstrap),
-        _Load.ready => _form(context),
+        _Load.ready => _readyBody(context),
       },
+    );
+  }
+
+  /// The ready body. Editing is always the manual form; a new persona gets a mode toggle on top so
+  /// the user can author by hand or generate a draft that then prefills the same form.
+  Widget _readyBody(BuildContext context) {
+    if (widget.isEditing) return _form(context);
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        Padding(
+          padding: const EdgeInsets.fromLTRB(16, 16, 16, 0),
+          child: SegmentedButton<_Mode>(
+            segments: const [
+              ButtonSegment(
+                value: _Mode.manual,
+                label: Text('Manual'),
+                icon: Icon(Icons.edit_outlined),
+              ),
+              ButtonSegment(
+                value: _Mode.fromDraft,
+                label: Text('From description'),
+                icon: Icon(Icons.auto_awesome_outlined),
+              ),
+            ],
+            selected: {_mode},
+            // Lock the toggle mid-draft so a switch can't strand the in-flight request.
+            onSelectionChanged:
+                _drafting ? null : (s) => setState(() => _mode = s.first),
+          ),
+        ),
+        Expanded(
+          child: _mode == _Mode.manual ? _form(context) : _draftSubview(context),
+        ),
+      ],
+    );
+  }
+
+  Widget _draftSubview(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    return ListView(
+      padding: const EdgeInsets.fromLTRB(16, 16, 16, 32),
+      children: [
+        Text(
+          'Describe the persona in plain language and the assistant drafts it for you. '
+          "You'll review and tweak everything before it's saved.",
+          style: TextStyle(fontSize: 13, color: scheme.onSurfaceVariant),
+        ),
+        const SizedBox(height: 16),
+        TextField(
+          controller: _draftDescCtrl,
+          enabled: !_drafting,
+          minLines: 3,
+          maxLines: 6,
+          textInputAction: TextInputAction.newline,
+          decoration: const InputDecoration(
+            labelText: 'Description',
+            hintText: 'e.g. a patient French tutor who only speaks in B1',
+            border: OutlineInputBorder(),
+            alignLabelWithHint: true,
+          ),
+        ),
+        const SizedBox(height: 12),
+        Wrap(
+          spacing: 8,
+          runSpacing: 8,
+          children: [
+            for (final ex in _examples)
+              ActionChip(
+                label: Text(ex),
+                onPressed:
+                    _drafting ? null : () => setState(() => _draftDescCtrl.text = ex),
+              ),
+          ],
+        ),
+        if (_draftError != null) ...[
+          const SizedBox(height: 16),
+          Text(_draftError!, style: TextStyle(color: scheme.error)),
+        ],
+        const SizedBox(height: 24),
+        FilledButton.icon(
+          onPressed: _drafting ? null : _generate,
+          icon: _drafting
+              ? const SizedBox(
+                  width: 18, height: 18, child: CircularProgressIndicator(strokeWidth: 2))
+              : const Icon(Icons.auto_awesome),
+          label: Text(_drafting ? 'Drafting…' : 'Generate persona'),
+        ),
+      ],
     );
   }
 

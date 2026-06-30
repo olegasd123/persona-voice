@@ -74,6 +74,14 @@ export PERSONAVOICE_ADMISSION_503="${PERSONAVOICE_ADMISSION_503:-1}"
 export PROMETHEUS_MULTIPROC_DIR="${PROMETHEUS_MULTIPROC_DIR:-$REPO_ROOT/models/metrics}"
 mkdir -p "$PROMETHEUS_MULTIPROC_DIR"
 
+# Custom personas are a single JSON file shared between the dockerized token-server (writer) and
+# this native worker (reader) — see the bind mount in docker-compose.livekit.yml. Seed an empty
+# manifest if it's missing so Docker mounts a FILE, not an auto-created directory (which would
+# break the store's file writes). Both sides default to models/user_personas.json.
+USER_PERSONAS_FILE="${PERSONAVOICE_USER_PERSONAS:-$REPO_ROOT/models/user_personas.json}"
+mkdir -p "$(dirname "$USER_PERSONAS_FILE")"
+[[ -f "$USER_PERSONAS_FILE" ]] || printf '{"users": {}}\n' > "$USER_PERSONAS_FILE"
+
 # --- preflight (cheap checks only; the one-time work lives in setup-mac.sh) -----------------
 docker info >/dev/null 2>&1 || { echo "Docker is not running. Start Docker Desktop and retry."; exit 1; }
 
