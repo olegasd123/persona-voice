@@ -271,11 +271,12 @@ embedded in metadata) or send a `{"voice":…, "cefr":…, "demeanor":…}` data
 mid-call. The offline demos take `--voice/--cefr/--demeanor` so the behavior is testable without a
 client (e.g. `personavoice-stream-demo --wav q.wav --persona language_teacher --cefr a2`).
 
-**Moderation.** A pluggable input/output guard (`safety/`) wraps the LLM turn — off by default
-(no-op), enabled with `PERSONAVOICE_MODERATION=keyword`. The shipped rule guard short-circuits a
-crisis/self-harm utterance to a calm, resource-pointing reply and bounds abusive output, which is
-what *guarantees* the `rude` demeanor stays "brusque, not abusive". Recommended once `rude` is
-exposed to real users.
+**Moderation.** A pluggable input/output guard (`safety/`) wraps the LLM turn — **on by default**
+(the dependency-free rule guard), disabled with `PERSONAVOICE_MODERATION=none`. The rule guard
+short-circuits a crisis/self-harm utterance to a calm, resource-pointing reply, blocks any reply
+that *encourages* self-harm, and bounds abusive output — which is what *guarantees* the `rude`
+demeanor stays "brusque, not abusive". On the streaming path the output bound runs per sentence,
+just before each is voiced, so it applies live without buffering the whole reply.
 
 **Dynamic emotion (per-utterance prosody).** Off by default; set `PERSONAVOICE_DYNAMIC_EMOTION=1`
 to have the persona color each reply individually. The model is asked to prefix a reply with one
