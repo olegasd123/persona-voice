@@ -21,15 +21,15 @@ from collections.abc import AsyncIterator, Awaitable, Callable
 from dataclasses import dataclass
 
 from ..adapters.factory import Backend
-from ..emotion import dynamic_emotion_enabled, split_leading_emotion
+from ..emotion import split_leading_emotion
 from ..memory import ConversationMemory
-from ..models import Msg, Persona, Role, SessionOptions
+from ..models import Msg, Persona, SessionOptions
 from ..persona.prompt import build_messages
 from ..safety import Moderator
 from ..voice.registry import VoiceRegistry
 from .chunker import chunk_kwargs_from_env, stream_sentences
-from .pipeline import voice_ref_for
-from .tools import ToolRegistry, ToolSpec
+from .pipeline import _PipelineBase
+from .tools import ToolRegistry
 
 
 @dataclass
@@ -42,12 +42,15 @@ class StreamMetrics:
     reply: str = ""  # the full reply text, assembled from the token stream
 
 
-class StreamingPipeline:
+class StreamingPipeline(_PipelineBase):
     """Runs one persona conversation, streaming each reply sentence-by-sentence.
 
     Keeps an in-memory `history` like the turn-based pipeline so multi-turn sessions have context.
     `stream_response` is a cancellable async generator: cancelling the task that drives it
     (see `TurnController`) tears down the in-flight LLM and TTS streams for barge-in.
+
+    Beyond the shared `_PipelineBase` scaffolding it adds the per-sentence output guard
+    (`_guard`), TTS chunk sizing, and consent-gated cross-session memory.
     """
 
     def __init__(
@@ -64,28 +67,15 @@ class StreamingPipeline:
         chunk_kwargs: dict[str, int | None] | None = None,
         dynamic_emotion: bool | None = None,
     ) -> None:
-        self.backend = backend
-        self.persona = persona
-        self.voices = voices
-        # Per-session overrides (voice / cefr / demeanor). None = persona defaults.
-        self.options = options
-        # Tool / function calling. None = no tools; a persona only calls tools it
-        # lists in `persona.tools`, resolved against this registry per turn. Adapters that can't
-        # do function calling ignore the schemas, so this degrades gracefully.
-        self.tools = tools
-        # Per-utterance emotion: when on, the persona prompt gains the emotion-tag
-        # directive and each reply's leading `[emotion]` tag is stripped and applied to the voice.
-        # Defaults to the env toggle (off) so behavior is unchanged unless an operator opts in.
-        self.dynamic_emotion = (
-            dynamic_emotion if dynamic_emotion is not None else dynamic_emotion_enabled()
+        super().__init__(
+            backend,
+            persona,
+            voices,
+            options=options,
+            moderator=moderator,
+            tools=tools,
+            dynamic_emotion=dynamic_emotion,
         )
-        # Optional input/output guard. None = no moderation (behavior unchanged). On the
-        # streaming path the guard runs on *input* (a flagged/crisis utterance short-circuits
-        # to a safe spoken reply) and on *output* per sentence (`_guard` below): each chunked
-        # sentence is checked just before it is voiced, so the `rude` cap / abuse bound applies
-        # live without buffering the whole reply (which would defeat streaming).
-        self.moderator = moderator
-        self.history: list[Msg] = []
         # TTS chunk-sizing knobs (latency); resolved from the environment by default so
         # the live agent and demos pick up `PERSONAVOICE_TTS_*` without extra wiring.
         self.chunk_kwargs = chunk_kwargs if chunk_kwargs is not None else chunk_kwargs_from_env()
@@ -134,15 +124,13 @@ class StreamingPipeline:
             )
         else:
             messages = []
-        voice = voice_ref_for(
-            self.persona, self.backend, self.voices, voice_choice=self._voice_choice
-        )
+        voice = self._resolve_voice()
         collected: list[str] = []
         # `spoken` records the sentences actually voiced once the output guard is engaged; on a
         # breach it lets the turn commit the safe text (not the raw tokens) to history/memory.
         spoken: list[str] = []
         moderated = False
-        demeanor = self.options.demeanor if self.options else None
+        demeanor = self._demeanor
         t0 = time.perf_counter()
 
         tool_specs = self._tool_specs()
@@ -249,28 +237,8 @@ class StreamingPipeline:
                 metrics.total = time.perf_counter() - t0
                 metrics.reply = reply
             if use_internal:
-                self.history.append(Msg(role=Role.user, content=user_text))
-                self.history.append(Msg(role=Role.assistant, content=reply))
+                self._commit_history(user_text, reply)
             await self._remember(user_text, reply)
-
-    @property
-    def _voice_choice(self) -> str | None:
-        return self.options.voice if self.options else None
-
-    def _tool_specs(self) -> list[ToolSpec]:
-        """The tools the current persona may call this turn (empty unless it opts in)."""
-        if self.tools is None or not self.persona.tools:
-            return []
-        return self.tools.select(self.persona.tools)
-
-    async def _safe_input_reply(self, user_text: str) -> str | None:
-        """A safe canned reply when the input is flagged, else None (run the normal turn)."""
-        if self.moderator is None:
-            return None
-        verdict = await self.moderator.check_input(user_text)
-        if verdict.flagged and verdict.replacement is not None:
-            return verdict.replacement
-        return None
 
     async def _recall(self, user_text: str) -> str | None:
         """Memory block to inject for this turn (None when memory is off / no consent)."""
