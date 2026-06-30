@@ -145,6 +145,19 @@ services:
         target: /app/models/memory
         bind:
           create_host_path: true
+      # Custom personas (N3) the user authors at runtime. The token-server WRITES this manifest
+      # (POST/PUT/DELETE /personas) and the native agent worker READS it to resolve a custom
+      # persona at call time — the /token metadata carries only the persona *id*, not its body.
+      # Without this mount the two drift: the container writes to its own ephemeral copy and the
+      # host worker reads an absent file, so every custom persona silently falls back to the
+      # default. Unlike the dirs above this is a single FILE; `save()` writes it in place (no
+      # atomic rename), so a file bind mount propagates. run-mac.sh seeds an empty manifest first
+      # so Docker mounts a file, not an auto-created directory.
+      - type: bind
+        source: ${PERSONAVOICE_USER_PERSONAS:-./models/user_personas.json}
+        target: /app/models/user_personas.json
+        bind:
+          create_host_path: true
       # Prometheus multi-process metrics dir, shared with the native agent worker. The worker
       # writes one mmap file per process here (gated by its PROMETHEUS_MULTIPROC_DIR); the
       # token-server's /metrics reads + aggregates them (see PROMETHEUS_MULTIPROC_DIR above). The

@@ -33,6 +33,17 @@ def test_system_prompt_reflects_turn_style(config_dir: Path) -> None:
     assert "without markdown" in prompt  # spoken-output guardrail
 
 
+def test_system_prompt_is_single_line(config_dir: Path) -> None:
+    # The authored YAML prompt is a multi-line block scalar; the rendered prompt must collapse
+    # those (and the segment joins) so no newline reaches the LLM request.
+    persona = load_persona(config_dir / "personas" / "companion.yaml")
+    prompt = render_system_prompt(
+        persona, SessionOptions(demeanor=Demeanor.kind, cefr=CEFRLevel.b1)
+    )
+    assert "\n" not in prompt
+    assert "  " not in prompt  # whitespace runs collapsed to single spaces
+
+
 def test_build_messages_shape(config_dir: Path) -> None:
     persona = load_persona(config_dir / "personas" / "companion.yaml")
     messages = build_messages(persona, history=None, user_input="hi there")
