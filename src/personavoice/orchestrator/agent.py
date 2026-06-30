@@ -896,6 +896,12 @@ async def entrypoint(ctx: Any, *, persona_id: str | None = None) -> None:
 
     # The user id (`{"user": "..."}`) scopes custom-persona resolution and keys memory.
     meta_user_id = resolve_user_id(meta_sources)
+    # The registry and custom-persona store are loaded once at prewarm, so a persona authored in
+    # the app after the worker warmed wouldn't resolve until a restart. Reload both before the
+    # initial selection (cheap: a few YAML files + one JSON), mirroring the hot-swap path below.
+    registry.reload()
+    if user_personas is not None:
+        user_personas.reload()
     persona = _select_persona(
         ctx, registry, persona_id, user_store=user_personas, user_id=meta_user_id
     )

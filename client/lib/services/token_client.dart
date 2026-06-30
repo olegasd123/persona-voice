@@ -206,6 +206,21 @@ class TokenClient {
     return PersonaDraft.fromBody((body['persona'] as Map).cast<String, dynamic>());
   }
 
+  /// Draft a custom persona from a plain-English [description] via the server's LLM
+  /// (`POST /personas/draft`). The draft is *not* persisted — it comes back as an editable
+  /// [PersonaDraft] (same body shape as create/edit) to prefill the New form; the user reviews,
+  /// tweaks, and the existing [createPersona] does the write. Slow: the server drafts synchronously
+  /// against the local model, so callers should show a progress state.
+  Future<PersonaDraft> draftPersona(String description) async {
+    final resp = await _http.post(
+      _uri('/personas/draft', {'user': settings.effectiveUser}),
+      headers: _jsonHeaders,
+      body: jsonEncode({'description': description.trim()}),
+    );
+    final body = _decode(resp);
+    return PersonaDraft.fromBody((body['persona'] as Map).cast<String, dynamic>());
+  }
+
   /// Create a custom persona (`POST /personas`). Returns the stored persona's full body.
   Future<PersonaDraft> createPersona(PersonaDraft draft) async {
     final resp = await _http.post(
