@@ -68,7 +68,7 @@ services:
   personavoice:
     # Name the built image into the personavoice/ namespace (else Compose auto-names it
     # `persona-voice-personavoice`). Build once; the livekit token-server reuses the same image.
-    image: personavoice/server:${TAG:-prod}
+    image: personavoice/server:${TAG:-latest}
     build:
       context: .
       dockerfile: Dockerfile
