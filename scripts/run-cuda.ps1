@@ -153,6 +153,18 @@ $env:PERSONAVOICE_JOB_EXECUTOR = 'thread'
 if (-not $env:PROMETHEUS_MULTIPROC_DIR) { $env:PROMETHEUS_MULTIPROC_DIR = Join-Path $RepoRoot 'models\metrics' }
 New-Item -ItemType Directory -Force -Path $env:PROMETHEUS_MULTIPROC_DIR | Out-Null
 
+# Custom personas are a single JSON file shared between the dockerized token-server (writer) and
+# the native worker (reader) - see the bind mount in docker-compose.livekit.yml. Seed an empty
+# manifest if it's missing so Docker mounts a FILE, not an auto-created directory (create_host_path
+# turns a non-existent source into a dir, which breaks the store's file writes). Mirror of
+# run-mac.sh; both sides default to models\user_personas.json.
+$UserPersonasFile = if ($env:PERSONAVOICE_USER_PERSONAS) { $env:PERSONAVOICE_USER_PERSONAS } else { Join-Path $RepoRoot 'models\user_personas.json' }
+New-Item -ItemType Directory -Force -Path (Split-Path -Parent $UserPersonasFile) | Out-Null
+if (-not (Test-Path $UserPersonasFile -PathType Leaf)) {
+    # WriteAllText writes UTF-8 without a BOM; a BOM would break the worker's json.loads().
+    [System.IO.File]::WriteAllText($UserPersonasFile, "{`"users`": {}}`n")
+}
+
 # --- preflight (cheap checks only; the one-time work lives in setup-cuda.ps1) ---------------
 $dockerOk = $false
 try { docker info 2>$null | Out-Null; $dockerOk = ($LASTEXITCODE -eq 0) } catch { $dockerOk = $false }
