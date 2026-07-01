@@ -16,11 +16,11 @@ Four personas ship out of the box:
 - **Language teacher** — conversation practice (English first).
 - **Companion** — casual, friendly chat.
 
-The system runs as a **server**, on either a **CUDA GPU** (designed for a 16 GB card such as an
-RTX 4080; verified on an RTX 5090) or a **Mac (M-series)** through Mac-native backends — both are
-workable deployment targets; CUDA has more headroom, Mac trades some capability for running
-anywhere. The client is thin: a single **Flutter** app for iOS and Android that only captures and
-plays audio. All the models run on the server.
+The system runs as a **server**, on either a **CUDA GPU** (any card from **12 GB** of VRAM up to
+**32 GB**, tuned per tier — see [Run on CUDA](#run-on-cuda)) or a **Mac (M-series)** through
+Mac-native backends — both are workable deployment targets; more VRAM buys headroom, Mac trades
+some capability for running anywhere. The client is thin: a single **Flutter** app for iOS and
+Android that only captures and plays audio. All the models run on the server.
 
 ## What it can do
 
@@ -98,8 +98,8 @@ the adapter, the model, and the per-adapter options. Environment interpolation
 | WebRTC round-trip (local) | ~50 ms |
 | **Total to first audio** | **~600–900 ms** |
 
-On CUDA (RTX 5090) the streaming path hits this: with **Kokoro** (fast, no clone) the warm
-time-to-first-audio is about **0.58 s**; with **Chatterbox** (the cloning backend) about
+On CUDA the streaming path hits this (measured on a 32 GB card): with **Kokoro** (fast, no clone)
+the warm time-to-first-audio is about **0.58 s**; with **Chatterbox** (the cloning backend) about
 **1.3 s**. Both are selected by one environment variable, so "low latency" vs "cloning" is a
 one-line switch. A Mac is slower (TTS is the bottleneck) — use Kokoro for fast dev iterations.
 
@@ -109,7 +109,7 @@ The system is feature-complete across the whole cascade: offline loop, streaming
 LiveKit agent, four personas, voice cloning, persona LoRA training, cross-session memory, voice
 fine-tuning, and a hardening pass (eval, observability, security). It is verified at the logic
 level by the test suite (`pytest`, plus `ruff` and `mypy`), and the heavy or hardware-bound steps
-are verified on real hardware (a Mac M4 Max on the mac backend, an RTX 5090 on the cuda backend).
+are verified on real hardware (a Mac M4 Max on the mac backend, a 32 GB card on the cuda backend).
 
 One thing needs a running **LiveKit server** to exercise live: the browser/phone back-and-forth
 with barge-in over WebRTC. That path is **verified on a real iPhone** (a full spoken conversation
@@ -580,13 +580,34 @@ docker compose up --build
 #   personavoice: validates the cuda config against vLLM
 ```
 
-Both services share one GPU. The compose file documents the VRAM budget (about 10–12 GB: vLLM
-4-bit ~6–7 GB + STT ~2 GB + Chatterbox ~2–3 GB, within 16 GB) and caps vLLM's
-`--gpu-memory-utilization` so STT/TTS fit.
+Both services share one GPU. Two of the three GPU stages are roughly fixed — STT (faster-whisper
+large-v3, fp16) ~2 GB and Chatterbox TTS ~2–3 GB — so **~5 GB is spoken for before the LLM**, plus
+~1 GB of driver/desktop overhead. The **LLM is the lever**: its model, quantization, context
+length, and share of the card scale with how much VRAM you have. Three environment variables retune
+it per tier (the committed defaults are the **16 GB** row, so a 16 GB card needs none of them):
 
-Without Docker, run the pieces directly: `vllm serve Qwen/Qwen2.5-7B-Instruct-AWQ --quantization
-awq`, then `BACKEND=cuda personavoice-demo --wav question.wav` (needs the `cuda` extra plus
-`chatterbox-tts`).
+| VRAM  | `VLLM_MODEL`                     | `VLLM_GPU_UTIL` | `VLLM_MAX_LEN` |
+|-------|----------------------------------|-----------------|----------------|
+| 12 GB | `Qwen/Qwen2.5-7B-Instruct-AWQ`   | `0.55`          | `4096`         |
+| 16 GB | `Qwen/Qwen2.5-7B-Instruct-AWQ`   | `0.45`          | `8192`         |
+| 24 GB | `Qwen/Qwen2.5-7B-Instruct`       | `0.65`          | `8192`         |
+| 32 GB | `Qwen/Qwen2.5-7B-Instruct`       | `0.72`          | `16384`        |
+
+Notes:
+- **12 GB is the floor.** Prefer a Linux/headless box there — a Windows desktop eats another
+  ~1–2 GB of VRAM, which the small KV budget can't spare.
+- **24/32 GB switch to the unquantized 7B.** Set both `VLLM_MODEL` **and** `PERSONAVOICE_LLM_MODEL`
+  to the unquantized id so the served model and the adapter's expected id match. The extra headroom
+  also fits a larger model (e.g. a 14B AWQ) if you'd rather trade context for capability.
+- The `gpu_util` / `max_len` values are tuned estimates from the 16 GB budget; on a real 12/24/32 GB
+  card they may want one pass to dial in.
+
+On Windows, `scripts/run-cuda.ps1` reads the card's VRAM with `nvidia-smi` and picks the matching
+tier automatically (override with `-Vram 12|16|24|32`).
+
+Without Docker, run the pieces directly: `vllm serve Qwen/Qwen2.5-7B-Instruct-AWQ` (or the
+unquantized `Qwen/Qwen2.5-7B-Instruct` on a 24 GB+ card), then `BACKEND=cuda personavoice-demo
+--wav question.wav` (needs the `cuda` extra plus `chatterbox-tts`).
 
 ### Benchmarking latency
 

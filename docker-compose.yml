@@ -1,13 +1,22 @@
-# RTX 4080 (16 GB) CUDA stack for Persona-Voice.
+# CUDA stack for Persona-Voice (any GPU from 12 GB to 32 GB of VRAM).
 #
 #   docker compose up --build      # start vLLM (LLM) + the persona-voice server
 #
-# Both services share the single GPU. Target VRAM budget (within 16 GB):
+# Both services share the single GPU. STT and TTS are roughly fixed; the LLM scales with VRAM.
+# Committed defaults target the 16 GB tier:
 #
 #   vLLM   Qwen2.5-7B-Instruct-AWQ (4-bit) + KV cache  : ~6-7 GB  (gpu_mem_util 0.45)
 #   STT    faster-whisper large-v3 (float16)           : ~2 GB
 #   TTS    Chatterbox (torch)                          : ~2-3 GB
 #                                                  total ≈ 10-12 GB, with headroom.
+#
+# Retune per VRAM tier with VLLM_MODEL / VLLM_GPU_UTIL / VLLM_MAX_LEN (see README "Run on CUDA"):
+#
+#   VRAM   VLLM_MODEL                     VLLM_GPU_UTIL  VLLM_MAX_LEN
+#   12 GB  Qwen/Qwen2.5-7B-Instruct-AWQ   0.55           4096
+#   16 GB  Qwen/Qwen2.5-7B-Instruct-AWQ   0.45           8192   (default)
+#   24 GB  Qwen/Qwen2.5-7B-Instruct       0.65           8192
+#   32 GB  Qwen/Qwen2.5-7B-Instruct       0.72           16384
 #
 # Chatterbox is the CUDA TTS backend for this stack.
 
@@ -18,8 +27,8 @@ name: persona-voice
 services:
   vllm:
     image: vllm/vllm-openai:latest
-    # Model / VRAM are env-interpolated; committed defaults fit a 16 GB 4080. A bigger card
-    # serves the unquantized 7B with `VLLM_MODEL=Qwen/Qwen2.5-7B-Instruct VLLM_GPU_UTIL=0.6`.
+    # Model / VRAM are env-interpolated; committed defaults fit the 16 GB tier. A 24 GB+ card
+    # serves the unquantized 7B with `VLLM_MODEL=Qwen/Qwen2.5-7B-Instruct VLLM_GPU_UTIL=0.65`.
     # `--quantization` is omitted on purpose: vLLM auto-detects AWQ from the model config, so the
     # SAME command serves the AWQ build or the unquantized one with no flag change.
     command:

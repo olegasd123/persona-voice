@@ -8,12 +8,14 @@
     .\scripts\setup-cuda.ps1
 
   Then start the stack (paths resolve relative to this script):
-    .\scripts\run-cuda.ps1            # auto-detect the GPU (RTX 5090 / RTX 4080)
-    .\scripts\run-cuda.ps1 -Gpu 5090  # force the 32 GB unquantized profile
-    .\scripts\run-cuda.ps1 -Gpu 4080  # force the 16 GB AWQ (4-bit) profile
+    .\scripts\run-cuda.ps1            # auto-detect VRAM and pick the tier
+    .\scripts\run-cuda.ps1 -Vram 32   # force the 32 GB unquantized profile
+    .\scripts\run-cuda.ps1 -Vram 16   # force the 16 GB AWQ (4-bit) profile
+
+  Supported VRAM tiers: 12 / 16 / 24 / 32 GB (see README "Run on CUDA").
 
   What it does (one command = the whole "[1]" sequence):
-    1. picks a GPU profile (model + VRAM fraction),
+    1. picks a VRAM-tier profile (model + VRAM fraction + context length),
     2. starts vLLM (the CUDA LLM server) in Docker,
     3. starts the LiveKit SFU + token server in Docker,
     4. waits for vLLM to be healthy, then
@@ -27,8 +29,8 @@
 #>
 [CmdletBinding()]
 param(
-    [ValidateSet('auto', '5090', '4080')]
-    [string]$Gpu = 'auto',
+    [ValidateSet('auto', '12', '16', '24', '32')]
+    [string]$Vram = 'auto',
     [string]$HostIp = $env:PV_LIVEKIT_IP,
     [int]$VllmTimeoutSec = 600
 )
@@ -53,13 +55,23 @@ function Find-LanIp {
         Select-Object -First 1).IPAddress
 }
 
-function Resolve-GpuProfile {
-    $name = $null
-    try { $name = nvidia-smi --query-gpu=name --format=csv,noheader 2>$null | Select-Object -First 1 } catch { }
-    if ($name -match '5090') { return '5090' }
-    if ($name -match '4080') { return '4080' }
-    Write-Warning "GPU '$name' did not match a profile; defaulting to the 16 GB 4080-safe profile."
-    return '4080'
+function Resolve-VramProfile {
+    # Total VRAM (MiB) of the first CUDA GPU; map to the largest tier that fits. Cards report a
+    # little under nominal (a 16 GB card ~16376 MiB), so thresholds sit below each round number.
+    $raw = $null
+    try {
+        $raw = nvidia-smi --query-gpu=memory.total --format=csv,noheader,nounits 2>$null |
+            Select-Object -First 1
+    } catch { }
+    $digits = "$raw" -replace '[^\d]', ''
+    if (-not $digits) { $digits = '0' }
+    $mib = [int]$digits
+    if ($mib -ge 30000) { return '32' }
+    if ($mib -ge 22000) { return '24' }
+    if ($mib -ge 15000) { return '16' }
+    if ($mib -ge 11000) { return '12' }
+    Write-Warning "Could not read VRAM (got '$raw'); defaulting to the 12 GB floor profile (may OOM)."
+    return '12'
 }
 
 function Wait-Vllm {
@@ -86,11 +98,14 @@ function Stop-Stack {
     Write-Host 'Stopped.' -ForegroundColor Yellow
 }
 
-# --- pick the GPU profile ------------------------------------------------------------------
-if ($Gpu -eq 'auto') { $Gpu = Resolve-GpuProfile }
-switch ($Gpu) {
-    '5090' { $VllmModel = 'Qwen/Qwen2.5-7B-Instruct';     $VllmGpuUtil = '0.6'  }  # unquantized, 32 GB
-    '4080' { $VllmModel = 'Qwen/Qwen2.5-7B-Instruct-AWQ'; $VllmGpuUtil = '0.45' }  # 4-bit AWQ, 16 GB
+# --- pick the VRAM-tier profile ------------------------------------------------------------
+# Keep these rows in sync with the tier table in docker-compose.yml / README "Run on CUDA".
+if ($Vram -eq 'auto') { $Vram = Resolve-VramProfile }
+switch ($Vram) {
+    '32' { $VllmModel = 'Qwen/Qwen2.5-7B-Instruct';     $VllmGpuUtil = '0.72'; $VllmMaxLen = '16384' }  # unquantized 7B, big context
+    '24' { $VllmModel = 'Qwen/Qwen2.5-7B-Instruct';     $VllmGpuUtil = '0.65'; $VllmMaxLen = '8192'  }  # unquantized 7B
+    '16' { $VllmModel = 'Qwen/Qwen2.5-7B-Instruct-AWQ'; $VllmGpuUtil = '0.45'; $VllmMaxLen = '8192'  }  # 4-bit AWQ (default tier)
+    '12' { $VllmModel = 'Qwen/Qwen2.5-7B-Instruct-AWQ'; $VllmGpuUtil = '0.55'; $VllmMaxLen = '4096'  }  # 4-bit AWQ, floor
 }
 
 # --- LAN IP (dynamic) ----------------------------------------------------------------------
@@ -105,6 +120,7 @@ $env:LIVEKIT_URL = "ws://${HostIp}:7880"
 $env:BACKEND = 'cuda'
 $env:VLLM_MODEL = $VllmModel
 $env:VLLM_GPU_UTIL = $VllmGpuUtil
+$env:VLLM_MAX_LEN = $VllmMaxLen
 $env:PERSONAVOICE_LLM_ADAPTER = 'vllm'
 $env:PERSONAVOICE_LLM_MODEL = $VllmModel
 $env:PERSONAVOICE_LLM_BASE_URL = 'http://localhost:8000/v1'
@@ -148,8 +164,8 @@ if (-not (Test-Path $Py)) {
 
 # --- run -----------------------------------------------------------------------------------
 try {
-    Write-Host "GPU profile : $Gpu  (model=$VllmModel, gpu_util=$VllmGpuUtil)" -ForegroundColor Green
-    Write-Host "LAN IP      : $HostIp" -ForegroundColor Green
+    Write-Host "VRAM profile : ${Vram} GB  (model=$VllmModel, gpu_util=$VllmGpuUtil, max_len=$VllmMaxLen)" -ForegroundColor Green
+    Write-Host "LAN IP       : $HostIp" -ForegroundColor Green
 
     Write-Host "`n[1/3] Starting vLLM (CUDA LLM server)..." -ForegroundColor Cyan
     docker compose up -d vllm

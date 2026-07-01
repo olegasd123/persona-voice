@@ -1,7 +1,7 @@
 """`server --check`: validate config and load (stub) adapters on this machine.
 
 Produces a structured `CheckReport` so the same logic is exercised by tests and by the
-CLI. This is the acceptance check: it must pass on both the Mac and the 4080.
+CLI. This is the acceptance check: it must pass on both the Mac and the CUDA backends.
 """
 
 from __future__ import annotations

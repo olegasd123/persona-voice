@@ -5,7 +5,7 @@ turns it into a backend-specific `TrainPlan` — the trainer config dict, the co
 the command to run — for either:
 
   - **mac**  → `mlx_lm lora -c <config>.yaml` (light LoRA on Apple silicon).
-  - **cuda** → `llamafactory-cli train <config>.yaml` (QLoRA on the 4080; `quantize_4bit`).
+  - **cuda** → `llamafactory-cli train <config>.yaml` (QLoRA on a CUDA GPU; `quantize_4bit`).
 
 Building the plan is pure (no model libs, no disk), so it's fully unit-tested; `train.py` writes
 the config and runs the command. `from_persona` seeds a config from a `Persona` (base model,
@@ -56,7 +56,7 @@ class LoRATrainConfig(BaseModel):
     save_every: int = 100
     seed: int = 0
     # CUDA-only.
-    quantize_4bit: bool = True  # QLoRA (bitsandbytes 4-bit) to fit the 4080
+    quantize_4bit: bool = True  # QLoRA (bitsandbytes 4-bit) to fit a 16 GB card
     template: str = "qwen"  # LLaMA-Factory chat template (qwen / llama3 / ...)
     # Free-form passthrough merged into the generated trainer config (escape hatch).
     extra: dict[str, Any] = Field(default_factory=dict)
@@ -111,7 +111,7 @@ def mlx_lm_command(config_path: str | Path) -> list[str]:
 
 
 # --------------------------------------------------------------------------------------
-# LLaMA-Factory (CUDA / 4080, QLoRA)
+# LLaMA-Factory (CUDA, QLoRA)
 # --------------------------------------------------------------------------------------
 
 

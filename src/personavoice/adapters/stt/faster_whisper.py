@@ -1,4 +1,4 @@
-"""faster-whisper STT (CUDA / RTX 4080).
+"""faster-whisper STT (CUDA).
 
 Mirrors the Mac `whisper_mlx` adapter: it implements the one-shot `transcribe` used by the
 file-based pipeline; streaming partials are handled by the live agent. `faster_whisper` is imported lazily so

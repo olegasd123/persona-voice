@@ -53,7 +53,7 @@ docker run --rm --gpus all -v "$PWD":/workspace -w /workspace \
 ```
 
 Sharing the `persona-voice_hf-cache` volume reuses the base weights vLLM already downloaded (no
-re-download). **On a Blackwell GPU (sm_120, e.g. RTX 5090)** the stock `hiyouga/llamafactory:latest`
+re-download). **On a Blackwell GPU (sm_120)** the stock `hiyouga/llamafactory:latest`
 won't run — its torch 2.6.0/cu124 only supports up to sm_90. Build the overlay once and use it as
 the image instead:
 
@@ -63,7 +63,7 @@ docker build -f training/persona_lora/Dockerfile.blackwell -t personavoice/train
 # with MSYS_NO_PATHCONV=1 and use an explicit D:/… path so /workspace isn't path-mangled).
 ```
 
-A 16 GB 4080 (sm_89) runs the stock image as-is. Adapters land in `<models>/adapters/<persona>/`.
+An Ada/Ampere card (sm_86 / sm_89) runs the stock image as-is. Adapters land in `<models>/adapters/<persona>/`.
 
 ### CUDA dataset registration (LLaMA-Factory)
 

@@ -1,4 +1,4 @@
-# CUDA backend (RTX 4080 16 GB ↔ RTX 5090 32 GB).
+# CUDA backend (any GPU from 12 GB to 32 GB of VRAM).
 #
 # Defaults target the dockerized CUDA stack: faster-whisper (STT) + vLLM (LLM) + Chatterbox (TTS).
 # The adapter / model / base-url for each stage are env-overridable via single-level
@@ -6,8 +6,9 @@
 # *same* file also drives a Windows-native, non-Docker setup that serves the brain from LM Studio
 # and synthesizes with Chatterbox — set the PERSONAVOICE_* vars in `.env` (see `.env.example`).
 #
-# Footprint on 16 GB: STT ~2 GB + LLM ~6-7 GB (4-bit) + TTS ~2-3 GB ≈ 10-12 GB. A 32 GB card
-# (5090) has ample headroom for an unquantized 7B + a larger TTS.
+# STT (~2 GB) and Chatterbox TTS (~2-3 GB) are roughly fixed; the LLM scales with VRAM. The
+# committed default is the 16 GB tier (7B AWQ 4-bit ≈ 10-12 GB total). Retune per tier with
+# VLLM_MODEL / VLLM_GPU_UTIL / VLLM_MAX_LEN — see the tier table in README "Run on CUDA".
 backend: cuda
 
 stt:
@@ -21,8 +22,9 @@ stt:
 
 llm:
   # vLLM (default) serves an OpenAI-compatible API; `model` must match the id vLLM serves
-  # (= VLLM_MODEL in docker-compose.yml). The 4080-safe default is the AWQ 4-bit build; a bigger
-  # card serves the unquantized Qwen/Qwen2.5-7B-Instruct (set both VLLM_MODEL and this to it).
+  # (= VLLM_MODEL in docker-compose.yml). The default is the AWQ 4-bit build (fits the 12/16 GB
+  # tiers); a 24 GB+ card serves the unquantized Qwen/Qwen2.5-7B-Instruct (set both VLLM_MODEL and
+  # this to it).
   # vLLM auto-detects AWQ from the model config, so there is no `--quantization` server flag.
   # Windows-native dev: set PERSONAVOICE_LLM_ADAPTER=lmstudio + a matching model + base_url
   # (http://localhost:1234/v1) to serve the brain from LM Studio instead.

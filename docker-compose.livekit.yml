@@ -1,5 +1,5 @@
 # Self-hosted LiveKit SFU + token server. Lightweight, no GPU — runs on the Mac, or on the
-# 4080 alongside the CUDA stack.
+# CUDA box alongside the CUDA stack.
 #
 #   docker compose -f docker-compose.livekit.yml up --build
 #

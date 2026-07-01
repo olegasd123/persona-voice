@@ -1,4 +1,4 @@
-"""vLLM LLM (CUDA / RTX 4080).
+"""vLLM LLM (CUDA).
 
 vLLM serves an OpenAI-compatible `/v1/chat/completions` endpoint, so it reuses the shared
 streaming logic in `_openai_compat` and only pins the default base URL (`:8000/v1`). The

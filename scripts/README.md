@@ -30,17 +30,20 @@ The stop scripts are only needed if a run was killed without cleanup (closed win
 
 ```powershell
 .\scripts\setup-cuda.ps1            # ONCE: deps + images + host STT/TTS weights (no server started)
-.\scripts\run-cuda.ps1              # then, every run (auto-detect the GPU)
-.\scripts\run-cuda.ps1 -Gpu 5090    # force the 32 GB profile
-.\scripts\run-cuda.ps1 -Gpu 4080    # force the 16 GB profile
+.\scripts\run-cuda.ps1              # then, every run (auto-detect VRAM, pick the tier)
+.\scripts\run-cuda.ps1 -Vram 32     # force the 32 GB profile
+.\scripts\run-cuda.ps1 -Vram 16     # force the 16 GB profile
 ```
 
-The GPU profile is auto-detected with `nvidia-smi` (override with `-Gpu`):
+The VRAM tier is auto-detected from the card's `memory.total` via `nvidia-smi` (override with
+`-Vram 12|16|24|32`):
 
-| Profile | vLLM model | `VLLM_GPU_UTIL` |
-|---------|------------|-----------------|
-| **5090** (32 GB) | `Qwen/Qwen2.5-7B-Instruct` (unquantized) | `0.6` |
-| **4080** (16 GB) | `Qwen/Qwen2.5-7B-Instruct-AWQ` (4-bit) | `0.45` |
+| Tier | vLLM model | `VLLM_GPU_UTIL` | `VLLM_MAX_LEN` |
+|------|------------|-----------------|----------------|
+| **32 GB** | `Qwen/Qwen2.5-7B-Instruct` (unquantized) | `0.72` | `16384` |
+| **24 GB** | `Qwen/Qwen2.5-7B-Instruct` (unquantized) | `0.65` | `8192` |
+| **16 GB** | `Qwen/Qwen2.5-7B-Instruct-AWQ` (4-bit) | `0.45` | `8192` |
+| **12 GB** | `Qwen/Qwen2.5-7B-Instruct-AWQ` (4-bit) | `0.55` | `4096` |
 
 `run-cuda` starts vLLM + LiveKit + the token server in Docker, waits for vLLM to be healthy,
 then runs the worker (`personavoice.server --serve`). TTS is forced to Chatterbox
