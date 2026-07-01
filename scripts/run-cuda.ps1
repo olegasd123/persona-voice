@@ -122,6 +122,13 @@ $env:PERSONAVOICE_ENDPOINTING_GRACE_MS = '2500'
 $env:PERSONAVOICE_BUSY_RETRY_AFTER = '10'
 $env:PERSONAVOICE_ADMISSION_503 = '1'
 
+# Single shared GPU, one serialized session per worker: run every job in the worker process
+# (THREAD) so the models prewarmed at startup are reused across calls. LiveKit's off-Windows
+# default (PROCESS) isolates each job in its own subprocess, and with num_idle_processes=1 the
+# active job + the warm spare then hold TWO copies of STT+TTS+VAD in VRAM (~4-5 GB wasted) — the
+# process-global _WARMED cache only collapses to one copy under THREAD. See _job_executor_type.
+$env:PERSONAVOICE_JOB_EXECUTOR = 'thread'
+
 # Prometheus /metrics: the worker writes its per-turn counters here and the token-server
 # container mounts + reads the same dir (see docker-compose.livekit.yml), so
 # http://<host>:8080/metrics aggregates them. Absolute path so it matches the compose mount, and
