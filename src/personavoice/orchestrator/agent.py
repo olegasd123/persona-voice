@@ -42,6 +42,7 @@ from ..obs import (
     record_turn,
     set_sessions,
     turn_metrics_from_stream,
+    write_sessions,
 )
 from ..persona.registry import PersonaRegistry
 from ..persona.store import UserPersonaStore
@@ -1043,13 +1044,17 @@ def _worker_load_fnc(worker: Any) -> float:
     This is the real OOM rail. It runs in the main worker process — every 0.5 s and, crucially,
     immediately before each availability check — so reporting `active/capacity` here (combined
     with `load_threshold` and the framework's reserved-slot accounting) is what prevents a second
-    job being dispatched, race-free. It doubles as the publish point for the session gauges:
-    one cheap place that already runs on every load refresh and on job end.
+    job being dispatched, race-free. It doubles as the publish point for the session count: one
+    cheap place that already runs on every load refresh and on job end. Both channels are mirrored
+    here — the Prometheus gauge (backs `/metrics`) and the plain-JSON heartbeat (backs the token
+    server's 503 gate; unlike the mmap gauge it propagates across the native-worker↔dockerized
+    token-server bind mount on Windows too — see `obs/sessions.py`).
     """
     _LIVE_WORKER["worker"] = worker
     capacity = max_sessions()
     active = _active_job_count(worker)
     set_sessions(active, capacity)
+    write_sessions(active, capacity)
     return _session_load(active, capacity)
 
 

@@ -226,15 +226,18 @@ def run_check(settings: Settings) -> CheckReport:
     busy_warning = busy_clip_status()
     if busy_warning:
         report.warnings.append(busy_warning)
-    # The optional token-server 503 early gate (step 4) reads the worker's live gauge, which only
-    # crosses processes via PROMETHEUS_MULTIPROC_DIR. Enabled without it, the gate can never see the
-    # count and silently fails open (always mints) — flag the misconfiguration.
+    # The optional token-server 503 early gate (step 4) reads the worker's live session count from
+    # a shared file — `PERSONAVOICE_SESSIONS_FILE`, else `sessions.json` under
+    # PROMETHEUS_MULTIPROC_DIR. With neither set the gate can't locate the count and silently fails
+    # open (always mints) — flag the misconfiguration.
     report.admission_gate = _as_bool(os.getenv("PERSONAVOICE_ADMISSION_503"))
-    if report.admission_gate and not multiproc:
+    sessions_file = (os.getenv("PERSONAVOICE_SESSIONS_FILE") or "").strip()
+    if report.admission_gate and not sessions_file and not multiproc:
         report.warnings.append(
-            "PERSONAVOICE_ADMISSION_503 is set but PROMETHEUS_MULTIPROC_DIR is not — the token "
-            "server can't read the worker's live session count, so the early gate never fires "
-            "(it fails open); set a shared PROMETHEUS_MULTIPROC_DIR on both processes"
+            "PERSONAVOICE_ADMISSION_503 is set but neither PERSONAVOICE_SESSIONS_FILE nor "
+            "PROMETHEUS_MULTIPROC_DIR is — the token server can't read the worker's live session "
+            "count, so the early gate never fires (it fails open); point both processes at a shared "
+            "PROMETHEUS_MULTIPROC_DIR (or set PERSONAVOICE_SESSIONS_FILE to a shared path)"
         )
 
     return report

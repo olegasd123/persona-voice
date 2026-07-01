@@ -649,10 +649,15 @@ to play a **"busy" clip** (a synthesized telephone busy tone by default, or your
 `PERSONAVOICE_BUSY_CLIP`) plus a `{"event":"busy"}` data message, then disconnected — no models are
 loaded on that path. For a nicer UX you can also enable the **token-server early gate** with
 `PERSONAVOICE_ADMISSION_503=1`: `/token` then returns `503 + Retry-After` once the worker reports
-full, so the client backs off before connecting. It reads the worker's live count, so it needs a
-shared `PROMETHEUS_MULTIPROC_DIR` on both the worker and the token server, and is an optimization on
-top of the worker's load gate (it has a read→mint→connect race) — it fails open and mints when the
-count is unreadable.
+full, so the client backs off before connecting (this 503 is what drives the app's "all lines are
+busy" queue page). The worker and the (usually dockerized) token server are separate processes, so
+the live count crosses between them via a small **JSON heartbeat file** (`sessions.json` under
+`PROMETHEUS_MULTIPROC_DIR` by default, or set `PERSONAVOICE_SESSIONS_FILE`). A plain file is used on
+purpose: it propagates across a bind mount on every OS, whereas the Prometheus mmap gauge's writes
+from a native Windows worker aren't reflected into a Linux container — which is why the gate (and
+the busy page) worked on macOS but silently failed open on the CUDA/Windows box. The gate is an
+optimization on top of the worker's load gate (it has a read→mint→connect race) and fails open —
+mints — when the count is unreadable.
 
 **Worker job executor (warm reuse).** On the Mac dev backend the worker runs each conversation in a
 **thread** (`PERSONAVOICE_JOB_EXECUTOR=thread`, the Mac default), so the models prewarmed at startup

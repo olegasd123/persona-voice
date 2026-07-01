@@ -81,13 +81,16 @@ def test_active_job_count_handles_missing_and_broken_worker() -> None:
 def test_load_fnc_publishes_and_reports(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("PERSONAVOICE_MAX_SESSIONS", "2")
     published: list[tuple[int, int]] = []
+    heartbeats: list[tuple[int, int]] = []
     monkeypatch.setattr(agent, "set_sessions", lambda a, c: published.append((a, c)))
+    monkeypatch.setattr(agent, "write_sessions", lambda a, c: heartbeats.append((a, c)))
 
     worker = SimpleNamespace(active_jobs=[object()])
     load = agent._worker_load_fnc(worker)
 
     assert load == 0.5  # 1 of 2 slots
-    assert published == [(1, 2)]  # mirrored into the gauge
+    assert published == [(1, 2)]  # mirrored into the Prometheus gauge
+    assert heartbeats == [(1, 2)]  # and into the cross-process heartbeat the 503 gate reads
     assert agent._LIVE_WORKER["worker"] is worker  # stashed for request_fnc
 
 

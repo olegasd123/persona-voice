@@ -66,7 +66,7 @@ from pydantic import ValidationError
 
 from ..memory import MemoryStore, UserProfile
 from ..models import CEFRLevel, Demeanor, Persona, SessionOptions
-from ..obs import read_sessions, render_metrics
+from ..obs import read_live_sessions, render_metrics
 from ..orchestrator.busy import busy_retry_after
 from ..persona import author
 from ..persona.author import PersonaDraftError
@@ -114,9 +114,9 @@ ClonerFactory = Callable[[], VoiceCloner]
 # Returns the active backend's `.llm` (a `persona.author._ChatLLM`); None disables /personas/draft.
 DraftLLMFactory = Callable[[], Any]
 
-# Reads the live `(active, capacity)` session counts the agent worker publishes (the gauge backing
-# `/healthz`), or None when unknown (exporter off / no worker reporting). Injectable so the optional
-# early gate is unit-testable without a running worker.
+# Reads the live `(active, capacity)` session counts the agent worker publishes (the heartbeat
+# backing `/healthz` and the 503 gate, falling back to the Prometheus gauge), or None when unknown
+# (no worker reporting). Injectable so the optional early gate is unit-testable without a worker.
 SessionsReader = Callable[[], "tuple[int, int] | None"]
 
 
@@ -253,7 +253,7 @@ class TokenService:
         lora_modules: str | None = None,
         memory: MemoryStore | None = None,
         admission_gate: bool = False,
-        sessions_reader: SessionsReader = read_sessions,
+        sessions_reader: SessionsReader = read_live_sessions,
     ) -> None:
         self._config = config
         self._registry = registry
@@ -292,9 +292,10 @@ class TokenService:
         self._memory = memory
         # Admission control's optional token-server early gate: when on, `issue`
         # returns 503 + Retry-After once the worker reports full instead of minting a token the
-        # caller can't use. `sessions_reader` is the live-count source (the shared gauge). It's an
-        # *optimization* over the worker's load gate — it has a read→mint→connect TOCTOU race — and
-        # fails open (mints) when the count is unknown, so it never blocks on its own.
+        # caller can't use. `sessions_reader` is the live-count source (the worker's heartbeat,
+        # falling back to the Prometheus gauge). It's an *optimization* over the worker's load gate
+        # — it has a read→mint→connect TOCTOU race — and fails open (mints) when the count is
+        # unknown, so it never blocks on its own.
         self._admission_gate = admission_gate
         self._sessions_reader = sessions_reader
 
@@ -1096,15 +1097,15 @@ def _make_handler(
                 if path == "/healthz" and method == "GET":
                     # Admission-control load. `sessions_max` is static config, so read
                     # it directly (authoritative, always present) rather than round-tripping it
-                    # through a live gauge. `sessions_active` is the genuinely live value, read
-                    # from the gauge the worker publishes over the shared metrics channel — omitted
-                    # when the exporter is off or no worker has reported yet.
+                    # through a live count. `sessions_active` is the genuinely live value the worker
+                    # publishes (heartbeat first, Prometheus gauge as a fallback) — omitted when no
+                    # worker has reported yet.
                     body: dict[str, Any] = {
                         "status": "ok",
                         "backend": service._backend,
                         "sessions_max": max_sessions(),
                     }
-                    sessions = read_sessions()
+                    sessions = read_live_sessions()
                     if sessions is not None:
                         body["sessions_active"] = sessions[0]
                     self._send_json(200, body)

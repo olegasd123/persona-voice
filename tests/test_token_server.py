@@ -204,6 +204,28 @@ def test_issue_fails_open_when_count_unknown(
     assert svc.issue()["persona"] == "companion"
 
 
+def test_issue_503_from_heartbeat_file_with_default_reader(
+    registry: PersonaRegistry, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    # The default (uninjected) reader is the heartbeat-first `read_live_sessions`: a real worker
+    # heartbeat that reports full drives the 503, proving the wiring end-to-end (this is the path
+    # that was silently failing open on the dockerized token server).
+    from personavoice.obs import write_sessions
+
+    monkeypatch.setenv("PERSONAVOICE_MAX_SESSIONS", "1")
+    monkeypatch.setenv("PERSONAVOICE_SESSIONS_FILE", str(tmp_path / "sessions.json"))
+    write_sessions(1, 1)  # worker reports its one slot busy
+    config = TokenServiceConfig(
+        livekit_url="wss://livekit.example:7880", api_key="APIkey", api_secret=SECRET
+    )
+    svc = TokenService(config, registry, default_persona="companion", admission_gate=True)
+    with pytest.raises(Unavailable):
+        svc.issue()
+
+    write_sessions(0, 1)  # slot freed → mint
+    assert svc.issue()["persona"] == "companion"
+
+
 def test_issue_ignores_count_when_gate_off(
     registry: PersonaRegistry, monkeypatch: pytest.MonkeyPatch
 ) -> None:

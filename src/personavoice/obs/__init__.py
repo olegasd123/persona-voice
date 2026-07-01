@@ -27,6 +27,12 @@ from .prometheus import (
     render_metrics,
     set_sessions,
 )
+from .sessions import (
+    read_live_sessions,
+    read_sessions_file,
+    sessions_file_path,
+    write_sessions,
+)
 
 __all__ = [
     "TRACE",
@@ -36,10 +42,14 @@ __all__ = [
     "configure_logging",
     "log_level_from_env",
     "metrics_enabled",
+    "read_live_sessions",
     "read_sessions",
+    "read_sessions_file",
     "record_rejected_session",
     "record_turn",
     "render_metrics",
+    "sessions_file_path",
     "set_sessions",
     "turn_metrics_from_stream",
+    "write_sessions",
 ]
