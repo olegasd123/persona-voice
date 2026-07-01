@@ -1,4 +1,4 @@
-# RTX 4080 (16 GB) production stack for Persona-Voice.
+# RTX 4080 (16 GB) CUDA stack for Persona-Voice.
 #
 #   docker compose up --build      # start vLLM (LLM) + the persona-voice server
 #

@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Pre-download the host-side STT/TTS weights for the CUDA stack.
 
-The CUDA prod stack serves the LLM with vLLM in Docker, but the STT (faster-whisper) and TTS
+The CUDA stack serves the LLM with vLLM in Docker, but the STT (faster-whisper) and TTS
 (Chatterbox) models load *on the host*, inside the conversation worker, and download from
 Hugging Face to the host cache on first use. setup-cuda runs this once so the first real
 `run-cuda` doesn't stall on those downloads.

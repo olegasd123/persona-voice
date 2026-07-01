@@ -1,5 +1,5 @@
-# Self-hosted LiveKit SFU + token server. Lightweight, no GPU — runs on the Mac for
-# dev and on the 4080 alongside the prod stack.
+# Self-hosted LiveKit SFU + token server. Lightweight, no GPU — runs on the Mac, or on the
+# 4080 alongside the CUDA stack.
 #
 #   docker compose -f docker-compose.livekit.yml up --build
 #
@@ -41,7 +41,7 @@ services:
     restart: unless-stopped
 
   token-server:
-    # Same image as the prod server (different command) — keeps one image, not two.
+    # Same image as the docker-compose.yml server (different command) — keeps one image, not two.
     image: personavoice/server:${TAG:-prod}
     build:
       context: .
@@ -60,7 +60,7 @@ services:
       # first to need this. The container's URL is a SEPARATE knob from the host's: the project
       # `.env` sets LMSTUDIO_BASE_URL=localhost for the native agent worker (which runs on the
       # host), so the container can't reuse it — it reads LMSTUDIO_BASE_URL_DOCKER instead,
-      # defaulting to host.docker.internal. On the CUDA/prod stack BACKEND=cuda, so the LLM is vLLM
+      # defaulting to host.docker.internal. On the CUDA stack BACKEND=cuda, so the LLM is vLLM
       # and this is ignored.
       - LMSTUDIO_BASE_URL=${LMSTUDIO_BASE_URL_DOCKER:-http://host.docker.internal:1234/v1}
       # The URL handed to clients — override with the LAN IP for phones (see header).

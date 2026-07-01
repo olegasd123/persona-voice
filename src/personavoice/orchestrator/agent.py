@@ -1099,7 +1099,7 @@ def _job_executor_type(agents: Any, backend: str) -> Any:
     control guards against, since there's only ever one copy of the audio models). The trade-off is
     no per-job process isolation, which is fine for a serialized single session.
 
-    Default: THREAD on the Mac dev backend; LiveKit's platform default (PROCESS on Linux/CUDA, where
+    Default: THREAD on the Mac backend; LiveKit's platform default (PROCESS on Linux/CUDA, where
     isolation is validated) elsewhere. Override with `PERSONAVOICE_JOB_EXECUTOR=thread|process`.
     """
     choice = (os.getenv("PERSONAVOICE_JOB_EXECUTOR") or "").strip().lower()

@@ -21,12 +21,12 @@ re-checks/installs Python deps on every start.
 
 | Platform | Setup (one-time) | Start | Stop (fallback) |
 |----------|------------------|-------|-----------------|
-| Windows prod (CUDA) | `scripts\setup-cuda.bat` (or `.ps1`) | `scripts\run-cuda.bat` (or `.ps1`) | `scripts\stop-cuda.bat` |
-| macOS dev (M4 Max) | `scripts/setup-mac.sh` | `scripts/run-mac.sh` | `scripts/stop-mac.sh` |
+| Windows (CUDA) | `scripts\setup-cuda.bat` (or `.ps1`) | `scripts\run-cuda.bat` (or `.ps1`) | `scripts\stop-cuda.bat` |
+| macOS (M4 Max) | `scripts/setup-mac.sh` | `scripts/run-mac.sh` | `scripts/stop-mac.sh` |
 
 The stop scripts are only needed if a run was killed without cleanup (closed window / crash).
 
-## Windows production
+## Windows (CUDA)
 
 ```powershell
 .\scripts\setup-cuda.ps1            # ONCE: deps + images + host STT/TTS weights (no server started)
@@ -51,7 +51,7 @@ images, and pre-downloads the host STT/TTS weights. The vLLM model caches into t
 > The `.bat` files are thin wrappers around the `.ps1` scripts (PowerShell gives reliable
 > `Ctrl+C` → teardown). Running the `.ps1` directly avoids the `Terminate batch job?` prompt.
 
-## macOS development
+## macOS (M4 Max)
 
 ```bash
 ./scripts/setup-mac.sh   # ONCE: deps + LiveKit image + token-server image

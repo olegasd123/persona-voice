@@ -1,4 +1,4 @@
-# Persona-Voice CUDA server image (RTX 4080 / prod).
+# Persona-Voice CUDA server image (RTX 4080).
 #
 # Runs the STT (faster-whisper / Parakeet) and TTS (Chatterbox) adapter on the
 # GPU. The LLM is served separately by the `vllm` service (see docker-compose.yml), so this

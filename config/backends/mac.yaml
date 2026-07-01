@@ -1,4 +1,4 @@
-# M4 Max (dev) backend. Adapters: whisper_mlx (STT), lmstudio (LLM), kokoro (TTS).
+# M4 Max backend. Adapters: whisper_mlx (STT), lmstudio (LLM), kokoro (TTS).
 # Kokoro is fast and preset-only. Use the CUDA backend with Chatterbox for voice cloning.
 backend: mac
 

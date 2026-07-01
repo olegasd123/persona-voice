@@ -1,10 +1,10 @@
 # CUDA backend (RTX 4080 16 GB ↔ RTX 5090 32 GB).
 #
-# Defaults target the dockerized prod stack: faster-whisper (STT) + vLLM (LLM) + Chatterbox (TTS).
+# Defaults target the dockerized CUDA stack: faster-whisper (STT) + vLLM (LLM) + Chatterbox (TTS).
 # The adapter / model / base-url for each stage are env-overridable via single-level
 # `${VAR:-default}` interpolation (same pattern this file already used for the base URL), so the
-# *same* file also drives a Windows-native dev box that serves the brain from LM Studio and
-# synthesizes with Chatterbox — set the PERSONAVOICE_* vars in `.env` (see `.env.example`).
+# *same* file also drives a Windows-native, non-Docker setup that serves the brain from LM Studio
+# and synthesizes with Chatterbox — set the PERSONAVOICE_* vars in `.env` (see `.env.example`).
 #
 # Footprint on 16 GB: STT ~2 GB + LLM ~6-7 GB (4-bit) + TTS ~2-3 GB ≈ 10-12 GB. A 32 GB card
 # (5090) has ample headroom for an unquantized 7B + a larger TTS.

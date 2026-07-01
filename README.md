@@ -16,10 +16,11 @@ Four personas ship out of the box:
 - **Language teacher** — conversation practice (English first).
 - **Companion** — casual, friendly chat.
 
-The system runs as a **server on a CUDA GPU** in production (designed for a 16 GB card such as
-an RTX 4080; verified on an RTX 5090). The same code is fully developable on a **Mac (M-series)**
-through Mac-native backends. The client is thin: a single **Flutter** app for iOS and Android
-that only captures and plays audio. All the models run on the server.
+The system runs as a **server**, on either a **CUDA GPU** (designed for a 16 GB card such as an
+RTX 4080; verified on an RTX 5090) or a **Mac (M-series)** through Mac-native backends — both are
+workable deployment targets; CUDA has more headroom, Mac trades some capability for running
+anywhere. The client is thin: a single **Flutter** app for iOS and Android that only captures and
+plays audio. All the models run on the server.
 
 ## What it can do
 
@@ -35,8 +36,8 @@ that only captures and plays audio. All the models run on the server.
   clock) that run server-side before it answers, on a tool-capable LLM backend.
 - **Remember a user across sessions** — a consent-gated, per-user memory that recalls earlier
   facts in later calls.
-- **Run the same code on two very different machines** (a Mac for development, a CUDA GPU for
-  production) by flipping one `BACKEND` switch.
+- **Run the same code on two very different machines** (a Mac or a CUDA GPU) by flipping one
+  `BACKEND` switch.
 
 ## How it works
 
@@ -74,7 +75,7 @@ Five design ideas hold it together:
 
 ### Backends (which model runs where)
 
-| Stage | Mac (dev) | CUDA (prod) | VRAM (CUDA) |
+| Stage | Mac | CUDA | VRAM (CUDA) |
 |-------|-----------|-------------|-------------|
 | **STT** | `whisper_mlx` | `faster_whisper` / `parakeet` | ~2 GB |
 | **LLM** | `lmstudio` / `ollama` / `mlx_lm` | `vllm` | ~5–6 GB |
@@ -84,7 +85,7 @@ Five design ideas hold it together:
 
 Select a backend with `BACKEND=mac|cuda`. Each backend's `config/backends/<backend>.yaml` names
 the adapter, the model, and the per-adapter options. Environment interpolation
-(`${VAR:-default}`) is supported, so one file can drive both the production stack and a dev box.
+(`${VAR:-default}`) is supported, so one file can drive both a Mac box and a CUDA box.
 
 ### Latency budget (CUDA, time to first audio)
 
@@ -108,7 +109,7 @@ The system is feature-complete across the whole cascade: offline loop, streaming
 LiveKit agent, four personas, voice cloning, persona LoRA training, cross-session memory, voice
 fine-tuning, and a hardening pass (eval, observability, security). It is verified at the logic
 level by the test suite (`pytest`, plus `ruff` and `mypy`), and the heavy or hardware-bound steps
-are verified on real hardware (a Mac M4 Max for dev, an RTX 5090 for CUDA).
+are verified on real hardware (a Mac M4 Max on the mac backend, an RTX 5090 on the cuda backend).
 
 One thing needs a running **LiveKit server** to exercise live: the browser/phone back-and-forth
 with barge-in over WebRTC. That path is **verified on a real iPhone** (a full spoken conversation
@@ -318,7 +319,7 @@ and if it calls one the server executes it, feeds the result back, and lets the 
 streams. A persona with no `tools:` is a pure conversationalist and is never sent any schema, so
 existing personas are unchanged.
 
-- **Backend support.** Routed on the OpenAI-compatible LLM backends (vLLM prod, LM Studio dev);
+- **Backend support.** Routed on the OpenAI-compatible LLM backends (vLLM, LM Studio);
   vLLM needs `--enable-auto-tool-choice --tool-call-parser <model-parser>` — the compose file
   already passes these (`hermes` for Qwen2.5, overridable via `VLLM_TOOL_PARSER`). Other backends
   (Ollama, mlx-lm) ignore the schemas and just answer — the capability degrades gracefully.
@@ -566,7 +567,7 @@ trainer config, see
 
 Only fine-tune voices you are authorized to use.
 
-### Run on CUDA (production)
+### Run on CUDA
 
 The `cuda` backend mirrors the Mac cascade: `faster_whisper`/`parakeet` (STT), `vllm` (LLM),
 `chatterbox` (TTS). The LLM is served by a separate **vLLM** process so the app image
@@ -659,7 +660,7 @@ the busy page) worked on macOS but silently failed open on the CUDA/Windows box.
 optimization on top of the worker's load gate (it has a read→mint→connect race) and fails open —
 mints — when the count is unreadable.
 
-**Worker job executor (warm reuse).** On the Mac dev backend the worker runs each conversation in a
+**Worker job executor (warm reuse).** On the Mac backend the worker runs each conversation in a
 **thread** (`PERSONAVOICE_JOB_EXECUTOR=thread`, the Mac default), so the models prewarmed at startup
 are reused across calls — a new call right after ending one is warm immediately. LiveKit's off-Windows
 default is a **process** per job, which reloads every model each conversation; on a single-session

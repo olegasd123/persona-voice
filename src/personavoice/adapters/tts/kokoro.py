@@ -1,4 +1,4 @@
-"""Kokoro TTS (Mac dev) — fast, no cloning. The default dev voice.
+"""Kokoro TTS (Mac) — fast, no cloning. The default Mac voice.
 
 Implements one-shot `synthesize` (text → WAV bytes) for the file-based pipeline.
 Streaming (`stream_tts`) is handled by the live agent. Kokoro has no zero-shot cloning, so personas whose

@@ -22,18 +22,18 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-# --- Mac (M4 Max) development backend -------------------------------------------------
+# --- Mac (M4 Max) backend --------------------------------------------------------------
 mac = [
     "huggingface-hub>=0.23",
     "mlx-whisper>=0.4",
     "mlx-lm>=0.14",
-    "kokoro>=0.7",          # fast Mac TTS for dev iterations (no cloning)
+    "kokoro>=0.7",          # fast Mac TTS for quick iteration (no cloning)
     "soundfile>=0.12",
     "numpy>=1.26",
     "httpx>=0.27",          # talks to the local Ollama server
     "sounddevice>=0.4",     # optional mic capture for `personavoice-demo --record`
 ]
-# --- CUDA (RTX 4080) production backend -----------------------------------------------
+# --- CUDA (RTX 4080) backend ------------------------------------------------------------
 cuda = [
     "huggingface-hub>=0.23",
     "faster-whisper>=1.0",

@@ -1,6 +1,6 @@
 """Shared OpenAI-compatible chat-completions streaming.
 
-LM Studio (Mac dev) and vLLM (CUDA prod) both expose an OpenAI-compatible
+LM Studio (Mac) and vLLM (CUDA) both expose an OpenAI-compatible
 `/v1/chat/completions` endpoint, so they share one streaming implementation and differ
 only in their default base URL. Many local models (Qwen3, gpt-oss) are *reasoning* models
 whose stream carries the thinking trace in `delta.reasoning_content` and the spoken reply
