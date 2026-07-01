@@ -22,6 +22,7 @@ re-checks/installs Python deps on every start.
 | Platform | Setup (one-time) | Start | Stop (fallback) |
 |----------|------------------|-------|-----------------|
 | Windows (CUDA) | `scripts\setup-cuda.bat` (or `.ps1`) | `scripts\run-cuda.bat` (or `.ps1`) | `scripts\stop-cuda.bat` |
+| Linux (CUDA) | `scripts/setup-cuda.sh` | `scripts/run-cuda.sh` | `scripts/stop-cuda.sh` |
 | macOS (M4 Max) | `scripts/setup-mac.sh` | `scripts/run-mac.sh` | `scripts/stop-mac.sh` |
 
 The stop scripts are only needed if a run was killed without cleanup (closed window / crash).
@@ -53,6 +54,27 @@ images, and pre-downloads the host STT/TTS weights. The vLLM model caches into t
 
 > The `.bat` files are thin wrappers around the `.ps1` scripts (PowerShell gives reliable
 > `Ctrl+C` → teardown). Running the `.ps1` directly avoids the `Terminate batch job?` prompt.
+
+## Linux (CUDA)
+
+The Linux counterpart to the Windows `.ps1` scripts.
+
+```bash
+./scripts/setup-cuda.sh        # ONCE: venv + extras + Docker images + host STT/TTS weights
+./scripts/run-cuda.sh          # then, every run (auto-detect VRAM, pick the tier)
+./scripts/run-cuda.sh 32       # force the 32 GB profile (tiers: 12 | 16 | 24 | 32)
+```
+
+Same tier table as Windows above — the VRAM tier is auto-detected from the card's `memory.total`
+via `nvidia-smi` (override with the positional arg). `setup-cuda` creates `.venv312`, installs the
+`cuda,livekit,clone` extras (the worker runs faster-whisper + Chatterbox on the host GPU), pulls
+the vLLM/LiveKit images, builds the token-server image, and pre-downloads the host STT/TTS
+weights — without starting anything. `run-cuda` then starts vLLM + LiveKit + the token server in
+Docker, waits for vLLM to be healthy, and runs the worker on the host. It sets
+`PERSONAVOICE_JOB_EXECUTOR=thread` so the GPU models load once and stay warm across calls (the
+Linux/CUDA default is per-job process isolation, i.e. a cold start every call). Ctrl+C tears down
+every container it started (trap); `stop-cuda.sh` is the fallback if a run is killed uncleanly.
+Prereqs: Docker + the NVIDIA Container Toolkit, and `uv` or `python3.12` for the venv.
 
 ## macOS (M4 Max)
 

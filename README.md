@@ -602,8 +602,9 @@ Notes:
 - The `gpu_util` / `max_len` values are tuned estimates from the 16 GB budget; on a real 12/24/32 GB
   card they may want one pass to dial in.
 
-On Windows, `scripts/run-cuda.ps1` reads the card's VRAM with `nvidia-smi` and picks the matching
-tier automatically (override with `-Vram 12|16|24|32`).
+The launcher scripts pick the tier for you — they read the card's VRAM with `nvidia-smi` and select
+the matching row automatically: `scripts/run-cuda.sh` on Linux (override with a positional arg, e.g.
+`./scripts/run-cuda.sh 24`) and `scripts/run-cuda.ps1` on Windows (`-Vram 12|16|24|32`).
 
 Without Docker, run the pieces directly: `vllm serve Qwen/Qwen2.5-7B-Instruct-AWQ` (or the
 unquantized `Qwen/Qwen2.5-7B-Instruct` on a 24 GB+ card), then `BACKEND=cuda personavoice-demo
