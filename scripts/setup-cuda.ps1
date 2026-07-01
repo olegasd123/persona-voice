@@ -5,13 +5,16 @@
   slow-but-cacheable prep so the everyday `run-cuda.ps1` starts fast - WITHOUT starting any
   server:
 
-    1. creates .venv312 (if missing) and installs the cuda + livekit extras,
+    1. creates .venv312 (if missing) and installs the cuda + livekit + clone (Chatterbox) extras,
     2. pulls the vLLM and LiveKit Docker images,
     3. builds the persona-voice token-server image,
     4. pre-downloads the host-side STT (faster-whisper) + TTS (Chatterbox) weights.
 
   The vLLM LLM model is NOT downloaded here: it caches into the persistent hf-cache volume on
   the first `run-cuda` (when vLLM actually starts). That keeps setup free of any running server.
+
+  The CUDA worker runs faster-whisper (STT) + Chatterbox (TTS) on the host GPU, so the `clone`
+  extra (Chatterbox) is installed here, not only in the server image.
 
   Usage (paths resolve relative to this script):
     .\scripts\setup-cuda.ps1
@@ -43,9 +46,9 @@ if (-not (Test-Path $Py)) {
     py -3.12 -m venv .venv312
     if ($LASTEXITCODE -ne 0) { throw 'Failed to create .venv312.' }
 }
-Write-Host '  Installing the cuda + livekit extras (this can take a while)...' -ForegroundColor Gray
-& $Py -m pip install -e '.[cuda,livekit]'
-if ($LASTEXITCODE -ne 0) { throw 'pip install -e .[cuda,livekit] failed.' }
+Write-Host '  Installing the cuda + livekit + clone extras (this can take a while)...' -ForegroundColor Gray
+& $Py -m pip install -e '.[cuda,livekit,clone]'
+if ($LASTEXITCODE -ne 0) { throw 'pip install -e .[cuda,livekit,clone] failed.' }
 
 # --- [2/4] pull Docker images --------------------------------------------------------------
 Write-Host "`n[2/4] Pulling Docker images (vLLM + LiveKit)..." -ForegroundColor Cyan
