@@ -18,6 +18,7 @@ from pathlib import Path
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
+from .._fsio import atomic_write_text
 from ..models import Persona
 
 
@@ -67,7 +68,7 @@ class UserPersonaStore:
     def save(self) -> None:
         self._path.parent.mkdir(parents=True, exist_ok=True)
         manifest = _Manifest(users=self._users)
-        self._path.write_text(manifest.model_dump_json(indent=2))
+        atomic_write_text(self._path, manifest.model_dump_json(indent=2))
 
     # -- access ------------------------------------------------------------------------
     @property

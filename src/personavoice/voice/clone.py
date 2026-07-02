@@ -27,6 +27,7 @@ from typing import TYPE_CHECKING
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
+from .._fsio import atomic_write_text
 from ..models import VoiceRef
 
 if TYPE_CHECKING:
@@ -203,7 +204,7 @@ class ClonesStore:
     def save(self) -> None:
         self._dir.mkdir(parents=True, exist_ok=True)
         manifest = _Manifest(voices=self._voices, assignments=self._assignments)
-        (self._dir / _MANIFEST_NAME).write_text(manifest.model_dump_json(indent=2))
+        atomic_write_text(self._dir / _MANIFEST_NAME, manifest.model_dump_json(indent=2))
 
     # -- voices ------------------------------------------------------------------------
     @property
