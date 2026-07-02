@@ -15,6 +15,12 @@ Two design rules carry over from the rest of the repo:
   - **The profile is refreshed lazily.** Every `summarize_every` recorded turns (and on
     `consolidate`), the LLM distills recent turns into the rolling profile. With no LLM
     injected, distillation is skipped and recall still works off retrieval alone.
+
+Retention rides the same cadence: with `max_transcript_turns` set, the background
+consolidation task compacts the transcript afterwards (distill-then-truncate), so the file —
+and the per-recall decrypt/scan cost — stays bounded while the profile keeps the long-term
+memory. Compaction never goes below `recall_window`, so recall itself is unaffected, and it
+skips users who opted into training use (their raw transcript is LoRA material).
 """
 
 from __future__ import annotations
@@ -47,6 +53,7 @@ class ConversationMemory:
         k: int = 4,
         summarize_every: int = 6,
         recall_window: int = _DEFAULT_RECALL_WINDOW,
+        max_transcript_turns: int = 0,
     ) -> None:
         self._store = store
         self._llm = llm
@@ -54,6 +61,8 @@ class ConversationMemory:
         self._k = k
         self._summarize_every = summarize_every
         self._recall_window = recall_window
+        # Retention cap on stored turns (0 = keep everything). Applied after consolidation.
+        self._max_transcript_turns = max_transcript_turns
         # Per (user, session) count of turns recorded since the last consolidation.
         self._pending: dict[tuple[str, str], int] = {}
         # Strong refs to in-flight background consolidations (awaited by `aclose`).
@@ -114,20 +123,47 @@ class ConversationMemory:
         self, user_id: str, session_id: str, persona: Persona, content: str
     ) -> None:
         await self._record(user_id, session_id, persona, Role.assistant, content)
-        # Consolidate on a cadence so the profile keeps up without an LLM call every turn.
-        # Run it in the background so distillation never delays the next turn or barge-in.
-        if self._summarize_every > 0 and self._llm is not None:
+        # Consolidate + compact on a cadence so the profile keeps up without an LLM call
+        # every turn. Run it in the background so it never delays the next turn or barge-in.
+        # Without an LLM the cadence still fires for retention alone.
+        if self._summarize_every > 0 and (self._llm is not None or self._max_transcript_turns > 0):
             key = (user_id, session_id)
             if self._pending.get(key, 0) >= self._summarize_every:
                 self._pending[key] = 0
                 self._schedule_consolidation(user_id, persona, session_id)
 
     def _schedule_consolidation(self, user_id: str, persona: Persona, session_id: str) -> None:
-        task = asyncio.create_task(
-            self.consolidate(user_id, persona=persona, session_id=session_id)
-        )
+        task = asyncio.create_task(self._consolidate_then_compact(user_id, persona, session_id))
         self._tasks.add(task)
         task.add_done_callback(self._tasks.discard)
+
+    async def _consolidate_then_compact(
+        self, user_id: str, persona: Persona, session_id: str
+    ) -> UserProfile | None:
+        """The background cadence body: distill first, then trim (nothing durable is lost)."""
+        profile = await self.consolidate(user_id, persona=persona, session_id=session_id)
+        self._maybe_compact(user_id)
+        return profile
+
+    def _maybe_compact(self, user_id: str) -> None:
+        """Retention: bound the transcript at `max_transcript_turns`, floored at the recall
+        window (so recall never loses reachable turns — the profile carries older memory).
+        Users who opted into training keep their full transcript: it's LoRA-distill material.
+        Note the cap is global across personas; a rarely-used persona's old turns age out
+        even under `per_user_persona` scope.
+        """
+        if self._max_transcript_turns <= 0:
+            return
+        try:
+            if self._store.get_consent(user_id).allow_training:
+                return
+            keep = max(self._max_transcript_turns, self._recall_window)
+            dropped = self._store.compact_user(user_id, keep_last=keep)
+        except MemoryStoreError:
+            logger.warning("memory compaction failed for user %r", user_id, exc_info=True)
+            return
+        if dropped:
+            logger.info("memory transcript compacted for user %r (-%d turns)", user_id, dropped)
 
     async def aclose(self) -> None:
         """Await any background consolidations (call on session/worker shutdown)."""

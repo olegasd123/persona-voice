@@ -44,6 +44,7 @@ class Settings:
         finetuned_dir: Path | None = None,
         memory_dir: Path | None = None,
         memory_key: str | None = None,
+        memory_max_turns: int = 2000,
         user_personas_path: Path | None = None,
     ) -> None:
         self.backend = backend
@@ -53,6 +54,7 @@ class Settings:
         self._finetuned_dir = finetuned_dir
         self._memory_dir = memory_dir
         self.memory_key = memory_key
+        self.memory_max_turns = memory_max_turns
         self._user_personas_path = user_personas_path
 
     @property
@@ -108,6 +110,7 @@ class Settings:
         memory_env = os.getenv("PERSONAVOICE_MEMORY_DIR")
         memory_dir = Path(memory_env).expanduser() if memory_env else None
         memory_key = os.getenv("PERSONAVOICE_MEMORY_KEY") or None
+        memory_max_turns = _memory_max_turns()
         user_personas_env = os.getenv("PERSONAVOICE_USER_PERSONAS")
         user_personas_path = Path(user_personas_env).expanduser() if user_personas_env else None
         return cls(
@@ -118,8 +121,25 @@ class Settings:
             finetuned_dir=finetuned_dir,
             memory_dir=memory_dir,
             memory_key=memory_key,
+            memory_max_turns=memory_max_turns,
             user_personas_path=user_personas_path,
         )
+
+
+def _memory_max_turns() -> int:
+    """Transcript retention cap from `PERSONAVOICE_MEMORY_MAX_TURNS` (default 2000, 0 = keep
+    everything). The facade floors the cap at its recall window and skips training-opted-in
+    users, so the default is safe: it bounds file growth without changing recall behavior.
+    Garbage values fall back to the default rather than silently disabling retention.
+    """
+    raw = (os.getenv("PERSONAVOICE_MEMORY_MAX_TURNS") or "2000").strip()
+    try:
+        return max(0, int(raw))
+    except ValueError:
+        logging.getLogger("personavoice.config").warning(
+            "PERSONAVOICE_MEMORY_MAX_TURNS=%r is not an integer; using 2000", raw
+        )
+        return 2000
 
 
 def max_sessions() -> int:
@@ -214,4 +234,5 @@ def build_conversation_memory(
         llm=llm,
         k=mem.top_k if mem else 4,
         summarize_every=mem.summarize_every if mem else 6,
+        max_transcript_turns=settings.memory_max_turns,
     )

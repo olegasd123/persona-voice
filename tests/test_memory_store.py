@@ -88,6 +88,77 @@ def test_read_turns_empty_for_unknown_user(tmp_path: Path) -> None:
 
 
 # --------------------------------------------------------------------------------------
+# retention / compaction
+# --------------------------------------------------------------------------------------
+
+
+def _record_sessions(store: MemoryStore, user: str, *sessions: tuple[str, int]) -> None:
+    for session, count in sessions:
+        for i in range(count):
+            store.record_turn(user, _turn(f"{session} turn {i}", session=session))
+
+
+def test_compact_noop_under_cap(tmp_path: Path) -> None:
+    store = MemoryStore(tmp_path)
+    store.set_consent("alice", granted=True)
+    _record_sessions(store, "alice", ("s1", 3))
+    assert store.compact_user("alice", keep_last=10) == 0
+    assert len(store.read_turns("alice")) == 3
+
+
+def test_compact_drops_oldest_whole_sessions(tmp_path: Path) -> None:
+    store = MemoryStore(tmp_path)
+    store.set_consent("alice", granted=True)
+    _record_sessions(store, "alice", ("s1", 4), ("s2", 4), ("s3", 2))
+    # keep_last=4 lands mid-s2; the cut moves back to the s2 boundary, so s2 stays whole.
+    assert store.compact_user("alice", keep_last=4) == 4
+    turns = store.read_turns("alice")
+    assert [t.session_id for t in turns] == ["s2"] * 4 + ["s3"] * 2
+    assert turns[0].content == "s2 turn 0"
+
+
+def test_compact_never_splits_a_marathon_session(tmp_path: Path) -> None:
+    store = MemoryStore(tmp_path)
+    store.set_consent("alice", granted=True)
+    _record_sessions(store, "alice", ("s1", 10))
+    assert store.compact_user("alice", keep_last=3) == 0  # a single session is kept whole
+    assert len(store.read_turns("alice")) == 10
+
+
+def test_compact_keep_zero_wipes_transcript_not_profile(tmp_path: Path) -> None:
+    store = MemoryStore(tmp_path)
+    store.set_consent("alice", granted=True)
+    store.save_profile_raw("alice", {"user_id": "alice", "summary": "a friend", "facts": []})
+    _record_sessions(store, "alice", ("s1", 2), ("s2", 2))
+    assert store.compact_user("alice", keep_last=0) == 4
+    assert store.read_turns("alice") == []
+    assert store.load_profile_raw("alice")["summary"] == "a friend"
+
+
+def test_compact_missing_user_is_zero(tmp_path: Path) -> None:
+    assert MemoryStore(tmp_path).compact_user("ghost", keep_last=5) == 0
+
+
+def test_compact_rejects_negative_keep(tmp_path: Path) -> None:
+    with pytest.raises(MemoryStoreError, match="keep_last"):
+        MemoryStore(tmp_path).compact_user("alice", keep_last=-1)
+
+
+def test_compact_encrypted_round_trip(tmp_path: Path) -> None:
+    pytest.importorskip("cryptography")
+    from personavoice.memory import FernetCipher
+
+    key = FernetCipher.generate_key()
+    store = MemoryStore(tmp_path, cipher=FernetCipher(key))
+    store.set_consent("alice", granted=True)
+    _record_sessions(store, "alice", ("s1", 2), ("s2", 2))
+    assert store.compact_user("alice", keep_last=2) == 2
+    # A fresh store with the same key reads the compacted transcript back.
+    turns = MemoryStore(tmp_path, cipher=FernetCipher(key)).read_turns("alice")
+    assert [t.content for t in turns] == ["s2 turn 0", "s2 turn 1"]
+
+
+# --------------------------------------------------------------------------------------
 # profile
 # --------------------------------------------------------------------------------------
 

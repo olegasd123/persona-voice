@@ -130,3 +130,57 @@ def test_gen_key(capsys: pytest.CaptureFixture[str]) -> None:
     key = capsys.readouterr().out.strip()
     # The printed key must be usable.
     FernetCipher(key)
+
+
+def _record_sessions(store: MemoryStore, user: str, *sessions: tuple[str, int]) -> None:
+    for session, count in sessions:
+        for i in range(count):
+            store.record_turn(
+                user,
+                MemoryTurn(
+                    session_id=session,
+                    persona_id="companion",
+                    role=Role.user,
+                    content=f"{session} turn {i}",
+                ),
+            )
+
+
+def test_compact_with_explicit_keep(mem_env: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    store = _store(mem_env)
+    store.set_consent("alice", granted=True)
+    _record_sessions(store, "alice", ("s1", 2), ("s2", 2), ("s3", 2))
+    assert main(["--compact", "alice", "--keep", "2", "--backend", "mac"]) == 0
+    assert "dropped 4 of 6" in capsys.readouterr().out
+    assert len(_store(mem_env).read_turns("alice")) == 2
+
+
+def test_compact_default_keep_from_env(mem_env: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("PERSONAVOICE_MEMORY_MAX_TURNS", "2")
+    store = _store(mem_env)
+    store.set_consent("alice", granted=True)
+    _record_sessions(store, "alice", ("s1", 2), ("s2", 2), ("s3", 2))
+    assert main(["--compact", "alice", "--backend", "mac"]) == 0
+    assert len(_store(mem_env).read_turns("alice")) == 2
+
+
+def test_compact_disabled_requires_keep(
+    mem_env: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    monkeypatch.setenv("PERSONAVOICE_MEMORY_MAX_TURNS", "0")
+    assert main(["--compact", "alice", "--backend", "mac"]) == 2
+    assert "pass --keep" in capsys.readouterr().err
+
+
+def test_compact_unknown_user(mem_env: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    assert main(["--compact", "ghost", "--keep", "5", "--backend", "mac"]) == 0
+    assert "no stored memory" in capsys.readouterr().out
+
+
+def test_memory_max_turns_garbage_falls_back(monkeypatch: pytest.MonkeyPatch) -> None:
+    from personavoice.server.config import Settings
+
+    monkeypatch.setenv("PERSONAVOICE_MEMORY_MAX_TURNS", "lots")
+    assert Settings.load(backend="mac", env_file=None).memory_max_turns == 2000
+    monkeypatch.setenv("PERSONAVOICE_MEMORY_MAX_TURNS", "500")
+    assert Settings.load(backend="mac", env_file=None).memory_max_turns == 500

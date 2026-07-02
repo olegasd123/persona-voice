@@ -166,3 +166,70 @@ async def test_no_consolidation_without_llm(tmp_path: Path) -> None:
     await mem.record_assistant("alice", s, persona, "hello")
     await mem.aclose()
     assert store.load_profile_raw("alice") is None  # nothing distilled
+
+
+# --------------------------------------------------------------------------------------
+# retention (max_transcript_turns)
+# --------------------------------------------------------------------------------------
+
+
+async def _talk(mem: ConversationMemory, persona: Persona, sessions: int, exchanges: int) -> None:
+    """Record `sessions` short sessions of user→assistant `exchanges` for alice."""
+    for s in range(sessions):
+        for i in range(exchanges):
+            await mem.record_user("alice", f"s{s}", persona, f"question {s}-{i}")
+            await mem.record_assistant("alice", f"s{s}", persona, f"answer {s}-{i}")
+
+
+async def test_compacts_on_cadence_without_llm(tmp_path: Path) -> None:
+    """Retention works without an LLM: old sessions age out, the newest stays whole."""
+    store = MemoryStore(tmp_path)
+    store.set_consent("alice", granted=True)
+    mem = ConversationMemory(store, summarize_every=2, max_transcript_turns=4, recall_window=2)
+    await _talk(mem, _persona(), sessions=4, exchanges=2)  # 16 turns over 4 sessions
+    await mem.aclose()  # flush the background compactions
+    turns = store.read_turns("alice")
+    assert [t.session_id for t in turns] == ["s3"] * 4
+    assert turns[-1].content == "answer 3-1"
+
+
+async def test_distills_before_truncating(tmp_path: Path) -> None:
+    """The cadence updates the profile first, then trims — facts survive compaction."""
+    store = MemoryStore(tmp_path)
+    store.set_consent("alice", granted=True)
+    llm = _ReplyLLM('{"facts": ["likes tea"], "summary": "A tea person."}')
+    mem = ConversationMemory(
+        store, llm=llm, summarize_every=2, max_transcript_turns=2, recall_window=2
+    )
+    await _talk(mem, _persona(), sessions=3, exchanges=1)
+    await mem.aclose()
+    assert "likes tea" in _load_profile(store, "alice").fact_texts()
+    assert [t.session_id for t in store.read_turns("alice")] == ["s2", "s2"]
+
+
+async def test_training_users_keep_full_transcript(tmp_path: Path) -> None:
+    store = MemoryStore(tmp_path)
+    store.set_consent("alice", granted=True, allow_training=True)
+    mem = ConversationMemory(store, summarize_every=2, max_transcript_turns=2, recall_window=2)
+    await _talk(mem, _persona(), sessions=3, exchanges=1)
+    await mem.aclose()
+    assert len(store.read_turns("alice")) == 6  # LoRA material: never auto-compacted
+
+
+async def test_no_compaction_when_disabled(tmp_path: Path) -> None:
+    store = MemoryStore(tmp_path)
+    store.set_consent("alice", granted=True)
+    mem = ConversationMemory(store, summarize_every=2, max_transcript_turns=0, recall_window=2)
+    await _talk(mem, _persona(), sessions=3, exchanges=1)
+    await mem.aclose()
+    assert len(store.read_turns("alice")) == 6
+
+
+async def test_cap_is_floored_at_recall_window(tmp_path: Path) -> None:
+    """A cap below the recall window must not eat turns recall could still retrieve."""
+    store = MemoryStore(tmp_path)
+    store.set_consent("alice", granted=True)
+    mem = ConversationMemory(store, summarize_every=2, max_transcript_turns=2, recall_window=6)
+    await _talk(mem, _persona(), sessions=3, exchanges=1)
+    await mem.aclose()
+    assert len(store.read_turns("alice")) == 6

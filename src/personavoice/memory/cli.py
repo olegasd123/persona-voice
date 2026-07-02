@@ -5,6 +5,7 @@
     personavoice-memory --grant alice [--training]   # opt a user in (recording / training use)
     personavoice-memory --revoke alice               # withdraw consent
     personavoice-memory --consolidate alice          # (re)distill the profile via the LLM
+    personavoice-memory --compact alice [--keep N]   # retention: drop oldest turns, keep profile
     personavoice-memory --export alice --out a.json  # portable dump (privacy)
     personavoice-memory --delete alice               # wipe everything for a user (privacy)
     personavoice-memory --distill alice --out a.jsonl  # transcripts -> persona-LoRA dataset
@@ -101,6 +102,25 @@ def _cmd_distill(
     return 0
 
 
+def _cmd_compact(
+    settings: Settings, store: MemoryStore, user_id: str, args: argparse.Namespace
+) -> int:
+    keep = args.keep if args.keep is not None else settings.memory_max_turns
+    if keep <= 0 and args.keep is None:
+        print(
+            "retention is disabled (PERSONAVOICE_MEMORY_MAX_TURNS=0); pass --keep N",
+            file=sys.stderr,
+        )
+        return 2
+    if not store.has_user(user_id):
+        print(f"no stored memory for user {user_id!r}")
+        return 0
+    before = len(store.read_turns(user_id))
+    dropped = store.compact_user(user_id, keep_last=max(0, keep))
+    print(f"compacted {user_id!r}: dropped {dropped} of {before} turn(s), kept {before - dropped}")
+    return 0
+
+
 async def _cmd_consolidate(settings: Settings, user_id: str, args: argparse.Namespace) -> int:
     from ..adapters.factory import build_backend
     from ..server.config import load_backend_config
@@ -132,6 +152,9 @@ def _build_parser() -> argparse.ArgumentParser:
         "--consolidate", metavar="USER", help="(re)distill a user's profile via LLM"
     )
     action.add_argument(
+        "--compact", metavar="USER", help="drop a user's oldest turns (profile is kept)"
+    )
+    action.add_argument(
         "--export", metavar="USER", help="export everything stored for a user (JSON)"
     )
     action.add_argument("--delete", metavar="USER", help="wipe everything stored for a user")
@@ -148,6 +171,11 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--limit", type=int, default=20, help="with --show: number of recent turns")
     parser.add_argument(
         "--max-turns", type=int, default=40, help="with --consolidate: turns to distill"
+    )
+    parser.add_argument(
+        "--keep",
+        type=int,
+        help="with --compact: turns to keep (default: PERSONAVOICE_MEMORY_MAX_TURNS)",
     )
     parser.add_argument("--yes", action="store_true", help="with --delete: skip the confirmation")
     parser.add_argument("--backend", choices=("mac", "cuda"), default=None, help="override BACKEND")
@@ -189,6 +217,8 @@ def main(argv: list[str] | None = None) -> int:
             return 0
         if args.consolidate:
             return asyncio.run(_cmd_consolidate(settings, args.consolidate, args))
+        if args.compact:
+            return _cmd_compact(settings, store, args.compact, args)
         if args.export:
             data = store.export_user(args.export)
             text = json.dumps(data, indent=2, ensure_ascii=False)

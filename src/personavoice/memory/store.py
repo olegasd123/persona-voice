@@ -9,7 +9,7 @@ the privacy operations the acceptance criteria call for (per-user **delete** and
     <memory_dir>/
       <user_id>/
         consent.json        # opt-in gate (+ training opt-in)
-        transcript.jsonl     # one MemoryTurn per line (append-only)
+        transcript.jsonl     # one MemoryTurn per line (append-only, bounded by compact_user)
         profile.json         # rolling summary + durable facts (see profile.py)
 
 **Consent first.** Nothing is recorded for a user until they've granted consent; the
@@ -38,6 +38,7 @@ from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
+from .._fsio import atomic_write_text
 from ..models import Role
 
 _CONSENT_NAME = "consent.json"
@@ -268,6 +269,32 @@ class MemoryStore:
                 yield MemoryTurn.model_validate_json(self._cipher.reveal(raw))
             except ValidationError as exc:
                 raise MemoryStoreError(f"{path}:{lineno}: invalid transcript line: {exc}") from exc
+
+    def compact_user(self, user_id: str, *, keep_last: int) -> int:
+        """Retention: drop a user's oldest turns, keeping at least the last `keep_last`.
+
+        The profile is untouched — it already carries what was distilled from old turns —
+        so this bounds the transcript (and the per-recall decrypt/scan cost) without
+        touching long-term memory. The cut never splits a session: it moves back to the
+        boundary of the session it lands in, so distill/export always see whole
+        conversations (one marathon session longer than `keep_last` is kept whole). The
+        rewrite is atomic — a concurrent reader sees the old transcript or the new one.
+        Returns the number of turns dropped.
+        """
+        if keep_last < 0:
+            raise MemoryStoreError(f"keep_last must be >= 0, got {keep_last}")
+        turns = list(self._iter_turns(user_id))
+        if len(turns) <= keep_last:
+            return 0
+        cut = len(turns) - keep_last
+        while 0 < cut < len(turns) and turns[cut - 1].session_id == turns[cut].session_id:
+            cut -= 1
+        if cut == 0:
+            return 0
+        path = self._user_dir(user_id) / _TRANSCRIPT_NAME
+        lines = "".join(self._cipher.protect(t.model_dump_json()) + "\n" for t in turns[cut:])
+        atomic_write_text(path, lines)
+        return cut
 
     def session_ids(self, user_id: str) -> list[str]:
         """Distinct session ids for a user, in first-seen order."""
